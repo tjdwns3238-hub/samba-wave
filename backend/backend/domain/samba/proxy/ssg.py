@@ -975,6 +975,7 @@ class SSGClient:
         day_max_qty: int = 5,
         once_min_qty: int = 1,
         once_max_qty: int = 5,
+        brand_mappings: Optional[list[dict]] = None,
     ) -> dict[str, Any]:
         """SambaCollectedProduct → SSG insertItem 요청 데이터 변환.
 
@@ -1006,11 +1007,32 @@ class SSGClient:
         manufacturer = product.get("manufacturer", "") or brand or "상세설명참조"
         style_no = product.get("style_no", "") or product.get("styleNo", "") or ""
 
-        # 브랜드 매칭 (계약 브랜드 자동 탐색)
-        matched_brand_id, matched_brand_name = self.match_brand(brand)
-        if matched_brand_id == "9999999999" and manufacturer:
-            # 브랜드 필드에 없으면 제조사로 재시도
-            matched_brand_id, matched_brand_name = self.match_brand(manufacturer)
+        # 브랜드 매칭 — 정책 브랜드 매핑 우선, 없으면 CONTRACTED_BRANDS fallback
+        def _match_from_mappings(name: str, mappings: list[dict]) -> tuple[str, str]:
+            if not name or not mappings:
+                return "", ""
+            lower = name.strip().lower()
+            lower_ns = lower.replace(" ", "")
+            for m in mappings:
+                nm = (m.get("brandNm") or "").strip().lower()
+                nm_ns = nm.replace(" ", "")
+                if nm_ns and nm_ns == lower_ns:
+                    return m["brandId"], m["brandNm"]
+            for m in mappings:
+                nm = (m.get("brandNm") or "").strip().lower()
+                nm_ns = nm.replace(" ", "")
+                if nm_ns and (nm_ns in lower_ns or lower_ns in nm_ns):
+                    return m["brandId"], m["brandNm"]
+            return "", ""
+
+        _mappings = brand_mappings or []
+        matched_brand_id, matched_brand_name = _match_from_mappings(brand, _mappings)
+        if not matched_brand_id and manufacturer:
+            matched_brand_id, matched_brand_name = _match_from_mappings(manufacturer, _mappings)
+        if not matched_brand_id:
+            matched_brand_id, matched_brand_name = self.match_brand(brand)
+            if matched_brand_id == "9999999999" and manufacturer:
+                matched_brand_id, matched_brand_name = self.match_brand(manufacturer)
         if brand_id:
             matched_brand_id = brand_id  # 명시적 지정 우선
 

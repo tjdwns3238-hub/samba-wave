@@ -111,6 +111,9 @@ class SSGPlugin(MarketPlugin):
                 "message": f"SSG 배송 설정 누락: {', '.join(missing_infra)}. 설정 페이지에서 배송정보를 확인하세요.",
             }
 
+        # 정책 브랜드 매핑 추출
+        brand_mappings: list[dict] = creds.get("ssgBrandMappings") or []
+
         # 설정에서 마진율/배송소요일/구매수량 제한 추출 (정책값 우선, 설정값 폴백)
         margin_rate = int(creds.get("marginRate") or 0)
         shpp_rqrm_dcnt = int(creds.get("shppRqrmDcnt") or 3)
@@ -145,6 +148,7 @@ class SSGPlugin(MarketPlugin):
                 day_max_qty=day_max_qty,
                 once_min_qty=once_min_qty,
                 once_max_qty=once_max_qty,
+                brand_mappings=brand_mappings,
             )
         except Exception as e:
             import traceback as _tb

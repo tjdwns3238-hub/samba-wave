@@ -83,6 +83,7 @@ interface MarketPolicyForm {
   // 플레이오토 전용
   origin: string        // 원산지
   streetPriceRate: number // 시중가 비율 (%)
+  ssgBrandMappings?: { brandId: string; brandNm: string }[]
 }
 
 
@@ -210,17 +211,32 @@ export default function PoliciesPage() {
 
   // 마켓정책 설정
   const [marketPolicyTab, setMarketPolicyTab] = useState('쿠팡')
-  const [ssgBrandOptions, setSsgBrandOptions] = useState<{ brandId: string; brandNm: string }[]>([])
+  const [ssgBrands, setSsgBrands] = useState<{ brandId: string; brandNm: string }[]>([])
+  const [ssgBrandKeyword, setSsgBrandKeyword] = useState('')
+  const [ssgBrandLoading, setSsgBrandLoading] = useState(false)
+  const [ssgBrandError, setSsgBrandError] = useState('')
   const [marketPolicies, setMarketPolicies] = useState<Record<string, MarketPolicyForm>>({})
 
   const ssgAccountId = marketPolicies['신세계몰(전시)']?.accountId || ''
+
+  // SSG 브랜드 검색 (검색어 1글자 이상, 디바운스)
   useEffect(() => {
-    if (marketPolicyTab !== '신세계몰(전시)') return
-    setSsgBrandOptions([])
-    proxyApi.ssgBrands(ssgAccountId || undefined).then(res => {
-      if (res.success && res.brands?.length) setSsgBrandOptions(res.brands)
-    }).catch(() => {})
-  }, [marketPolicyTab, ssgAccountId])
+    if (!ssgBrandKeyword.trim()) { setSsgBrands([]); setSsgBrandLoading(false); setSsgBrandError(''); return }
+    setSsgBrandLoading(true)
+    setSsgBrandError('')
+    const timer = setTimeout(() => {
+      request<{ success: boolean; brands: { brandId: string; brandNm: string }[]; message?: string }>(
+        `${API_BASE}/api/v1/samba/proxy/ssg/brands${ssgAccountId ? `?account_id=${encodeURIComponent(ssgAccountId)}` : ''}`
+      ).then(res => {
+        if (!res.success) { setSsgBrandError(res.message || '브랜드 조회 실패'); setSsgBrands([]); return }
+        const kw = ssgBrandKeyword.trim().toLowerCase()
+        const filtered = (res.brands || []).filter(b => b.brandNm.toLowerCase().includes(kw))
+        setSsgBrands(filtered)
+        if (filtered.length === 0) setSsgBrandError('검색 결과 없음')
+      }).catch(() => setSsgBrandError('네트워크 오류')).finally(() => setSsgBrandLoading(false))
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [ssgBrandKeyword, ssgAccountId])
 
   // 상세페이지/상품명 템플릿
   const [detailTemplates, setDetailTemplates] = useState<SambaDetailTemplate[]>([])
@@ -269,7 +285,7 @@ export default function PoliciesPage() {
 
   // 현재 마켓 정책 가져오기 (부분 데이터에도 기본값 보장)
   const getCurrentMarketPolicy = useCallback((): MarketPolicyForm => {
-    const defaults: MarketPolicyForm = { accountId: '', accountIds: [], shipType: 'domestic', feeRate: 21, shippingCost: 0, shippingDays: 3, marginRate: 0, brand: '', bulkDiscountQty: 2, bulkDiscountPrice: 0, smileCashRate: 0, gsMarginRate: 0, discountRate: 0, maxStock: 0, dayMaxQty: 5, onceMinQty: 1, onceMaxQty: 5, origin: '', streetPriceRate: 0 }
+    const defaults: MarketPolicyForm = { accountId: '', accountIds: [], shipType: 'domestic', feeRate: 21, shippingCost: 0, shippingDays: 3, marginRate: 0, brand: '', bulkDiscountQty: 2, bulkDiscountPrice: 0, smileCashRate: 0, gsMarginRate: 0, discountRate: 0, maxStock: 0, dayMaxQty: 5, onceMinQty: 1, onceMaxQty: 5, origin: '', streetPriceRate: 0, ssgBrandMappings: [] }
     return { ...defaults, ...(marketPolicies[marketPolicyTab] || {}) }
   }, [marketPolicies, marketPolicyTab])
 
@@ -970,7 +986,7 @@ export default function PoliciesPage() {
                 {POLICY_MARKETS_DOMESTIC.map(m => (
                   <button key={m} onClick={() => setMarketPolicyTab(m)}
                     style={{ padding: '0.375rem 0.75rem', borderRadius: '6px', fontSize: '0.75rem', cursor: 'pointer', border: marketPolicyTab === m ? '1px solid #FF8C00' : '1px solid #2D2D2D', background: marketPolicyTab === m ? 'rgba(255,140,0,0.12)' : 'transparent', color: marketPolicyTab === m ? '#FF8C00' : '#888' }}
-                  >{m}</button>
+                  >{m === '신세계몰(전시)' ? '신세계몰' : m}</button>
                 ))}
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem', alignItems: 'center' }}>
@@ -1333,15 +1349,43 @@ export default function PoliciesPage() {
                     <span style={{ color: '#888', fontSize: '0.8125rem', minWidth: '80px' }}>마진율</span>
                     <NumInput value={mp.marginRate || 0} onChange={(v) => { setCurrentMarketPolicy({ ...mp, marginRate: v }); triggerAutoSave() }} style={{ width: '70px' }} suffix="%" />
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <span style={{ color: '#888', fontSize: '0.8125rem', minWidth: '80px' }}>브랜드</span>
-                    <select style={{ padding: '0.375rem 0.5rem', fontSize: '0.8125rem', background: '#1A1A1A', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#E5E5E5', outline: 'none' }}
-                      value={mp.brand || ''} onChange={(e) => { setCurrentMarketPolicy({ ...mp, brand: e.target.value }); triggerAutoSave() }}>
-                      <option value="">{ssgBrandOptions.length ? '브랜드 선택' : '불러오는 중...'}</option>
-                      {ssgBrandOptions.map(b => (
-                        <option key={b.brandId} value={b.brandId}>{b.brandNm}</option>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}>
+                    <span style={{ color: '#888', fontSize: '0.8125rem', minWidth: '80px', flexShrink: 0, paddingTop: '0.3rem' }}>브랜드</span>
+                    <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+                      {(mp.ssgBrandMappings || []).map(b => (
+                        <div key={b.brandId} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', marginBottom: '0.2rem' }}>
+                          <span style={{ fontSize: '0.8rem', color: '#FF8C00', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>[{b.brandId}] {b.brandNm}</span>
+                          <button onClick={() => { setCurrentMarketPolicy({ ...mp, ssgBrandMappings: (mp.ssgBrandMappings || []).filter(x => x.brandId !== b.brandId) }); triggerAutoSave() }}
+                            style={{ fontSize: '0.75rem', color: '#888', background: 'transparent', border: 'none', cursor: 'pointer', padding: '0 2px', flexShrink: 0 }}>✕</button>
+                        </div>
                       ))}
-                    </select>
+                      <input
+                        style={{ width: '100%', padding: '0.3rem 0.4rem', fontSize: '0.8rem', background: '#1A1A1A', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#E5E5E5', boxSizing: 'border-box' }}
+                        placeholder="브랜드명 검색 (예: nike)"
+                        value={ssgBrandKeyword}
+                        onChange={e => setSsgBrandKeyword(e.target.value)}
+                      />
+                      {ssgBrandLoading && (
+                        <span style={{ position: 'absolute', right: '0.5rem', top: '50%', transform: 'translateY(-50%)', fontSize: '0.75rem', color: '#666' }}>검색 중...</span>
+                      )}
+                      {!ssgBrandLoading && ssgBrandError && ssgBrandKeyword.trim() && (
+                        <div style={{ marginTop: '0.2rem', fontSize: '0.75rem', color: '#e05c5c' }}>{ssgBrandError}</div>
+                      )}
+                      {ssgBrands.length > 0 && (
+                        <div style={{ position: 'absolute', top: 'calc(100% + 2px)', left: 0, right: 0, background: '#1A1A1A', border: '1px solid #3D3D3D', borderRadius: '4px', zIndex: 50, maxHeight: '180px', overflowY: 'auto' }}>
+                          {ssgBrands.map(b => (
+                            <div key={b.brandId}
+                              onClick={() => { setCurrentMarketPolicy({ ...mp, ssgBrandMappings: (mp.ssgBrandMappings || []).some(x => x.brandId === b.brandId) ? (mp.ssgBrandMappings || []) : [...(mp.ssgBrandMappings || []), { brandId: b.brandId, brandNm: b.brandNm }] }); triggerAutoSave(); setSsgBrandKeyword(''); setSsgBrands([]); setSsgBrandError('') }}
+                              style={{ padding: '0.3rem 0.5rem', fontSize: '0.8rem', color: '#E5E5E5', cursor: 'pointer' }}
+                              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,140,0,0.12)')}
+                              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                            >
+                              [{b.brandId}] {b.brandNm}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </>
               )}
