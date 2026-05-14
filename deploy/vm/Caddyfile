@@ -27,6 +27,10 @@ api.samba-wave.co.kr {
         header -Alt-Svc
         reverse_proxy https://{$R2_PUBLIC_HOST} {
             header_up Host {$R2_PUBLIC_HOST}
+            # Cloudflare R2 가 봇/Java/Python UA 를 자체 차단(1010 Access denied)
+            # → 모든 요청 UA 를 평범한 브라우저로 강제해 차단 우회.
+            # 롯데홈쇼핑 백오피스 fetch 등이 우리 도메인 이미지를 못 받던 근본 원인.
+            header_up User-Agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
             transport http {
                 tls
                 tls_server_name {$R2_PUBLIC_HOST}

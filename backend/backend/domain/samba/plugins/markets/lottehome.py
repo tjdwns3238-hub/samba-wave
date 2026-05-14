@@ -727,21 +727,6 @@ class LotteHomePlugin(MarketPlugin):
         except Exception as e:
             logger.warning(f"[롯데홈쇼핑] 이미지 리사이즈 단계 오류 — 원본 유지: {e}")
 
-        # [임시 디버그 — 단일변수 검증] 037800LT 마켓계정에 다음 등록 1건의
-        # img_url 을 평범한 경로/파일명으로 강제 교체. 같은 도메인+같은 바이트,
-        # path 만 /goods/<id>_main.jpg 로. 검증 끝나면 즉시 제거.
-        try:
-            _acct_id = getattr(account, "id", None) if account else None
-            if _acct_id == "ma_01KM5046TVPHYBAWZNR4KV65MB":
-                _force_img = "https://api.samba-wave.co.kr/images/goods/lh_test_1000825308889_main.jpg"
-                product = dict(product)
-                product["images"] = [_force_img]
-                logger.info(
-                    f"[롯데홈쇼핑 디버그] 단일변수 검증 — img_url 강제: {_force_img}"
-                )
-        except Exception as _e:
-            logger.warning(f"[롯데홈쇼핑 디버그] 강제 img_url 분기 실패: {_e}")
-
         goods_data = _transform_for_lottehome(product, category_id, auth_creds)
 
         # 진단: 전송 직전 img_url 캡처 + AI 이미지 여부 표시 (transformed/ai_ 패턴)
