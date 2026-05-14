@@ -6080,7 +6080,7 @@ def _parse_smartstore_order(
     # 마켓 주문상태 한글 변환
     market_status_map: dict[str, str] = {
         "PAYED": "결제완료",
-        "DELIVERING": "배송중",
+        "DELIVERING": "국내배송중",
         "DELIVERED": "배송완료",
         "PURCHASE_DECIDED": "구매확정",
         "EXCHANGED": "교환완료",
@@ -6208,8 +6208,8 @@ def _parse_coupang_order(
     market_status_map = {
         "ACCEPT": "결제완료",
         "INSTRUCT": "상품준비중",
-        "DEPARTURE": "배송중",
-        "DELIVERING": "배송중",
+        "DEPARTURE": "국내배송중",
+        "DELIVERING": "국내배송중",
         "FINAL_DELIVERY": "배송완료",
         "CANCEL": "취소완료",
     }
@@ -6553,6 +6553,7 @@ def _parse_playauto_order(
         "송장입력": "processing",
         "출고": "shipped",
         "배송중": "shipped",
+        "국내배송중": "shipped",
         "수취확인": "delivered",
         "정산완료": "delivered",
         "주문확인": "pending",
