@@ -374,7 +374,7 @@ async def _build_order_filters(
     if account_filter:
         filters.append(SambaOrder.sourcing_account_id == account_filter)
     if market_status:
-        filters.append(SambaOrder.status == market_status)
+        filters.append(SambaOrder.shipping_status == market_status)
 
     if status_filter:
         if status_filter == "active":

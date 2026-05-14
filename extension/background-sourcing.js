@@ -418,10 +418,28 @@ function _siteSemRelease(site) {
   if (sem) sem.active = Math.max(0, sem.active - 1)
 }
 
+// 무신사 송장 잡 직렬화 락 — Next.js SPA + 백그라운드 탭에서 React hydration 지연으로
+// 버튼 click이 무시되는 회귀 차단. 한 번에 1건씩 활성 탭으로 처리.
+const _musinsaTrackingLock = { busy: false }
+
 async function _processJobWithCap(job) {
   const site = job.site || 'unknown'
   // 송장 추출 잡(type=tracking) — 가격수집과 격리. 동일 사이트 캡 공유로 무신사 폭주 방지
   if (job.type === 'tracking') {
+    if (site === 'MUSINSA') {
+      // MUSINSA만 직렬화 — 4개 탭 동시 background 진입 시 React click 미발화 사고 차단
+      while (_musinsaTrackingLock.busy) {
+        await wait(200)
+      }
+      _musinsaTrackingLock.busy = true
+      _markSourcingSiteActive(site)
+      try {
+        return await handleTrackingJob(job)
+      } finally {
+        _markSourcingSiteInactive(site)
+        _musinsaTrackingLock.busy = false
+      }
+    }
     await _siteSemAcquire(site)
     _markSourcingSiteActive(site)
     try {
@@ -485,8 +503,12 @@ async function handleTrackingJob(job) {
     if (!url) throw new Error('tracking URL 누락')
 
     // 송장 페이지 진입 → 결과 수신 (needsLogin 시 1회 재시도)
+    // MUSINSA: Next.js SPA + 백그라운드 탭 hydration 지연으로 React click이 무시되는 회귀
+    // 차단을 위해 active: true 로 강제. 사용자 화면이 잠깐 튐 — 직렬화(_musinsaTrackingLock)와
+    // 결합해 한 번에 1건만 처리.
     const _runOnce = async () => {
-      const tab = await chrome.tabs.create({ url, active: false })
+      const _active = site === 'MUSINSA'
+      const tab = await chrome.tabs.create({ url, active: _active })
       tabId = tab.id
       await waitForTabLoad(tabId, 30000)
 

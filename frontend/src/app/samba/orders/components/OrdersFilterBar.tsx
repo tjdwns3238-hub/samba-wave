@@ -135,7 +135,6 @@ export default function OrdersFilterBar(props: Props) {
             <select value={bulkStatus} onChange={e => setBulkStatus(e.target.value)} style={{ ...inputStyle, width: '130px', padding: '0.22rem 0.4rem', fontSize: '0.72rem', minWidth: '130px' }}>
               <option value="">일괄 작업 선택</option>
               <option value="pending">주문접수</option>
-              <option value="preparing">상품준비중</option>
               <option value="wait_ship">배송대기중</option>
               <option value="arrived">상품도착</option>
               <option value="ship_failed">송장전송실패</option>
@@ -203,7 +202,19 @@ export default function OrdersFilterBar(props: Props) {
           </select>
           <select style={{ ...inputStyle, width: '86px', padding: '0.22rem 0.4rem', fontSize: '0.75rem' }} value={marketStatus} onChange={e => setMarketStatus(e.target.value)}>
             <option value="">배송상태</option>
-            {Object.entries(STATUS_MAP).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+            <option value="결제완료">결제완료</option>
+            <option value="발주확인">발주확인</option>
+            <option value="발송대기">발송대기</option>
+            <option value="출고지시">출고지시</option>
+            <option value="배송대기중">배송대기중</option>
+            <option value="국내배송중">국내배송중</option>
+            <option value="배송완료">배송완료</option>
+            <option value="송장전송완료">송장전송완료</option>
+            <option value="취소요청">취소요청</option>
+            <option value="취소완료">취소완료</option>
+            <option value="반품요청">반품요청</option>
+            <option value="교환요청">교환요청</option>
+            <option value="교환완료">교환완료</option>
           </select>
           <select style={{ ...inputStyle, width: '86px', padding: '0.22rem 0.4rem', fontSize: '0.75rem' }} value={registrationFilter} onChange={e => setRegistrationFilter(e.target.value)}>
             <option value="">등록필터</option>
@@ -230,7 +241,9 @@ export default function OrdersFilterBar(props: Props) {
           <select style={{ ...inputStyle, width: '140px', padding: '0.22rem 0.4rem', fontSize: '0.75rem' }} value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
             <option value="">전체 주문상태</option>
             <option value="cancel_return_excluded">취소/반품/교환/배송 제외</option>
-            {Object.entries(STATUS_MAP).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+            {Object.entries(STATUS_MAP)
+              .filter(([k]) => k !== 'preparing')
+              .map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
           </select>
           <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ ...inputStyle, width: '63px', padding: '0.22rem 0.4rem', fontSize: '0.75rem' }}>
             <option value="date_desc">최신순</option>

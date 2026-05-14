@@ -396,25 +396,32 @@ async function _ensureLoggedInImpl(siteKey, accountId) {
   }
 
   // 오토튠 비활성 상태면 자동로그인 차단 (사용자가 작업 취소했는데 계속 시도되는 것 방지)
-  // 백엔드 status API의 running 필드 기준 — 5초 캐시
-  const autotuneActive = await _isAutotuneActive()
-  if (autotuneActive === false) {
-    console.log(`[자동로그인] ${site.name} 트리거 차단 — 오토튠 비활성 상태`)
-    return false
+  // 단, accountId 명시(송장 자동수집 등 명시적 사용자 트리거)는 오토튠 게이트 우회 — 별도 기능.
+  if (!accountId) {
+    const autotuneActive = await _isAutotuneActive()
+    if (autotuneActive === false) {
+      console.log(`[자동로그인] ${site.name} 트리거 차단 — 오토튠 비활성 상태`)
+      return false
+    }
+  } else {
+    console.log(`[자동로그인] ${site.name} 오토튠 게이트 우회 — accountId 명시 트리거`)
   }
 
   // 중복 호출 차단 — 이미 진행 중이면 즉시 false (in-flight Map과 별개로 cooldown/실패카운트용)
-  if (autoLoginState.inProgress[siteKey]) {
+  // accountId 명시(송장 자동수집)는 inflight Map(_ensureLoggedInInflight)으로 이미 격리되므로 우회.
+  if (!accountId && autoLoginState.inProgress[siteKey]) {
     console.log(`[자동로그인] ${site.name} 이미 진행 중 — 무시`)
     return false
   }
 
-  // 쿨다운 체크 — 실패 누적 후 일정 시간 차단
-  const cooldownUntil = autoLoginState.cooldownUntil[siteKey] || 0
-  if (Date.now() < cooldownUntil) {
-    const remainSec = Math.ceil((cooldownUntil - Date.now()) / 1000)
-    console.log(`[자동로그인] ${site.name} 쿨다운 중 (${remainSec}초 남음) — 무시`)
-    return false
+  // 쿨다운 체크 — 실패 누적 후 일정 시간 차단. accountId 명시 트리거는 쿨다운 무시.
+  if (!accountId) {
+    const cooldownUntil = autoLoginState.cooldownUntil[siteKey] || 0
+    if (Date.now() < cooldownUntil) {
+      const remainSec = Math.ceil((cooldownUntil - Date.now()) / 1000)
+      console.log(`[자동로그인] ${site.name} 쿨다운 중 (${remainSec}초 남음) — 무시`)
+      return false
+    }
   }
 
   autoLoginState.inProgress[siteKey] = true
