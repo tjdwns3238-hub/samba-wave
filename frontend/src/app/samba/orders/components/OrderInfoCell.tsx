@@ -152,7 +152,7 @@ export default function OrderInfoCell(props: Props) {
           <div style={{ minWidth: 0 }}>
             <span style={{ color: '#C5C5C5', fontSize: '0.8125rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{o.product_name || '-'}</span>
             {o.product_option && (
-              <span style={{ color: '#B0B0B0', fontSize: '0.75rem', display: 'block', marginTop: '0.125rem' }}>[옵션] {o.product_option}</span>
+              <span style={{ color: '#FACC15', fontSize: '0.75rem', fontWeight: 700, display: 'block', marginTop: '0.125rem' }}>[옵션] {o.product_option}</span>
             )}
           </div>
         </div>
