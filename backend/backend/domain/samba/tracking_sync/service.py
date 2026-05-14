@@ -389,6 +389,7 @@ async def enqueue_for_order(order_id: str, *, force: bool = False) -> dict[str, 
             order_id=order.id,
             sourcing_order_number=order.sourcing_order_number,
             owner_device_id=owner_device_id or None,
+            sourcing_account_id=order.sourcing_account_id or None,
         )
 
         # 2) DB row 생성

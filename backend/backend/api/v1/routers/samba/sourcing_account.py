@@ -673,12 +673,22 @@ async def get_extension_key(request: Request):
 
 @extension_router.get("/login-credential")
 async def get_login_credential(
-    site_name: str = Query(..., description="사이트 ID (예: LOTTEON, ABCmart, SSG)"),
+    site_name: str | None = Query(
+        None,
+        description="사이트 ID (예: LOTTEON, ABCmart, SSG) — account_id 없을 때 라디오 기본 계정 조회",
+    ),
+    account_id: str | None = Query(
+        None,
+        description="특정 계정 ID — 주문 매칭 계정으로 로그인할 때 사용 (우선 적용)",
+    ),
     session: AsyncSession = Depends(get_read_session_dependency),
 ):
-    """확장앱 자동로그인 전용 — site_name으로 is_login_default 계정의 평문 자격증명 반환.
+    """확장앱 자동로그인 전용 — 계정 자격증명(평문) 반환.
 
-    is_active=true + is_login_default=true 조건 만족하는 계정 1개 조회.
+    조회 우선순위:
+      1. account_id 제공 시 → 해당 계정 단건 조회 (is_active 무관, 만료 계정도 시도 허용)
+      2. account_id 없으면 → site_name + is_active=true + is_login_default=true 라디오 기본 계정
+
     찾지 못하면 404 반환.
 
     인증/테넌트 정책:
@@ -694,6 +704,28 @@ async def get_login_credential(
     """
     from sqlalchemy import select as sa_select
     from backend.domain.samba.sourcing_account.model import SambaSourcingAccount
+
+    account = None
+
+    # 1) account_id 우선 — 주문 매칭 계정으로 단건 조회
+    if account_id:
+        account = await session.get(SambaSourcingAccount, account_id)
+        if not account:
+            raise HTTPException(
+                404,
+                f"계정을 찾을 수 없습니다: account_id={account_id}",
+            )
+        return {
+            "id": account.id,
+            "site_name": account.site_name,
+            "account_label": account.account_label,
+            "username": account.username,
+            "password": account.password,
+        }
+
+    # 2) site_name 기반 라디오 기본 계정 조회 (legacy)
+    if not site_name:
+        raise HTTPException(400, "site_name 또는 account_id 중 하나는 필수입니다")
 
     normalized_site_name = _normalize_sourcing_site_name(site_name)
     site_candidates = [

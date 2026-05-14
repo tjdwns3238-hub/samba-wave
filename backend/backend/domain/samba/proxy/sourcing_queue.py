@@ -256,6 +256,7 @@ class SourcingQueue:
         sourcing_order_number: str,
         *,
         owner_device_id: str | None = None,
+        sourcing_account_id: str | None = None,
     ) -> tuple[str, asyncio.Future[Any]]:
         """송장 추출 작업 큐에 추가 (소싱처 배송조회 페이지 → 운송장 스크래핑).
 
@@ -277,6 +278,7 @@ class SourcingQueue:
             "orderId": order_id,
             "sourcingOrderNumber": sourcing_order_number,
             "ownerDeviceId": owner_device_id or "",
+            "sourcingAccountId": sourcing_account_id or "",
         }
         cls.resolvers[request_id] = future
         asyncio.create_task(_db_insert_job(job, "tracking"))

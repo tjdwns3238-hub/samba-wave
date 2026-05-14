@@ -207,6 +207,39 @@ PENDING_ORDER_STATUSES = (
     "undeliverable",
 )
 
+# 취소요청 알람 — 마켓에서 취소 신호(shipping_status='취소요청'/'취소완료')가 들어왔지만
+# 우리 내부 status는 아직 처리/배송 단계라 발주·송장 등록 사고 위험이 있는 케이스.
+# UI 라벨 기준: 주문접수/상품준비중/배송대기중/사무실도착/국내배송중/송장전송실패/배송완료
+CANCEL_ALERT_SHIPPING_STATUSES = ("취소요청", "취소완료")
+CANCEL_ALERT_TARGET_STATUSES = (
+    "pending",
+    "preparing",
+    "wait_ship",
+    "arrived",
+    "shipping",
+    "ship_failed",
+    "delivered",
+)
+
+
+def _build_cancel_alert_clause():
+    """알람 카운트와 알람 필터에서 공통으로 쓰는 WHERE 조각.
+
+    조건:
+    - 내부 status가 명시적 'cancel_requested' (운영자 인지·미처리)
+    - 또는 마켓 shipping_status 가 '취소요청'/'취소완료' + 우리 status가 처리/배송 단계
+      → 발주·송장 등록 사고 위험. 운영자가 보고 막아야 할 케이스.
+    """
+    from sqlalchemy import and_, or_
+
+    return or_(
+        SambaOrder.status == "cancel_requested",
+        and_(
+            SambaOrder.shipping_status.in_(CANCEL_ALERT_SHIPPING_STATUSES),
+            SambaOrder.status.in_(CANCEL_ALERT_TARGET_STATUSES),
+        ),
+    )
+
 
 def _build_action_tag_filter(action_tag: str):
     from sqlalchemy import func, or_
@@ -351,6 +384,9 @@ async def _build_order_filters(
             filters.append(~SambaOrder.status.in_(EXCLUDED_ORDER_STATUSES))
         elif status_filter == "pending":
             filters.append(SambaOrder.status.in_(PENDING_ORDER_STATUSES))
+        elif status_filter == "cancel_alert":
+            # 알람 카운트와 동일한 조건 — 발주·송장 사고 위험 케이스
+            filters.append(_build_cancel_alert_clause())
         else:
             filters.append(SambaOrder.status == status_filter)
 
@@ -1435,26 +1471,12 @@ async def get_cancel_alert_count(
 ):
     """아직 처리 안 한 취소요청 건수 반환.
 
-    인지 누락 사고 방지가 목적. 조건:
-    - 내부 status가 명시적 'cancel_requested' (우리가 인지했지만 미처리)
-    - 또는 마켓 shipping_status에 '취소' 포함 + 우리 내부 status는 아직 처리 진행 단계
-      (pending/wait_ship/arrived/shipping). 이 경우 발주·송장 진행 위험 큼.
-    이미 cancelled/cancelling/returned 등으로 종결·진행 중인 건은 제외.
+    인지 누락 사고 방지가 목적. 조건은 _build_cancel_alert_clause() 와 동일.
     """
-    from sqlalchemy import select, func, or_, and_
+    from sqlalchemy import select, func
     from backend.domain.samba.order.model import SambaOrder as OrderModel
 
-    in_progress_statuses = ("pending", "wait_ship", "arrived", "shipping")
-    stmt = select(func.count()).where(
-        or_(
-            OrderModel.status == "cancel_requested",
-            and_(
-                OrderModel.shipping_status.is_not(None),
-                OrderModel.shipping_status.contains("취소"),
-                OrderModel.status.in_(in_progress_statuses),
-            ),
-        ),
-    )
+    stmt = select(func.count()).where(_build_cancel_alert_clause())
     if tenant_id is not None:
         stmt = stmt.where(OrderModel.tenant_id == tenant_id)
     # session.exec(select(func.count()))는 SQLModel에서 Row 객체를 반환해

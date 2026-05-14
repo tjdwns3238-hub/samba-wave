@@ -304,14 +304,38 @@ export default function OrdersPage() {
     return () => window.removeEventListener('open-alarm-setting', handler)
   }, [])
 
-  // 페이지 진입 시 미처리 취소요청 알람 (1회)
+  // 알람 모달 "지금 확인하기"로 들어왔을 때 — cancel_alert 필터 + 전체 기간으로 세팅
   useEffect(() => {
-    orderApi.getCancelAlertCount().then(({ count }) => {
-      if (count > 0) {
-        showNotification(`처리 중인 주문 중 취소요청이 ${fmtNum(count)}건 있습니다. 확인해 주세요.`)
-      }
-    }).catch(() => {})
+    if (searchParams.get('cancel_alert') === '1') {
+      setStatusFilter('cancel_alert')
+      setMarketStatus('')
+      setRegistrationFilter('')
+      setInputFilter('')
+      setInvoiceFilter('')
+      setCustomStart('2020-01-01')
+      setCustomEnd(formatDateInput(getKstTodayDate()))
+      setPeriod('')
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams])
+
+  // 알람 모달 X 버튼 → 디폴트 오늘 주문 화면으로 복귀 (초기 진입 상태와 동일)
+  useEffect(() => {
+    const handler = () => {
+      setStatusFilter('cancel_return_excluded')
+      setMarketStatus('')
+      setRegistrationFilter('registered')
+      setInputFilter('')
+      setInvoiceFilter('')
+      setAppliedSearchText('')
+      setSearchText('')
+      setPeriod('today')
+      const today = formatDateInput(getKstTodayDate())
+      setCustomStart(today)
+      setCustomEnd(today)
+    }
+    window.addEventListener('reset-orders-filter', handler)
+    return () => window.removeEventListener('reset-orders-filter', handler)
   }, [])
   // 마운트 1회 — 5개 메타 API를 하나의 useEffect에서 동시 호출 (DB 커넥션 경합 최소화)
   useEffect(() => {

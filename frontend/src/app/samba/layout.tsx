@@ -492,8 +492,41 @@ export default function SambaLayout({
               maxWidth: "440px",
               width: "90%",
               boxShadow: "0 8px 32px rgba(255,68,68,0.3)",
+              position: "relative",
             }}
           >
+            {/* X 닫기 (우측 상단) — 모달 닫고 디폴트 오늘 주문 화면으로 복귀 */}
+            <button
+              aria-label="알람 닫기"
+              title="닫기 (디폴트 화면으로 이동)"
+              onClick={() => {
+                setShowCancelModal(false);
+                window.dispatchEvent(new CustomEvent("reset-orders-filter"));
+                router.push("/samba/orders");
+              }}
+              style={{
+                position: "absolute",
+                top: "0.75rem",
+                right: "0.75rem",
+                width: "28px",
+                height: "28px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: "transparent",
+                border: "none",
+                borderRadius: "6px",
+                color: "#AAA",
+                fontSize: "1.25rem",
+                fontWeight: 700,
+                cursor: "pointer",
+                lineHeight: 1,
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = "#FF6B6B"; e.currentTarget.style.background = "rgba(255,107,107,0.1)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = "#AAA"; e.currentTarget.style.background = "transparent"; }}
+            >
+              ✕
+            </button>
             <div style={{ textAlign: "center", marginBottom: "1.5rem" }}>
               <div style={{ fontSize: "3rem", marginBottom: "0.75rem" }}>⚠️</div>
               <h3 style={{ fontSize: "1.25rem", fontWeight: 700, color: "#FF6B6B", marginBottom: "0.5rem" }}>
@@ -524,7 +557,7 @@ export default function SambaLayout({
               <button
                 onClick={() => {
                   setShowCancelModal(false);
-                  router.push("/samba/orders?market_status=cancel_requested");
+                  router.push("/samba/orders?cancel_alert=1");
                 }}
                 style={{
                   flex: 2,

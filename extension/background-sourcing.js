@@ -454,39 +454,78 @@ async function _processJobWithCap(job) {
 // ─────────────────────────────────────────────────────────────────────────────
 const _trackingPending = new Map() // requestId → {resolve, timeoutId, tabId}
 
+// 송장 잡 site(대문자) → 자동로그인 siteKey 매핑.
+// SPA_DIRECT_LOGIN_SITES(ssg/lotteon/abcmart)는 주문매칭 계정으로 강제 로그인 지원.
+const _TRACKING_AUTO_LOGIN_MAP = {
+  SSG: 'ssg',
+  LOTTEON: 'lotteon',
+  ABCMART: 'abcmart',
+  GRANDSTAGE: 'abcmart',
+}
+
 async function handleTrackingJob(job) {
-  const { requestId, site, url, sourcingOrderNumber } = job
-  console.log(`[송장] 잡 수신 site=${site} ord=${sourcingOrderNumber} req=${requestId}`)
+  const { requestId, site, url, sourcingOrderNumber, sourcingAccountId } = job
+  console.log(`[송장] 잡 수신 site=${site} ord=${sourcingOrderNumber} acc=${sourcingAccountId || '-'} req=${requestId}`)
+
+  // 잡 처리 전 자동로그인 — 주문 매칭 계정으로 강제 로그인
+  // sourcingAccountId 없으면 라디오 기본 계정 fallback (기존 동작과 동일)
+  try {
+    const autoLoginKey = _TRACKING_AUTO_LOGIN_MAP[site]
+    if (autoLoginKey && typeof globalThis.ensureLoggedIn === 'function') {
+      console.log(`[송장] ensureLoggedIn(${autoLoginKey}, acc=${sourcingAccountId || '-'}) 호출`)
+      await globalThis.ensureLoggedIn(autoLoginKey, { accountId: sourcingAccountId || '' })
+    }
+  } catch (e) {
+    console.warn(`[송장] ensureLoggedIn 실패 (무시하고 진행): ${e?.message || e}`)
+  }
+
   let tabId = null
   let cleaned = false
   try {
     if (!url) throw new Error('tracking URL 누락')
-    const tab = await chrome.tabs.create({ url, active: false })
-    tabId = tab.id
-    await waitForTabLoad(tabId, 30000)
 
-    // content script 결과 message 대기 (최대 60초 — MUSINSA 2-hop navigation 여유)
-    const result = await new Promise((resolve) => {
-      const timeoutId = setTimeout(() => {
-        _trackingPending.delete(requestId)
-        resolve({ success: false, error: 'timeout: content script 응답 없음' })
-      }, 60000)
-      _trackingPending.set(requestId, { resolve, timeoutId, tabId })
+    // 송장 페이지 진입 → 결과 수신 (needsLogin 시 1회 재시도)
+    const _runOnce = async () => {
+      const tab = await chrome.tabs.create({ url, active: false })
+      tabId = tab.id
+      await waitForTabLoad(tabId, 30000)
 
-      // content-tracking-musinsa.js 등은 자체적으로 추출 후 message 전송
-      // 여기선 fallback으로 chrome.scripting.executeScript에 ord_no 주입 가능
+      return await new Promise((resolve) => {
+        const timeoutId = setTimeout(() => {
+          _trackingPending.delete(requestId)
+          resolve({ success: false, error: 'timeout: content script 응답 없음' })
+        }, 60000)
+        _trackingPending.set(requestId, { resolve, timeoutId, tabId })
+
+        try {
+          chrome.tabs.sendMessage(tabId, {
+            type: 'TRACKING_REQUEST',
+            requestId,
+            site,
+            sourcingOrderNumber,
+          }, (_resp) => {
+            void chrome.runtime.lastError
+          })
+        } catch {}
+      })
+    }
+
+    let result = await _runOnce()
+
+    // 로그인 페이지 리다이렉트 → 주문매칭 계정으로 강제 로그인 후 1회 재시도
+    if (result && result.needsLogin) {
+      console.log(`[송장] needsLogin 감지 → ensureLoggedIn 재시도 (acc=${sourcingAccountId || '-'})`)
+      try { if (tabId) { await chrome.tabs.remove(tabId); tabId = null } } catch {}
       try {
-        chrome.tabs.sendMessage(tabId, {
-          type: 'TRACKING_REQUEST',
-          requestId,
-          site,
-          sourcingOrderNumber,
-        }, (_resp) => {
-          // content script가 비동기로 응답할 수 있으므로 무시
-          void chrome.runtime.lastError
-        })
-      } catch {}
-    })
+        const autoLoginKey = _TRACKING_AUTO_LOGIN_MAP[site]
+        if (autoLoginKey && typeof globalThis.ensureLoggedIn === 'function') {
+          await globalThis.ensureLoggedIn(autoLoginKey, { accountId: sourcingAccountId || '' })
+        }
+      } catch (e) {
+        console.warn(`[송장] 재로그인 실패: ${e?.message || e}`)
+      }
+      result = await _runOnce()
+    }
 
     await postResult('sourcing/tracking-result', {
       requestId,
@@ -526,6 +565,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         trackingNumber: msg.trackingNumber || '',
         error: msg.error || '',
         cancelled: !!msg.cancelled,
+        needsLogin: !!msg.needsLogin,
       })
     }
     sendResponse({ ack: true })
