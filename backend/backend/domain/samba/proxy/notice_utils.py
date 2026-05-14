@@ -108,6 +108,14 @@ _CATEGORY_GROUP: dict[str, str] = {
     "양말/패션소품": "accessories",
     "기타패션소품": "accessories",
     "필드용품": "accessories",
+    # 데스크/PC 주변 잡화 (마우스패드/키보드 등) — "디지털" 부분매칭으로 electronics에 빠지지 않도록 명시
+    "마우스패드": "accessories",
+    "마우스": "accessories",
+    "키보드": "accessories",
+    "데스크": "accessories",
+    "데스크테리어": "accessories",
+    "문구": "accessories",
+    "잡화": "accessories",
     # 화장품/뷰티
     "화장품": "cosmetic",
     "뷰티": "cosmetic",
@@ -272,6 +280,14 @@ def detect_notice_group(product: dict[str, Any]) -> str:
             "워머",
             "아대",
             "밴드",
+            # 데스크/PC 주변 잡화 — 무신사 디지털 카테고리 오분류 방지
+            "마우스패드",
+            "키보드",
+            "텀블러",
+            "노트",
+            "파우치",
+            "키링",
+            "스티커",
         ],
     }
     for group, hints in name_hints.items():
@@ -622,7 +638,9 @@ _SMARTSTORE_NOTICE_TYPE: dict[str, str] = {
     "accessories": "FASHION_ITEMS",
     "cosmetic": "COSMETIC",
     "food": "FOOD",
-    "electronics": "DIGITAL_CONTENTS",
+    # 디지털콘텐츠(eBook/음원/SW) 전용 타입 — 물리 가전/잡화에 사용 시 필수 필드 누락 400 발생
+    # 우리는 디지털콘텐츠 상품을 취급하지 않으므로 영구적으로 ETC로 매핑
+    "electronics": "ETC",
     "etc": "ETC",
 }
 

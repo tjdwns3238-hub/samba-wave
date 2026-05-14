@@ -68,8 +68,11 @@ class PlayAutoClient:
                 )
             else:
                 logger.warning("[플레이오토] 프록시 미설정 — 직접 연결")
+            # POST /prods(상품등록)는 옵션 다수/대용량 상세 페이로드 처리에
+            # PlayAuto 서버가 30초 이상 걸리는 케이스가 존재 → read timeout 90초로 확대.
+            # connect=15초는 그대로(차단 IP 감지 빠르게).
             self._client = httpx.AsyncClient(
-                timeout=httpx.Timeout(30.0, connect=15.0),
+                timeout=httpx.Timeout(90.0, connect=15.0),
                 follow_redirects=True,
                 proxy=proxy if proxy else None,
             )

@@ -898,6 +898,10 @@ class ImageTransformService:
         # 롯데온 CDN — HEAD 403/비표준 path(`/dims/optimize/resizemc/...`)로
         # 11번가 등록 시 "기본이미지 존재하지 않음" 에러 유발 → R2 선미러 필요
         "contents.lotteon.com",
+        # GS샵 CDN — 11번가가 fetch 시 호스트 차단/확장자 누락으로 "기본이미지 없음"
+        # 500 에러 유발 → R2 선미러 필요
+        "image.gsshop.com",
+        "image.gsshop.co.kr",
     )
 
     async def mirror_external_to_r2(
@@ -946,12 +950,36 @@ class ImageTransformService:
 
                 # 차단 도메인 — 다운로드 후 R2 업로드
                 image_bytes = await self._download_image(url)
-                mime = self._detect_mime(image_bytes)
-                ext = {
-                    "image/png": "png",
-                    "image/webp": "webp",
-                    "image/jpeg": "jpg",
-                }.get(mime, "jpg")
+                # 11번가 등 일부 마켓은 webp 거부 + magic bytes 검증 수행
+                # → 받은 바이트를 PIL로 열어서 무조건 JPEG로 변환 후 업로드
+                # (AI 가공 경로 _save_image 와 동일한 정규화 정책)
+                try:
+                    from PIL import Image
+
+                    _img = Image.open(io.BytesIO(image_bytes))
+                    if _img.mode in ("RGBA", "LA", "P"):
+                        _bg = Image.new("RGB", _img.size, (255, 255, 255))
+                        _rgba = _img.convert("RGBA")
+                        _bg.paste(_rgba, mask=_rgba.split()[3])
+                        _img = _bg
+                    elif _img.mode != "RGB":
+                        _img = _img.convert("RGB")
+                    _buf = io.BytesIO()
+                    _img.save(_buf, format="JPEG", quality=92, optimize=True)
+                    image_bytes = _buf.getvalue()
+                    mime = "image/jpeg"
+                    ext = "jpg"
+                except Exception as _e:
+                    # PIL 열기 실패 시 원본 바이트 그대로 사용 (기존 동작)
+                    logger.warning(
+                        f"[이미지미러] JPEG 정규화 실패, 원본 유지: {url} — {_e}"
+                    )
+                    mime = self._detect_mime(image_bytes)
+                    ext = {
+                        "image/png": "png",
+                        "image/webp": "webp",
+                        "image/jpeg": "jpg",
+                    }.get(mime, "jpg")
                 content_hash = hashlib.md5(image_bytes).hexdigest()[:16]
                 key = f"mirror/{content_hash}.{ext}"
 

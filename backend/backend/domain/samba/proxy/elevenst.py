@@ -2032,9 +2032,21 @@ class ElevenstClient:
                 return ""
 
         def _is_msscdn_product(url: str) -> bool:
-            """msscdn의 정품 상품 이미지 path만 인정 (배너/공지 제외)."""
+            """msscdn의 상품 이미지 path만 인정 (배너/공지 제외).
+
+            - /images/goods_img/ : 상품 메인 이미지
+            - /images/prd_img/detail_ : 상품 상세컷 (배너 아닌 실제 상품 사진)
+            - /images/prd_img/<hash>.jpg, /display/images/common/ 등 배너성은 제외
+            """
             lower = url.lower()
-            return "msscdn.net" in lower and "/images/goods_img/" in lower
+            if "msscdn.net" not in lower:
+                return False
+            if "/images/goods_img/" in lower:
+                return True
+            # 상세컷은 detail_<상품ID>_ 패턴으로 식별 (배너성 해시 파일명 제외)
+            if "/images/prd_img/" in lower and "/detail_" in lower:
+                return True
+            return False
 
         # prdImage 후보: 1차로 _is_valid_detail_image + 확장자 OK
         # 무신사(msscdn)인 경우 detail_images에 cafe24 등 hotlink 차단 호스트 배너가 섞이므로
