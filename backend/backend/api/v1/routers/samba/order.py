@@ -1435,18 +1435,24 @@ async def get_cancel_alert_count(
 ):
     """아직 처리 안 한 취소요청 건수 반환.
 
-    DB 실데이터: shipping_status는 마켓 원본 한글값("취소요청"/"취소처리중"),
-    status는 내부 enum. 마켓에서 취소요청이 들어왔지만 내부 status가 아직 처리중(pending 등)
-    또는 명시적 cancel_requested 상태인 케이스를 안 처리된 것으로 간주.
+    인지 누락 사고 방지가 목적. 조건:
+    - 내부 status가 명시적 'cancel_requested' (우리가 인지했지만 미처리)
+    - 또는 마켓 shipping_status에 '취소' 포함 + 우리 내부 status는 아직 처리 진행 단계
+      (pending/wait_ship/arrived/shipping). 이 경우 발주·송장 진행 위험 큼.
+    이미 cancelled/cancelling/returned 등으로 종결·진행 중인 건은 제외.
     """
-    from sqlalchemy import select, func, or_
+    from sqlalchemy import select, func, or_, and_
     from backend.domain.samba.order.model import SambaOrder as OrderModel
 
+    in_progress_statuses = ("pending", "wait_ship", "arrived", "shipping")
     stmt = select(func.count()).where(
-        OrderModel.shipping_status.in_(["취소요청", "취소처리중"]),
         or_(
-            OrderModel.status.in_(["pending", "wait_ship", "arrived", "shipping"]),
             OrderModel.status == "cancel_requested",
+            and_(
+                OrderModel.shipping_status.is_not(None),
+                OrderModel.shipping_status.contains("취소"),
+                OrderModel.status.in_(in_progress_statuses),
+            ),
         ),
     )
     if tenant_id is not None:
@@ -2092,11 +2098,21 @@ async def confirm_order(
 ):
     """주문확인(발주확인) 수동 처리 — 원소싱처 재고/가격 확인 후 사용자가 실행."""
     from backend.domain.samba.account.repository import SambaMarketAccountRepository
+    from backend.domain.samba.order.model import is_order_cancelled
 
     svc = _write_service(session)
     order = await svc.get_order(order_id)
     if not order:
         raise HTTPException(status_code=404, detail="주문을 찾을 수 없습니다")
+    # 취소 가드 — 발주확인(주문확인) 직전 차단. 마켓 인지 후 잘못 발주되는 사고 방지.
+    if is_order_cancelled(order):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"취소요청 상태(주문={order.status}/마켓={order.shipping_status})라 "
+                "발주확인을 진행할 수 없습니다"
+            ),
+        )
     if not order.order_number:
         raise HTTPException(status_code=400, detail="상품주문번호가 없습니다")
     if not order.channel_id:

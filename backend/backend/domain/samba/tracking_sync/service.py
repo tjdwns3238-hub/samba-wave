@@ -21,6 +21,7 @@ from backend.domain.samba.order.model import (
     EXCLUDED_ORDER_STATUSES,
     SHIPPED_SHIPPING_STATUS_KEYWORDS,
     SambaOrder,
+    is_order_cancelled,
 )
 from backend.domain.samba.tracking_sync.model import (
     STATUS_CANCELLED,
@@ -303,6 +304,17 @@ async def enqueue_for_order(order_id: str, *, force: bool = False) -> dict[str, 
         order = await session.get(SambaOrder, order_id)
         if not order:
             return {"success": False, "error": "주문을 찾을 수 없습니다"}
+        # 취소 가드 — 마켓에서 취소요청이 들어온 건은 송장 추출/등록 진행 금지
+        if is_order_cancelled(order):
+            logger.warning(
+                f"[송장동기화][가드] 취소 주문 enqueue 차단 order_id={order_id} "
+                f"status={order.status} shipping_status={order.shipping_status}"
+            )
+            return {
+                "success": False,
+                "blocked": True,
+                "error": "취소요청 주문은 송장 추출 대상이 아닙니다",
+            }
         if not order.sourcing_order_number:
             return {"success": False, "error": "소싱처 주문번호가 없습니다"}
         # 까대기 주문은 자체 직배라 소싱처 운송장 추출 불가 — 명시적 거부
@@ -675,6 +687,26 @@ async def dispatch_to_market(
         order = await session.get(SambaOrder, job.order_id)
         if not order:
             return {"success": False, "error": "주문을 찾을 수 없습니다"}
+
+        # 취소 가드 — 마켓 송장 등록 직전 최종 차단. 잡 자체는 CANCELLED 로 닫는다.
+        if is_order_cancelled(order):
+            logger.warning(
+                f"[송장동기화][가드] 취소 주문 dispatch 차단 job_id={job.id} "
+                f"order_id={order.id} status={order.status} "
+                f"shipping_status={order.shipping_status}"
+            )
+            job.status = STATUS_CANCELLED
+            job.last_error = (
+                f"취소요청 감지로 dispatch 차단 (status={order.status}, "
+                f"shipping_status={order.shipping_status})"
+            )
+            job.updated_at = datetime.now(_UTC)
+            await session.commit()
+            return {
+                "success": False,
+                "blocked": True,
+                "error": "취소요청 주문은 송장 등록을 진행하지 않습니다",
+            }
 
         channel_source = (order.source or "").lower()
         result: dict[str, Any] = {

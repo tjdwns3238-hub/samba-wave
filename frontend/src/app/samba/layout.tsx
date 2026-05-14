@@ -2,12 +2,14 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import SambaModal from "@/components/samba/Modal";
 import SambaBlockAlert from "@/components/samba/BlockAlert";
 import type { SambaUser } from "@/lib/samba/api/operations";
 import { STORAGE_KEYS } from "@/lib/samba/constants";
 import { attachDeviceIdListener } from "@/lib/samba/deviceId";
+import { orderApi } from "@/lib/samba/api/commerce";
+import { fmtNum } from "@/lib/samba/styles";
 
 interface NavItem {
   href: string;
@@ -78,6 +80,88 @@ export default function SambaLayout({
   useEffect(() => {
     return attachDeviceIdListener();
   }, []);
+
+  // 글로벌 취소요청 폴링 — 주문 페이지 닫혀있어도 동작.
+  // 알람 설정(주기/영업시간)을 따르되, 0→>0 으로 변하는 순간만 빨간 모달 강제 노출.
+  // 카운트가 1 이상이면 사이드바 "주문" 메뉴 옆에 빨간 뱃지 항시 표시.
+  const [cancelCount, setCancelCount] = useState(0);
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const prevCountRef = useRef(0);
+
+  useEffect(() => {
+    if (!authChecked || !currentUser) return;
+    if (isLoginPage || isLicensePage) return;
+
+    let cancelled = false;
+    let intervalId: number | null = null;
+
+    const inBusinessHours = (start: string, end: string): boolean => {
+      // start = 영업 시작 (HH:MM), end = 영업 종료 (HH:MM)
+      // start <= end 면 일반 케이스 (07:00 ~ 23:00 처럼 같은 날 안에서 끝남)
+      // start > end 면 야간 케이스 (예: 22:00 ~ 06:00)
+      try {
+        const now = new Date();
+        const cur = now.getHours() * 60 + now.getMinutes();
+        const [sh, sm] = start.split(":").map(Number);
+        const [eh, em] = end.split(":").map(Number);
+        const startMin = sh * 60 + sm;
+        const endMin = eh * 60 + em;
+        if (Number.isNaN(startMin) || Number.isNaN(endMin)) return true;
+        if (startMin === endMin) return true; // 동일 시각이면 24시간 운영으로 간주
+        if (startMin < endMin) return cur >= startMin && cur < endMin;
+        return cur >= startMin || cur < endMin;
+      } catch {
+        return true;
+      }
+    };
+
+    let curSettings: { hour: number; min: number; sleep_start: string; sleep_end: string } | null = null;
+
+    const pollOnce = async () => {
+      if (cancelled || !curSettings) return;
+      // sleep_end = 영업 시작, sleep_start = 영업 종료 (모달 입력 라벨 기준)
+      if (!inBusinessHours(curSettings.sleep_end, curSettings.sleep_start)) return;
+      try {
+        const { count } = await orderApi.getCancelAlertCount();
+        if (cancelled) return;
+        const prev = prevCountRef.current;
+        prevCountRef.current = count;
+        setCancelCount(count);
+        // 0 → 1+ 로 새로 발생한 순간만 모달 강제 노출 (피로도 방지)
+        if (count > 0 && prev === 0) setShowCancelModal(true);
+      } catch {}
+    };
+
+    const start = async () => {
+      try {
+        const settings = await orderApi.getAlarmSettings();
+        if (cancelled) return;
+        curSettings = settings;
+        await pollOnce();
+        const intervalMs = (Number(settings.hour) * 3600 + Number(settings.min) * 60) * 1000;
+        // 0초 설정이면 폴링 안 함, 30초 미만이면 부하 보호로 30초로 보정
+        if (intervalMs > 0) {
+          intervalId = window.setInterval(pollOnce, Math.max(intervalMs, 30_000));
+        }
+      } catch {}
+    };
+    start();
+
+    const onUpdate = () => {
+      if (intervalId !== null) {
+        window.clearInterval(intervalId);
+        intervalId = null;
+      }
+      start();
+    };
+    window.addEventListener("alarm-settings-updated", onUpdate);
+
+    return () => {
+      cancelled = true;
+      if (intervalId !== null) window.clearInterval(intervalId);
+      window.removeEventListener("alarm-settings-updated", onUpdate);
+    };
+  }, [authChecked, currentUser, isLoginPage, isLicensePage]);
 
   // 로그인/라이선스 페이지는 레이아웃 헤더 없이 바로 렌더링
   if (isLoginPage || isLicensePage) {
@@ -211,6 +295,7 @@ export default function SambaLayout({
                 item.href === "/samba/products"
                   ? pathname === "/samba/products"
                   : pathname.startsWith(item.href);
+              const isOrdersTab = item.href === "/samba/orders";
               return (
                 <div key={item.href} className="relative">
                   <Link
@@ -229,6 +314,7 @@ export default function SambaLayout({
                       lineHeight: 1.1,
                       borderBottom: `2px solid ${isActive ? "#FF8C00" : "transparent"}`,
                       transition: "color 0.15s, border-color 0.15s",
+                      position: "relative",
                     }}
                     onMouseEnter={(e) => { e.currentTarget.style.color = "#FF8C00"; e.currentTarget.style.borderBottomColor = "#FF8C00"; }}
                     onMouseLeave={(e) => {
@@ -239,6 +325,32 @@ export default function SambaLayout({
                     {item.planned && (
                       <span style={{ fontSize: "0.625rem", color: "#777", fontWeight: 500 }}>
                         (개발예정)
+                      </span>
+                    )}
+                    {isOrdersTab && cancelCount > 0 && (
+                      <span
+                        title={`미처리 취소요청 ${fmtNum(cancelCount)}건`}
+                        style={{
+                          position: "absolute",
+                          top: "4px",
+                          right: "6px",
+                          minWidth: "18px",
+                          height: "18px",
+                          padding: "0 5px",
+                          background: "#FF4444",
+                          color: "#fff",
+                          fontSize: "0.6875rem",
+                          fontWeight: 700,
+                          borderRadius: "9px",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          boxShadow: "0 0 0 2px #0F0F0F",
+                          lineHeight: 1,
+                          animation: "samba-cancel-pulse 1.6s ease-in-out infinite",
+                        }}
+                      >
+                        {cancelCount > 99 ? "99+" : fmtNum(cancelCount)}
                       </span>
                     )}
                   </Link>
@@ -352,6 +464,89 @@ export default function SambaLayout({
         </div>
       </main>
       <SambaModal />
+
+      {/* 취소요청 새로 발생 시 강제 노출 모달 — 0→1+ 변화 순간만 뜬다 */}
+      {showCancelModal && cancelCount > 0 && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.75)",
+            backdropFilter: "blur(4px)",
+            zIndex: 9999,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <div
+            style={{
+              background: "#1A1A1A",
+              border: "2px solid #FF4444",
+              borderRadius: "16px",
+              padding: "2rem",
+              maxWidth: "440px",
+              width: "90%",
+              boxShadow: "0 8px 32px rgba(255,68,68,0.3)",
+            }}
+          >
+            <div style={{ textAlign: "center", marginBottom: "1.5rem" }}>
+              <div style={{ fontSize: "3rem", marginBottom: "0.75rem" }}>⚠️</div>
+              <h3 style={{ fontSize: "1.25rem", fontWeight: 700, color: "#FF6B6B", marginBottom: "0.5rem" }}>
+                주문 취소요청 감지
+              </h3>
+              <p style={{ fontSize: "0.875rem", color: "#AAA", lineHeight: 1.5 }}>
+                고객이 취소요청한 주문이 <b style={{ color: "#FF6B6B" }}>{fmtNum(cancelCount)}건</b>{" "}
+                있습니다. 발주·송장 등록 전에 확인해 주세요.
+              </p>
+            </div>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <button
+                onClick={() => setShowCancelModal(false)}
+                style={{
+                  flex: 1,
+                  padding: "0.75rem",
+                  background: "transparent",
+                  border: "1px solid #444",
+                  borderRadius: "8px",
+                  color: "#AAA",
+                  fontSize: "0.9375rem",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                나중에
+              </button>
+              <button
+                onClick={() => {
+                  setShowCancelModal(false);
+                  router.push("/samba/orders?market_status=cancel_requested");
+                }}
+                style={{
+                  flex: 2,
+                  padding: "0.75rem",
+                  background: "#FF4444",
+                  border: "none",
+                  borderRadius: "8px",
+                  color: "#fff",
+                  fontSize: "0.9375rem",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                }}
+              >
+                지금 확인하기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <style jsx global>{`
+        @keyframes samba-cancel-pulse {
+          0%, 100% { box-shadow: 0 0 0 2px #0F0F0F, 0 0 0 0 rgba(255, 68, 68, 0.6); }
+          50% { box-shadow: 0 0 0 2px #0F0F0F, 0 0 0 6px rgba(255, 68, 68, 0); }
+        }
+      `}</style>
     </div>
   );
 }

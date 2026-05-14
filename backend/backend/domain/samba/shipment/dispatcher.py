@@ -229,7 +229,12 @@ async def delete_from_market(
             )
         return await handler(session, product, account=account)
     except Exception as exc:
-        logger.error(f"[디스패처] {market_type} 상품 삭제 실패: {exc}")
+        # 세션 오염 도미노 차단 — 다음 상품이 같은 세션 재사용 시 줄줄이 greenlet_spawn 폭발 방지
+        try:
+            await session.rollback()
+        except Exception as rb_err:
+            logger.warning(f"[디스패처] rollback 실패: {rb_err}")
+        logger.error(f"[디스패처] {market_type} 상품 삭제 실패: {exc}", exc_info=True)
         return {"success": False, "message": f"{market_type} 삭제 실패: {str(exc)}"}
 
 

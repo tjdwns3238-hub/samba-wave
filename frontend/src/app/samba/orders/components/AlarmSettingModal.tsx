@@ -30,6 +30,8 @@ export default function AlarmSettingModal(props: Props) {
         sleep_start: sleepStart,
         sleep_end: sleepEnd,
       })
+      // 레이아웃 글로벌 폴러가 새 주기·영업시간으로 즉시 리셋되도록 이벤트 발송
+      window.dispatchEvent(new CustomEvent('alarm-settings-updated'))
       showAlert(`수집 주기: ${alarmHour}시간 ${alarmMin}분 / 영업시간: ${sleepEnd} ~ ${sleepStart} 저장완료`, 'success')
       onClose()
     } catch {

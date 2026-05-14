@@ -686,6 +686,44 @@ async def _site_autotune_loop(device_id: str, site: str):
                             )
                             _ref_mod._refresh_log_total += 1
 
+                        async def _partial_delete(pid: str) -> bool:
+                            """오토튠 품절 → 전 마켓 삭제 성공 시 상품 자체 삭제.
+
+                            _partial_update와 동일하게 새 세션을 매번 획득해 좀비
+                            connection 회피 + 1회 재시도 패턴 적용.
+                            """
+                            from sqlalchemy import delete as _sa_delete
+                            from backend.domain.samba.collector.model import (
+                                SambaCollectedProduct as _PD_CP,
+                            )
+                            from backend.db.orm import (
+                                get_write_session as _get_pd_session,
+                            )
+
+                            stmt = _sa_delete(_PD_CP).where(_PD_CP.id == pid)
+                            _last_exc: Exception | None = None
+                            for _attempt in range(2):
+                                try:
+                                    async with _get_pd_session() as _pd_s:
+                                        await _pd_s.execute(stmt)
+                                        await _pd_s.commit()
+                                    return True
+                                except Exception as _ex:
+                                    _last_exc = _ex
+                                    if _is_stale_conn_error(_ex) and _attempt == 0:
+                                        log.warning(
+                                            "[오토튠][DB재시도] partial_delete %s "
+                                            "좀비 connection 감지 → 새 세션으로 재시도: %s",
+                                            pid,
+                                            str(_ex)[:120],
+                                        )
+                                        await asyncio.sleep(0.1)
+                                        continue
+                                    raise
+                            if _last_exc:
+                                raise _last_exc
+                            return False
+
                         async def _partial_update(pid: str, vals: dict):
                             """last_sent_data를 건드리지 않는 partial UPDATE.
 
@@ -1106,6 +1144,7 @@ async def _site_autotune_loop(device_id: str, site: str):
                                                     },
                                                 )
                                         # 삭제 성공한 계정 → registered_accounts/market_product_nos 정리
+                                        _all_markets_deleted = False
                                         if _ok_del_ids:
                                             _cycle_deleted_pids.add(r.product_id)
                                             _orig_reg = list(
@@ -1127,15 +1166,32 @@ async def _site_autotune_loop(device_id: str, site: str):
                                                     for d in _ok_del_ids
                                                 )
                                             }
-                                            updates["registered_accounts"] = (
-                                                _new_reg if _new_reg else []
+                                            # 등록된 모든 마켓 삭제 성공 → 상품 자체 삭제
+                                            if _orig_reg and not _new_reg:
+                                                _all_markets_deleted = True
+                                            else:
+                                                updates["registered_accounts"] = (
+                                                    _new_reg if _new_reg else []
+                                                )
+                                                updates["market_product_nos"] = (
+                                                    _new_mnos if _new_mnos else {}
+                                                )
+                                    if _all_markets_deleted:
+                                        try:
+                                            await _partial_delete(r.product_id)
+                                            _log_line(
+                                                site,
+                                                r.product_id,
+                                                f"{_idx_prefix}{_prod_label}: 품절 전 마켓 삭제 성공 → 상품 DB 삭제 완료",
                                             )
-                                            updates["market_product_nos"] = (
-                                                _new_mnos if _new_mnos else {}
+                                        except Exception as _pd_err:
+                                            log.error(
+                                                "[오토튠] %s 상품 DB 삭제 실패: %s",
+                                                r.product_id,
+                                                _pd_err,
                                             )
-                                            if not _new_reg:
-                                                updates["status"] = "collected"
-                                    await _partial_update(r.product_id, updates)
+                                    else:
+                                        await _partial_update(r.product_id, updates)
                                     _site_consecutive_soldout[site] = 0
                                     return
                                 else:
@@ -2105,17 +2161,31 @@ async def _site_autotune_loop(device_id: str, site: str):
                                                 for did in _sp_deleted_ids
                                             )
                                         }
-                                        _cleanup: dict = {
-                                            "registered_accounts": _new_reg
-                                            if _new_reg
-                                            else [],
-                                            "market_product_nos": _new_mnos
-                                            if _new_mnos
-                                            else {},
-                                        }
-                                        if not _new_reg:
-                                            _cleanup["status"] = "collected"
-                                        await repo.update_async(_sp.id, **_cleanup)
+                                        # 등록된 모든 마켓 삭제 성공 → 상품 자체 삭제
+                                        if _sp_reg and not _new_reg:
+                                            try:
+                                                await repo.delete_async(_sp.id)
+                                                _log_line(
+                                                    _sp.source_site or "",
+                                                    _sp.id,
+                                                    f"{_sp.name or _sp.id}: 품절잔존 전 마켓 삭제 성공 → 상품 DB 삭제 완료",
+                                                )
+                                            except Exception as _pd_err:
+                                                log.error(
+                                                    "[오토튠] 품절잔존 %s 상품 DB 삭제 실패: %s",
+                                                    _sp.id,
+                                                    _pd_err,
+                                                )
+                                        else:
+                                            _cleanup: dict = {
+                                                "registered_accounts": _new_reg
+                                                if _new_reg
+                                                else [],
+                                                "market_product_nos": _new_mnos
+                                                if _new_mnos
+                                                else {},
+                                            }
+                                            await repo.update_async(_sp.id, **_cleanup)
 
                                 try:
                                     await asyncio.wait_for(session.commit(), timeout=30)

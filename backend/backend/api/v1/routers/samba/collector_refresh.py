@@ -619,8 +619,10 @@ async def refresh_products(
                             f"[refresh] {_pid} suspended_markets 업데이트 실패: {_patch_err}"
                         )
 
-        # 3단계: 품절 상품 상태 업데이트 (DB 삭제 대신 보존)
+        # 3단계: 품절 상품 상태 업데이트
+        # — 등록된 모든 마켓 삭제 성공 시 상품 자체 DB 삭제, 그 외는 sold_out 상태로 보존
         deleted_ids: list[str] = []
+        db_deleted_ids: list[str] = []
         if deletable_pids:
             from sqlmodel import col
             from backend.domain.samba.collector.model import SambaCollectedProduct
@@ -631,13 +633,18 @@ async def refresh_products(
             _upd_result = await session.execute(_upd_stmt)
             _upd_rows = _upd_result.scalars().all()
             for row in _upd_rows:
-                row.sale_status = "sold_out"  # type: ignore[assignment]
-                # 마켓 삭제 성공한 계정만 registered_accounts에서 제거
                 ok_accs = market_delete_success.get(row.id, set())
+                orig_reg = list(row.registered_accounts or [])
+                new_reg = (
+                    [a for a in orig_reg if a not in ok_accs] if ok_accs else orig_reg
+                )
+                # 등록된 모든 마켓 삭제 성공 → 상품 자체 DB 삭제
+                if orig_reg and ok_accs and not new_reg:
+                    await session.delete(row)
+                    db_deleted_ids.append(row.id)
+                    continue
+                row.sale_status = "sold_out"  # type: ignore[assignment]
                 if ok_accs:
-                    new_reg = [
-                        a for a in (row.registered_accounts or []) if a not in ok_accs
-                    ]
                     new_mnos = {
                         k: v
                         for k, v in (row.market_product_nos or {}).items()
@@ -650,9 +657,10 @@ async def refresh_products(
                     if not new_reg:
                         row.status = "collected"  # type: ignore[assignment]
                 session.add(row)
-            deleted_ids = [r.id for r in _upd_rows]
+            deleted_ids = [r.id for r in _upd_rows if r.id not in db_deleted_ids]
             logger.info(
-                f"[refresh] 품절 상품 {len(deleted_ids)}건 sold_out 상태 업데이트 완료 (DB 보존)"
+                f"[refresh] 품절 상품 {len(deleted_ids)}건 sold_out 상태 업데이트, "
+                f"{len(db_deleted_ids)}건 상품 DB 삭제 완료"
             )
 
         await session.commit()

@@ -144,18 +144,28 @@ async def _retransmit_if_changed(
             if deleted_account_ids:
                 m_nos_orig = product.market_product_nos or {}
                 new_reg = [a for a in reg_accounts if a not in deleted_account_ids]
-                remove_keys = set(deleted_account_ids) | {
-                    f"{aid}_origin" for aid in deleted_account_ids
-                }
-                new_nos = {k: v for k, v in m_nos_orig.items() if k not in remove_keys}
-                update_data: dict[str, Any] = {
-                    "registered_accounts": new_reg if new_reg else None,
-                    "market_product_nos": new_nos if new_nos else None,
-                }
-                if not new_reg:
-                    update_data["status"] = "collected"
                 product_repo = SambaCollectedProductRepository(session)
-                await product_repo.update_async(product.id, **update_data)
+                # 등록된 모든 마켓 삭제 성공 → 상품 자체 DB 삭제
+                if reg_accounts and not new_reg:
+                    try:
+                        await product_repo.delete_async(product.id)
+                        await _emit_log("전 마켓 삭제 성공 → 상품 DB 삭제 완료")
+                    except Exception as _pd_err:
+                        logger.error(
+                            f"[enrich] {product.id} 상품 DB 삭제 실패: {_pd_err}"
+                        )
+                else:
+                    remove_keys = set(deleted_account_ids) | {
+                        f"{aid}_origin" for aid in deleted_account_ids
+                    }
+                    new_nos = {
+                        k: v for k, v in m_nos_orig.items() if k not in remove_keys
+                    }
+                    update_data: dict[str, Any] = {
+                        "registered_accounts": new_reg if new_reg else None,
+                        "market_product_nos": new_nos if new_nos else None,
+                    }
+                    await product_repo.update_async(product.id, **update_data)
 
             result["retransmitted"] = True
         except Exception as e:

@@ -246,3 +246,44 @@ EXCLUDED_ORDER_STATUSES: tuple[str, ...] = (
 
 # 배송이 이미 진행/종료된 단계 — shipping_status(마켓 원본 한글)에 이 키워드 포함 시 제외.
 SHIPPED_SHIPPING_STATUS_KEYWORDS: tuple[str, ...] = ("배송중", "배송완료")
+
+
+# ---------------------------------------------------------------------------
+# 발주/송장 차단 가드 (취소요청 누락 사고 방지)
+# ---------------------------------------------------------------------------
+# 이 상태값에 해당하면 신규 발주·송장 dispatch 절대 진행 금지.
+CANCEL_BLOCKED_STATUSES: frozenset[str] = frozenset(
+    {"cancel_requested", "cancelling", "cancelled"}
+)
+
+
+class OrderCancelledError(RuntimeError):
+    """주문이 취소 단계라 발주/송장 진행이 차단됐음을 알리는 명시적 예외."""
+
+    def __init__(self, order_id: str, status: str, shipping_status: str = "") -> None:
+        self.order_id = order_id
+        self.status = status
+        self.shipping_status = shipping_status
+        super().__init__(
+            f"주문 {order_id} 취소상태({status}/{shipping_status}) — 발주·송장 차단"
+        )
+
+
+def is_order_cancelled(order: "SambaOrder") -> bool:
+    """주문이 취소 단계인지 판단. status enum 또는 한글 shipping_status 둘 다 검사."""
+    status = (order.status or "").lower().strip()
+    shipping_status = (order.shipping_status or "").strip()
+    if status in CANCEL_BLOCKED_STATUSES:
+        return True
+    # 영문 enum이 아직 동기화 안 된 케이스 대비 — 한글 shipping_status에 "취소" 포함이면 차단.
+    if "취소" in shipping_status:
+        return True
+    return False
+
+
+def assert_order_dispatchable(order: "SambaOrder") -> None:
+    """발주/송장 진입점 공통 가드. 취소 단계면 OrderCancelledError 발생."""
+    if is_order_cancelled(order):
+        raise OrderCancelledError(
+            order.id, order.status or "", order.shipping_status or ""
+        )
