@@ -1395,7 +1395,10 @@ async def list_recent_tracking_sync_jobs(
             seen_order_ids.add(j.order_id)
             if _is_excluded(order_status, shipping_status):
                 continue
-            # tracking_number 비어있음은 WHERE 절에서 이미 처리됨.
+            # 송장 채워진 주문: 이 잡이 직접 수집(scraped_tracking)했으면 표시(수집결과 확인용),
+            # 아니면 list 대상 아님(외부 수동입력/완결) → 숨김.
+            if order_tracking_number and not j.scraped_tracking:
+                continue
             counts[j.status] = counts.get(j.status, 0) + 1
             if len(result_rows) < limit:
                 result_rows.append(row)
