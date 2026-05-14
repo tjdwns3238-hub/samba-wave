@@ -736,8 +736,11 @@ async def dispatch_to_market(
             job.dispatch_result = result
             session.add(job)
 
-            if order.shipping_status != "shipped":
-                order.shipping_status = "shipped"
+            # 마켓 전송 성공 시 주문 status 드롭다운을 "국내배송중"으로 갱신
+            # (STATUS_MAP의 'shipping' = '국내배송중')
+            if order.status != "shipping":
+                order.status = "shipping"
+                order.shipping_status = "국내배송중"
                 order.shipped_at = datetime.now(_UTC)
                 session.add(order)
 

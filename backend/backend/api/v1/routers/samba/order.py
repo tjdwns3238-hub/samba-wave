@@ -4513,18 +4513,18 @@ async def sync_orders_from_markets(
                                     f"[주문동기화] {label}: 11번가 발주확인 실패 "
                                     f"ordNo={_ct['ord_no']} — {_ce}"
                                 )
-                        # 발주확인 성공한 주문의 status/shipping_status를 배송대기로 업데이트
+                        # 발주확인 성공한 주문의 status/shipping_status를 배송대기중으로 업데이트
                         for _od in orders_data:
                             if _od.get("order_number") in _confirmed_ord_nos:
                                 _od["status"] = "wait_ship"
-                                _od["shipping_status"] = "배송대기"
-                        # 이미 DB에 저장된 주문도 즉시 배송대기로 갱신
+                                _od["shipping_status"] = "배송대기중"
+                        # 이미 DB에 저장된 주문도 즉시 배송대기중으로 갱신
                         for _ord_no in _confirmed_ord_nos:
                             _ex = await svc.repo.find_by_async(order_number=_ord_no)
                             if _ex:
                                 await svc.update_order(
                                     _ex.id,
-                                    {"shipping_status": "배송대기"},
+                                    {"shipping_status": "배송대기중"},
                                 )
                         logger.info(
                             f"[주문동기화] {label}: 11번가 발주확인 {_confirmed}/{len(_confirm_targets)}건 완료"
@@ -6693,7 +6693,7 @@ def _parse_elevenst_order(item: dict, account_id: str, label: str) -> dict:
     shipping_map = {
         "200": "결제완료",
         "202": "결제완료",  # 11번가 내부 처리중 상태 (결제완료와 동일 단계)
-        "301": "배송대기",  # 발주확인 완료
+        "301": "배송대기중",  # 발주확인 완료
         "400": "출고완료",
         "500": "국내배송중",
         "600": "배송완료",
