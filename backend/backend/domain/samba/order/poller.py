@@ -151,12 +151,25 @@ async def _run_direct_order_sync(tenant_ids: set[str | None]) -> None:
 
         for acc in accounts:
             try:
+                # 마켓 API hang 시 폴러가 DB 풀 잠식 → 다른 워커까지 hang 도미노 차단.
+                # 1계정 최대 180초 + TimeoutError 시 명시적 rollback (asyncpg + CancelledError
+                # 좀비 회피, 2026-05-15 사고 기반).
                 async with get_write_session() as acc_session:
-                    res = await sync_orders_from_markets(
-                        body=SyncOrdersRequest(days=7, account_id=acc.id),
-                        session=acc_session,
-                        tenant_id=tenant_id,
-                    )
+                    try:
+                        res = await asyncio.wait_for(
+                            sync_orders_from_markets(
+                                body=SyncOrdersRequest(days=7, account_id=acc.id),
+                                session=acc_session,
+                                tenant_id=tenant_id,
+                            ),
+                            timeout=180,
+                        )
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        try:
+                            await asyncio.wait_for(acc_session.rollback(), timeout=5)
+                        except Exception:
+                            pass
+                        raise
                 synced = res.get("total_synced", 0) if isinstance(res, dict) else 0
                 if synced:
                     logger.info(
