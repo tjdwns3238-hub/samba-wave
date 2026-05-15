@@ -144,6 +144,7 @@ export interface SambaOrder {
   customer_phone?: string;
   customer_address?: string;
   customer_address_detail?: string;
+  customer_postal_code?: string;
   quantity: number;
   sale_price: number;
   /**

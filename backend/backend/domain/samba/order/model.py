@@ -112,6 +112,10 @@ class SambaOrder(SQLModel, table=True):
     customer_address_detail: Optional[str] = Field(
         default=None, sa_column=Column(Text, nullable=True)
     )
+    # 우편번호 — 화면 확인용. 복사 버튼은 customer_address만 복사하도록 frontend에서 분리.
+    customer_postal_code: Optional[str] = Field(
+        default=None, sa_column=Column(Text, nullable=True)
+    )
 
     # 수량/금액
     quantity: int = Field(default=1)

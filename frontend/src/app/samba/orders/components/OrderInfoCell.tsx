@@ -348,6 +348,12 @@ export default function OrderInfoCell(props: Props) {
               {renderCopyableText(customerAddress.detail, '상세주소')}
             </>
           )}
+          {o.customer_postal_code && (
+            // 우편번호 — 확인용만 표시. 복사 버튼 의도적 제외 (주소 복사 시 우편번호 제외)
+            <span style={{ color: '#888', fontSize: '0.75rem', marginLeft: '0.25rem' }}>
+              [{o.customer_postal_code}]
+            </span>
+          )}
         </div>
       </div>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.25rem', fontSize: '0.8rem', marginTop: '0.25rem', marginBottom: '0.25rem' }}>
