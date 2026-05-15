@@ -1572,7 +1572,7 @@ const ProductCard = React.memo(function ProductCard({
                 const placeholder = byteLimit ? truncateToBytes(composedName, byteLimit) : composedName.slice(0, nameLimit)
                 return (
                 <tr key={m.marketName} style={{ borderBottom: '1px solid #1E1E1E' }}>
-                  <td style={tdLabel}>{m.marketName}</td>
+                  <td style={tdLabel}>{m.marketName === '신세계몰(전시)' ? '신세계몰' : m.marketName}</td>
                   <td style={tdVal}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>

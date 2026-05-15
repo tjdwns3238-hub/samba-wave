@@ -256,7 +256,11 @@ export default function CategoriesPage() {
         return
       }
       setAiMarketSelectOpen(false)
-      handleAiMapping(selected)
+      // ssg 선택 시 ssg_std(표준카테고리) 자동 세트 포함
+      const expanded = selected.includes('ssg') && !selected.includes('ssg_std')
+        ? [...selected, 'ssg_std']
+        : selected
+      handleAiMapping(expanded)
     } else {
       // 단건 모드
       const selected = MARKET_KEYS.filter(mk => aiSelectedMarkets[mk])
@@ -265,7 +269,11 @@ export default function CategoriesPage() {
         return
       }
       setAiMarketSelectOpen(false)
-      handleAiMapping(selected)
+      // ssg 선택 시 ssg_std(표준카테고리) 자동 세트 포함
+      const expanded = selected.includes('ssg') && !selected.includes('ssg_std')
+        ? [...selected, 'ssg_std']
+        : selected
+      handleAiMapping(expanded)
     }
   }
 

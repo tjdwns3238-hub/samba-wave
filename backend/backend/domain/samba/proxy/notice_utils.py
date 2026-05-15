@@ -1087,34 +1087,63 @@ def build_ssg_notice(
     Returns:
         (itemMngPropClsId, itemMngAttrs 배열)
     """
-    fallback = "상세설명참조"
-    material = product.get("material", "") or fallback
-    color = product.get("color", "") or fallback
-    manufacturer = (
-        product.get("manufacturer", "") or product.get("brand", "") or fallback
-    )
+    fallback = "상세페이지 참조"
+    # 정책 기본값 (_ssg_notice_* 키로 주입, 소싱 데이터 우선)
+    _pol_material = product.get("_ssg_notice_material", "") or ""
+    _pol_color = product.get("_ssg_notice_color", "") or ""
+
+    material = product.get("material", "") or _pol_material or fallback
+    color = product.get("color", "") or _pol_color or fallback
     origin = product.get("origin", "") or ""
 
-    # 수입여부
+    # 치수 및 굽높이
+    size_heel = product.get("_ssg_notice_size", "") or fallback
+
+    # 수입여부 — 정책값 우선, 없으면 원산지로 자동 판별
     if "_ssg_import_yn" in product:
         import_yn = product["_ssg_import_yn"]
     else:
         import_yn = "N" if (origin and _is_domestic_origin(origin)) else "Y"
-    importer = manufacturer if import_yn == "Y" else fallback
 
-    # A/S 정보
+    # 제조사 — 정책값 우선, 없으면 소싱 데이터
+    _pol_manufacturer = product.get("_ssg_notice_manufacturer", "") or ""
+    manufacturer = (
+        _pol_manufacturer
+        or product.get("manufacturer", "")
+        or product.get("brand", "")
+        or fallback
+    )
+
+    # 제조국 — 정책값 우선, 없으면 소싱 데이터
+    _pol_origin = product.get("_ssg_notice_origin", "") or ""
+    origin = _pol_origin or origin or fallback
+
+    # 수입자 — 정책값 우선, 없으면 제조사 자동
+    _pol_importer = product.get("_ssg_notice_importer", "") or ""
+    importer = _pol_importer or (manufacturer if import_yn == "Y" else fallback)
+
+    # 취급시 주의사항 — 정책값 우선
+    _pol_caution = product.get("_ssg_notice_caution", "") or ""
+    caution = _pol_caution or fallback
+
+    # A/S 책임자 및 전화번호 — 통합 연락처 우선, 없으면 개별 phone/message
+    _pol_as_contact = product.get("_ssg_notice_as_contact", "") or ""
     as_phone = product.get("_as_phone", "") or ""
     as_message = product.get("_as_message", "") or ""
-    as_info = ""
-    if as_phone:
+    if _pol_as_contact:
+        as_info = _pol_as_contact
+    elif as_phone:
         as_info = as_phone
         if as_message:
             as_info += f" | {as_message}"
     elif as_message:
         as_info = as_message
-    as_info = as_info or fallback
+    else:
+        as_info = fallback
 
-    group = detect_notice_group(product)
+    _group_map = {"의류": "wear", "신발": "shoes", "가방/잡화": "bag", "기타": "etc"}
+    _pol_group = product.get("_ssg_notice_group", "") or ""
+    group = _group_map.get(_pol_group) or detect_notice_group(product)
     cls_id = _SSG_NOTICE_TYPE_MAP.get(group, "0000000035")
 
     if group == "wear":
@@ -1136,10 +1165,10 @@ def build_ssg_notice(
         attrs = [
             {"itemMngPropId": "0000000184", "itemMngCntt": material},
             {"itemMngPropId": "0000000002", "itemMngCntt": color},
-            {"itemMngPropId": "0000000170", "itemMngCntt": fallback},
+            {"itemMngPropId": "0000000170", "itemMngCntt": size_heel},
             {"itemMngPropId": "0000000008", "itemMngCntt": import_yn},
             {"itemMngPropId": "0000000009", "itemMngCntt": importer},
-            {"itemMngPropId": "0000000013", "itemMngCntt": fallback},
+            {"itemMngPropId": "0000000013", "itemMngCntt": caution},
             {
                 "itemMngPropId": "0000000006",
                 "itemMngCntt": "관련 법 및 소비자 분쟁해결 규정에 따름",

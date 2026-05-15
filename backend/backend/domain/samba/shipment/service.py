@@ -21,7 +21,7 @@ import math
 # 마켓 계정의 market_type 필드 값을 정책 설정의 per_market 키로 변환할 때 사용
 MARKET_TYPE_TO_POLICY_KEY: dict[str, str] = {
     "coupang": "쿠팡",
-    "ssg": "신세계몰",
+    "ssg": "신세계몰(전시)",
     "smartstore": "스마트스토어",
     "11st": "11번가",
     "gmarket": "지마켓",
@@ -478,7 +478,7 @@ class SambaShipmentService:
         # 정책 조회 (가격 계산용)
         MARKET_TYPE_TO_POLICY_KEY = {
             "coupang": "쿠팡",
-            "ssg": "신세계몰",
+            "ssg": "신세계몰(전시)",
             "smartstore": "스마트스토어",
             "11st": "11번가",
             "gmarket": "지마켓",
@@ -1091,7 +1091,7 @@ class SambaShipmentService:
         # 정책 기반 계정 필터링: 정책이 있으면 참조하되, 사용자 선택 계정은 보존
         MARKET_TYPE_TO_POLICY_KEY = {
             "coupang": "쿠팡",
-            "ssg": "신세계몰",
+            "ssg": "신세계몰(전시)",
             "smartstore": "스마트스토어",
             "11st": "11번가",
             "gmarket": "지마켓",
@@ -2271,39 +2271,40 @@ class SambaShipmentService:
             "bottomImg",
         ]
 
-        if policy_id:
+        # 템플릿 ID 결정: 마켓별 오버라이드 → 정책 기본값 순
+        # template_id_override는 policy_id 유무와 무관하게 항상 적용
+        template_id = template_id_override
+        if not template_id and policy_id:
             policy_repo = SambaPolicyRepository(self.session)
             policy = await policy_repo.get_async(policy_id)
             if policy and policy.extras:
-                # 마켓별 오버라이드 우선, 없으면 기본 템플릿
-                template_id = template_id_override or policy.extras.get(
-                    "detail_template_id"
-                )
-                logger.info(
-                    f"[상세HTML] 정책 {policy_id} 템플릿ID: {template_id}"
-                    f"{' (마켓별 오버라이드)' if template_id_override else ''}"
-                )
-                if template_id:
-                    tpl_repo = BaseRepository(self.session, SambaDetailTemplate)
-                    tpl = await tpl_repo.get_async(template_id)
-                    if tpl:
-                        top_img = _extract_url(tpl.top_image_s3_key or "")
-                        bottom_img = _extract_url(tpl.bottom_image_s3_key or "")
-                        if tpl.img_checks:
-                            img_checks.update(tpl.img_checks)
-                        if tpl.img_order:
-                            img_order = tpl.img_order
-                        logger.info(
-                            f"[상세HTML] 템플릿 로드 — 상단:{bool(top_img)}, 하단:{bool(bottom_img)}, checks:{img_checks}"
-                        )
-                    else:
-                        logger.warning(f"[상세HTML] 템플릿 {template_id} 조회 실패")
+                template_id = policy.extras.get("detail_template_id")
+                logger.info(f"[상세HTML] 정책 {policy_id} 템플릿ID: {template_id}")
             else:
                 logger.info(
                     f"[상세HTML] 정책 {policy_id} extras 없음 또는 정책 조회 실패"
                 )
-        else:
+        elif not template_id:
             logger.info("[상세HTML] applied_policy_id 없음 — 템플릿 미적용")
+
+        if template_id_override:
+            logger.info(f"[상세HTML] 마켓별 오버라이드 템플릿 적용: {template_id_override}")
+
+        if template_id:
+            tpl_repo = BaseRepository(self.session, SambaDetailTemplate)
+            tpl = await tpl_repo.get_async(template_id)
+            if tpl:
+                top_img = _extract_url(tpl.top_image_s3_key or "")
+                bottom_img = _extract_url(tpl.bottom_image_s3_key or "")
+                if tpl.img_checks:
+                    img_checks.update(tpl.img_checks)
+                if tpl.img_order:
+                    img_order = tpl.img_order
+                logger.info(
+                    f"[상세HTML] 템플릿 로드 — 상단:{bool(top_img)}, 하단:{bool(bottom_img)}, checks:{img_checks}"
+                )
+            else:
+                logger.warning(f"[상세HTML] 템플릿 {template_id} 조회 실패")
 
         images = product.get("images") or []
         detail_images = product.get("detail_images") or []
@@ -2398,9 +2399,6 @@ class SambaShipmentService:
         if "ssg" in market_types:
             mapping_market_types.add("ssg_std")
 
-        # cat2 코드맵이 있는 모든 마켓에서 경로 → 숫자 코드 변환 시도
-        code_required_markets = market_types  # 전체 대상 마켓
-
         for market_type in mapping_market_types:
             # 카테고리매핑 페이지 설정만 사용
             if mapping and mapping.target_mappings:
@@ -2412,19 +2410,15 @@ class SambaShipmentService:
             # DB 매핑 없으면 해당 마켓은 스킵 (사용자가 직접 매핑한 것만 전송)
             logger.info(f"[카테고리] {market_type} DB 매핑 없음 — 전송 대상에서 제외")
 
-        # 경로 문자열 → 숫자 코드 변환 (11번가 등)
+        # 경로 문자열 → 숫자 코드 변환
+        # ssg/ssg_std는 각각 cat2에 dispCtgId/stdCtgId 코드맵이 있으므로 함께 변환
         from backend.domain.samba.category.repository import SambaCategoryTreeRepository
 
         category_svc = SambaCategoryService(
             mapping_repo, SambaCategoryTreeRepository(self.session)
         )
-        for market_type in code_required_markets:
-            # SSG는 전시카테고리(dispCtgId)와 표준카테고리(stdCtgId)가 별도 체계.
-            # cat2 트리는 표준카테고리(stdCtgDclsId)만 담고 있으므로
-            # 전시카테고리 ID가 저장된 result["ssg"]를 변환하면 잘못된 값이 주입되거나
-            # 삭제되어 전송 실패가 발생한다. → SSG는 변환 루프에서 완전 제외.
-            if market_type in ("ssg", "ssg_std"):
-                continue
+        convert_markets = set(market_types) | ({"ssg_std"} if "ssg" in market_types else set())
+        for market_type in convert_markets:
             if market_type in result:
                 cat_path = result[market_type]
                 if cat_path and not cat_path.isdigit():

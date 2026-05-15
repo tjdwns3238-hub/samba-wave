@@ -1318,9 +1318,13 @@ JSON만:
         from sqlmodel import select
         from backend.domain.samba.collector.model import SambaCollectedProduct
 
+        # MARKET_CATEGORIES에 없어도 DB 동기화로 카테고리가 존재하는 마켓 허용
+        _db_only_markets = {"ssg_std"}
+        _supported_markets = set(MARKET_CATEGORIES.keys()) | _db_only_markets
+
         if target_markets:
             # 사용자가 직접 선택한 마켓
-            all_market_keys = set(target_markets) & set(MARKET_CATEGORIES.keys())
+            all_market_keys = set(target_markets) & _supported_markets
             logger.info(
                 f"[벌크매핑] 사용자 선택 마켓: {all_market_keys} ({len(all_market_keys)}개)"
             )
@@ -1336,12 +1340,12 @@ JSON만:
             acct_result = await session.execute(acct_stmt)
             active_markets = {row[0] for row in acct_result.all()}
             if active_markets:
-                all_market_keys = active_markets & set(MARKET_CATEGORIES.keys())
+                all_market_keys = active_markets & _supported_markets
                 logger.info(
                     f"[벌크매핑] 활성 마켓 대상: {all_market_keys} ({len(all_market_keys)}개)"
                 )
             else:
-                all_market_keys = set(MARKET_CATEGORIES.keys())
+                all_market_keys = _supported_markets
 
         if not all_market_keys:
             return {

@@ -192,7 +192,7 @@ class SSGClient:
         url = f"{self.BASE_URL}{path}"
         headers = {
             "Authorization": self.api_key,
-            "Content-Type": "application/xml",
+            "Content-Type": "application/xml; charset=UTF-8",
             "Accept": "application/json",
         }
 
@@ -245,37 +245,29 @@ class SSGClient:
         """상품 전체 등록.
 
         SSG Open API v0.1: POST /item/0.1/online
-        구버전 /item/0.5/insertItem.ssg 는 2026-04-01 종료됨.
-        product_data 는 online_registration 래퍼 없이 도메인 dict 를 전달하면 됨.
+        SSG POST API는 JSON이 아닌 XML body를 요구함 (XStream 기반).
         """
-        import json as _json
-
-        body = {"online_registration": product_data}
-        logger.info(
-            f"[SSG DEBUG] online 등록 페이로드:\n{_json.dumps(body, ensure_ascii=False, indent=2)}"
+        xml_body = '<?xml version="1.0" encoding="UTF-8"?>' + self._to_xml(
+            product_data, "insertItem"
         )
-        result = await self._call_api(
-            "POST",
-            "/item/0.1/online",
-            body=body,
-        )
+        logger.info(f"[SSG DEBUG] insertItem XML (총 {len(xml_body.encode())}bytes):\n{xml_body[:2000]}")
+        result = await self._call_api_xml("POST", "/item/0.5/insertItem.ssg", xml_body)
         return {"success": True, "data": result}
 
     async def update_product(self, product_data: dict[str, Any]) -> dict[str, Any]:
         """상품 전체 수정.
 
         SSG Open API v0.1: POST /item/0.1/online/{itemId}
-        구버전 /item/0.4/updateItem.ssg 는 2026-04-01 종료됨.
-        product_data 에 itemId 가 포함되어야 함.
+        SSG POST API는 JSON이 아닌 XML body를 요구함 (XStream 기반).
         """
-        item_id = product_data.get("itemId") or product_data.get("itemBase", {}).get(
-            "itemId", ""
+        item_id = product_data.pop("itemId", "") or ""
+        product_data["itemId"] = item_id  # XStream updateItem.ssg는 itemId를 XML 본문에 포함
+        xml_body = '<?xml version="1.0" encoding="UTF-8"?>' + self._to_xml(
+            product_data, "updateItem"
         )
-        body = {"online_registration": product_data}
-        result = await self._call_api(
-            "POST",
-            f"/item/0.1/online/{item_id}",
-            body=body,
+        logger.info(f"[SSG DEBUG] updateItem XML (itemId={item_id}):\n{xml_body[:2000]}")
+        result = await self._call_api_xml(
+            "POST", "/item/0.5/updateItem.ssg", xml_body
         )
         return {"success": True, "data": result}
 
@@ -674,7 +666,7 @@ class SSGClient:
             result: dict[str, str] = {}
             for item in orplc_items:
                 nm = (item.get("orplcNm") or "").strip()
-                oid = item.get("orplcId", "")
+                oid = str(item.get("orplcId") or "")
                 if nm and oid:
                     result[nm.lower()] = oid
             return result
@@ -932,8 +924,41 @@ class SSGClient:
         return ""
 
     # ------------------------------------------------------------------
-    # XStream JSON 변환 헬퍼
+    # XStream XML 변환 헬퍼
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _to_xml(data: Any, tag: str) -> str:
+        """Python dict를 XStream 호환 XML 엘리먼트로 변환.
+
+        {"sites": {"site": [{"siteNo":"6004"}]}}
+        → <sites><site><siteNo>6004</siteNo></site></sites>
+        """
+        import re as _re
+        from xml.sax.saxutils import escape as _esc
+
+        _invalid_xml_chars = _re.compile(
+            r"[^\x09\x0A\x0D\x20-퟿-�\U00010000-\U0010FFFF]"
+        )
+
+        def _clean(s: str) -> str:
+            return _invalid_xml_chars.sub("", s)
+
+        def _serialize(value: Any) -> str:
+            if isinstance(value, dict):
+                return "".join(
+                    _elem(k, v) for k, v in value.items() if v is not None and v != ""
+                )
+            return _esc(_clean(str(value))) if value is not None else ""
+
+        def _elem(key: str, value: Any) -> str:
+            if value is None or value == "":
+                return ""
+            if isinstance(value, list):
+                return "".join(f"<{key}>{_serialize(item)}</{key}>" for item in value)
+            return f"<{key}>{_serialize(value)}</{key}>"
+
+        return f"<{tag}>{_serialize(data)}</{tag}>"
 
     @staticmethod
     def _wrap_list(items: list[dict[str, Any]], element_name: str) -> dict[str, Any]:
@@ -970,11 +995,13 @@ class SSGClient:
         brand_id: str = "",
         infra: Optional[dict[str, str]] = None,
         std_category_id: str = "",
+        main_category_id: str = "",
         margin_rate: int = 0,
         shpp_rqrm_dcnt: int = 3,
         day_max_qty: int = 5,
         once_min_qty: int = 1,
         once_max_qty: int = 5,
+        brand_mappings: Optional[list[dict]] = None,
     ) -> dict[str, Any]:
         """SambaCollectedProduct → SSG insertItem 요청 데이터 변환.
 
@@ -995,22 +1022,57 @@ class SSGClient:
         inf = infra or {}
         sale_price = int(product.get("sale_price", 0) or 0)
         cost = int(product.get("cost", 0) or 0) or int(sale_price * 0.7)
-        detail_html = (
+        _raw_detail_html = (
             product.get("detail_html", "")
             or f"<p>{(product.get('name', '') or '')[:200]}</p>"
+        )
+        # SSG XML 바디 크기 제한 — 전체 HTML이 너무 크면 Tomcat 400 발생
+        _detail_bytes = _raw_detail_html.encode("utf-8")
+        detail_html = (
+            _detail_bytes[:50000].decode("utf-8", errors="ignore")
+            if len(_detail_bytes) > 50000
+            else _raw_detail_html
         )
         images = product.get("images") or []
         brand = product.get("brand", "")
         material = product.get("material", "") or "상세설명참조"
         color = product.get("color", "") or "상세설명참조"
-        manufacturer = product.get("manufacturer", "") or brand or "상세설명참조"
+        _raw_manufacturer = product.get("manufacturer", "") or brand or "상세설명참조"
+        # "제조사: Nike inc. / 수입처 : 나이키코리아(유)" 형태 → 첫 번째 값만 추출
+        # SSG manufcoNm 필드는 단순 회사명이어야 함 (콜론/슬래시 포함 시 파싱 실패 가능)
+        if "/" in _raw_manufacturer:
+            _raw_manufacturer = _raw_manufacturer.split("/")[0].strip()
+        if ":" in _raw_manufacturer:
+            _raw_manufacturer = _raw_manufacturer.split(":", 1)[1].strip()
+        manufacturer = _raw_manufacturer[:100] if _raw_manufacturer else (brand or "상세설명참조")
         style_no = product.get("style_no", "") or product.get("styleNo", "") or ""
 
-        # 브랜드 매칭 (계약 브랜드 자동 탐색)
-        matched_brand_id, matched_brand_name = self.match_brand(brand)
-        if matched_brand_id == "9999999999" and manufacturer:
-            # 브랜드 필드에 없으면 제조사로 재시도
-            matched_brand_id, matched_brand_name = self.match_brand(manufacturer)
+        # 브랜드 매칭 — 정책 브랜드 매핑 우선, 없으면 CONTRACTED_BRANDS fallback
+        def _match_from_mappings(name: str, mappings: list[dict]) -> tuple[str, str]:
+            if not name or not mappings:
+                return "", ""
+            lower = name.strip().lower()
+            lower_ns = lower.replace(" ", "")
+            for m in mappings:
+                nm = (m.get("brandNm") or "").strip().lower()
+                nm_ns = nm.replace(" ", "")
+                if nm_ns and nm_ns == lower_ns:
+                    return m["brandId"], m["brandNm"]
+            for m in mappings:
+                nm = (m.get("brandNm") or "").strip().lower()
+                nm_ns = nm.replace(" ", "")
+                if nm_ns and (nm_ns in lower_ns or lower_ns in nm_ns):
+                    return m["brandId"], m["brandNm"]
+            return "", ""
+
+        _mappings = brand_mappings or []
+        matched_brand_id, matched_brand_name = _match_from_mappings(brand, _mappings)
+        if not matched_brand_id and manufacturer:
+            matched_brand_id, matched_brand_name = _match_from_mappings(manufacturer, _mappings)
+        if not matched_brand_id:
+            matched_brand_id, matched_brand_name = self.match_brand(brand)
+            if matched_brand_id == "9999999999" and manufacturer:
+                matched_brand_id, matched_brand_name = self.match_brand(manufacturer)
         if brand_id:
             matched_brand_id = brand_id  # 명시적 지정 우선
 
@@ -1144,151 +1206,97 @@ class SSGClient:
         item_mng_prop_cls_id, item_mng_attrs_list = build_ssg_notice(product)
 
         data: dict[str, Any] = {
-            # 기본 정보
             "itemNm": name,
             "brandId": matched_brand_id,
-            "stdCtgId": effective_std_cat,  # 표준카테고리 ID (ssg_std)
-            "mdlNm": style_no or None,  # 모델명 = 품번
-            # 제조사/원산지
+            "stdCtgId": effective_std_cat,
+            "mdlNm": style_no or None,
             "manufcoNm": manufacturer,
-            # resolved_origin이 None이면 필드 제외 — None 전송 시 SSG "필수값" 오류 발생
             **({"prodManufCntryId": resolved_origin} if resolved_origin else {}),
-            # 사이트 (XStream list 래핑) — 신세계몰 판매, 판매상태 20=판매중
             "sites": self._wrap_list_always_array(
-                [
-                    {
-                        "siteNo": self.site_no,
-                        "sellStatCd": "20",
-                    }
-                ],
+                [{"siteNo": self.site_no, "sellStatCd": "20"}],
                 "site",
             ),
-            # 적용범위 — B2C/B2E/B2B 전체 적용 (판매자센터 기본값)
-            "b2eAplRngCd": "10",  # B2E 적용 범위: 전체 적용
-            "b2cAplRngCd": "10",  # B2C 적용 범위: 적용
-            "b2bAplRngCd": "10",  # B2B 적용 범위: 적용
-            # 상품관리속성 (XStream list 래핑) — 카테고리별 고시 클래스 ID 동적 설정
-            "itemMngPropClsId": item_mng_prop_cls_id,  # 카테고리별 동적 고시 클래스 ID
+            "b2eAplRngCd": "10",
+            "b2cAplRngCd": "10",
+            "b2bAplRngCd": "10",
+            "itemMngPropClsId": item_mng_prop_cls_id,
             "itemMngAttrs": self._wrap_list(item_mng_attrs_list, "itemMngAttr"),
-            # 전시카테고리 (XStream list 래핑)
-            # siteNo는 항상 "6005" 고정 — SSG API 스펙상 6005로 전달해야 신세계몰(6004) 등에 매핑룰 적용
-            # dispCtgId는 계정 siteNo(self.site_no) 기준으로 동기화된 카테고리 ID 사용
             "dispCtgs": self._wrap_list_always_array(
-                [
-                    {
-                        "siteNo": "6005",
-                        "dispCtgId": category_id,
-                    }
-                ],
+                [e for e in [
+                    {"siteNo": self.site_no, "dispCtgId": category_id} if category_id else None,
+                    {"siteNo": "6005", "dispCtgId": main_category_id} if main_category_id else None,
+                ] if e],
                 "dispCtg",
             )
-            if category_id
+            if (category_id or main_category_id)
             else None,
-            "dispStrtDts": disp_start,  # 전시 시작일 (최상위 레벨)
-            "dispEndDts": disp_end,  # 전시 종료일 (최상위 레벨)
-            # 검색 — srchPsblYn=Y 시 itemSrchwdNm 필수; 검색어 없으면 브랜드명 사용
+            "dispStrtDts": disp_start,
+            "dispEndDts": disp_end,
             "srchPsblYn": "Y",
             "itemSrchwdNm": search_keyword
             or (matched_brand_name or brand or "")[:50]
             or None,
-            # 구매 수량 제한 — API 문서 필드명 기준
-            "minOnetOrdPsblQty": once_min_qty,  # 최소 1회 주문 가능 수량
-            "maxOnetOrdPsblQty": once_max_qty,  # 최대 1회 주문 가능 수량
-            "max1dyOrdPsblQty": day_max_qty,  # 최대 1일 주문 가능 수량
-            # 성인 상품 타입 — 90=일반 상품
+            "minOnetOrdPsblQty": once_min_qty,
+            "maxOnetOrdPsblQty": once_max_qty,
+            "max1dyOrdPsblQty": day_max_qty,
             "adultItemTypeCd": "90",
-            # 2024-08-28 추가 필수 필드
-            "hriskItemYn": "N",  # 고위험 상품 여부
-            "nitmAplYn": "N",  # 신상품 적용 여부
-            # 매입/과세
-            "buyFrmCd": "60",  # 위수탁
-            "txnDivCd": "10",  # 과세
-            # 가격 (XStream 래핑) — 공급가 자동계산 방식: 판매가 직접 입력
-            # prcMngMthd: 1=공급가 자동계산, 2=판매가 자동계산, 3=마진 자동계산
-            "prcMngMthd": "1",  # 공급가 자동계산
+            "hriskItemYn": "N",
+            "nitmAplYn": "N",
+            "buyFrmCd": "60",
+            "txnDivCd": "10",
+            "prcMngMthd": "1",
             "salesPrcInfos": self._wrap_list_always_array(
-                [
-                    {
-                        "splprc": cost,  # 공급가 (필수)
-                        "sellprc": sale_price,  # 판매가 (필수)
-                        "mrgrt": margin_pct,  # 마진율 (필수)
-                    }
-                ],
+                [{"splprc": cost, "sellprc": sale_price, "mrgrt": margin_pct}],
                 "uitemPrc",
             ),
-            # 판매유형
             "itemSellTypeCd": "10",
             "itemSellTypeDtlCd": "10",
-            # 상품 특성 — 일반상품 (최상위 RequestItemInsertDto 레벨 필수값)
-            "itemChrctDivCd": "10",  # 상품특성구분: 일반
-            "itemChrctDtlCd": "10",  # 상품특성상세: 일반 (필수)
-            "exusItemDivCd": "10",  # 전용상품구분: 일반
-            "exusItemDtlCd": "10",  # 전용상품상세: 일반
-            "shppItemDivCd": "01",  # 배송상품구분: 일반 (최상위 필수)
-            "retExchPsblYn": "Y",  # 반품교환가능여부 (최상위 필수)
-            "ssgstrSellYn": "N",  # SSG 스토어(하남) 판매 안 함
-            # 선물
+            "itemChrctDivCd": "10",
+            "itemChrctDtlCd": "10",
+            "exusItemDivCd": "10",
+            "exusItemDtlCd": "10",
+            "shppItemDivCd": "01",
+            "retExchPsblYn": "Y",
+            "ssgstrSellYn": "N",
             "giftPsblYn": "N",
-            # 병행수입 — 항상 N (SSG 병행수입 Y시 별도 인증 필요 → API 오류 발생)
             "palimpItemYn": "N",
-            # 배송기준 (XStream list 래핑 — v0.5 필수)
             "itemShppCritns": self._wrap_list_always_array(
                 [
                     {
-                        "shppMainCd": "41",  # 협력업체 (온라인 상품 신세계/이마트 필수)
-                        "shppMthdCd": "20",  # 택배배송
-                        "tdShppPsblYn": "N",  # 오늘출발 가능여부 (필수)
-                        "jejuShppDisabYn": "N",  # 제주 배송불가 여부 (필수)
-                        "ismtarShppDisabYn": "N",  # 도서산간 배송불가 여부 (필수)
-                        "whoutAddrId": whout_addr_id,  # 출고주소 ID (필수)
-                        "snbkAddrId": snbk_addr_id,  # 반품주소 ID (필수)
-                        "whoutShppcstId": whout_shppcst_id,  # 출고배송비 ID (필수)
-                        "retShppcstId": ret_shppcst_id,  # 반품배송비 ID (필수)
-                        "mareaShppYn": "N",  # 수도권 외 배송불가 해제 — 전국 배송 가능
-                        # 제주/도서산간 추가배송비 ID (있을 때만 설정)
-                        **(
-                            {"jejuAddShppcstId": add_shppcst_jeju}
-                            if add_shppcst_jeju
-                            else {}
-                        ),
-                        **(
-                            {"ismtarAddShppcstId": add_shppcst_island}
-                            if add_shppcst_island
-                            else {}
-                        ),
+                        "shppMainCd": "41",
+                        "shppMthdCd": "20",
+                        "tdShppPsblYn": "N",
+                        "jejuShppDisabYn": "N",
+                        "ismtarShppDisabYn": "N",
+                        "whoutAddrId": whout_addr_id,
+                        "snbkAddrId": snbk_addr_id,
+                        "whoutShppcstId": whout_shppcst_id,
+                        "retShppcstId": ret_shppcst_id,
+                        "mareaShppYn": "N",
+                        **({"jejuAddShppcstId": add_shppcst_jeju} if add_shppcst_jeju else {}),
+                        **({"ismtarAddShppcstId": add_shppcst_island} if add_shppcst_island else {}),
                     }
                 ],
                 "itemShppCritn",
             ),
-            # 배송 소요일
             "shppRqrmDcnt": shpp_rqrm_dcnt,
-            # 이미지 (XStream 래핑) — 항상 배열로 전송
             "itemImgs": self._wrap_list_always_array(item_imgs_list, "imgInfo")
             if item_imgs_list
             else None,
-            # 상세설명
             "itemDesc": detail_html,
-            # 재고 관리 (최상위 필수)
             "invMngYn": "Y",
-            "invQtyMarkgYn": "N",  # 프런트 수량표시: 표시않음
-            # 기타 필수
-            "itemSellWayCd": "10",  # 상품판매방식: 일반
-            "itemStatTypeCd": "10",  # 상품상태: 새상품
-            "whinNotiYn": "Y",  # 입고알림: 설정함
+            "invQtyMarkgYn": "N",
+            "itemSellWayCd": "10",
+            "itemStatTypeCd": "10",
+            "whinNotiYn": "Y",
         }
 
-        # stdCtgId 필수 필드 누락 시 사전 경고 (빈 문자열이면 API 파싱 오류 발생)
         if not effective_std_cat:
-            logger.warning(
-                "[SSG] stdCtgId(표준카테고리 ID)가 없습니다. API 등록 실패할 수 있습니다."
-            )
+            logger.warning("[SSG] stdCtgId(표준카테고리 ID)가 없습니다. API 등록 실패할 수 있습니다.")
 
-        # itemNm은 필수 — 빈 문자열이면 raw_name[:30] 사용 (이미 name에 반영되어 있지만 안전장치)
         if not data.get("itemNm"):
             data["itemNm"] = raw_name[:49] or "상품명없음"
 
-        # None인 최상위 필드만 제거 (빈 문자열은 유지 — 중첩 구조 내부 값 보존)
-        # 단, 빈 문자열 최상위 필드도 XStream 파싱 오류 유발 가능하므로 제거
         data = {k: v for k, v in data.items() if v is not None and v != ""}
 
         # 단품(옵션) 추가
@@ -1299,7 +1307,6 @@ class SSGClient:
                 opt_name = (
                     opt.get("name", "") or opt.get("size", "") or f"옵션{idx + 1}"
                 )
-                # stock이 None/"" 이면 설정값(또는 99), 0은 품절 그대로, 양수면 min(실재고, 설정값)
                 _raw_stock = opt.get("stock")
                 _max_stock_cap = int(product.get("_max_stock") or 0)
                 if _raw_stock is None or _raw_stock == "":
@@ -1321,25 +1328,24 @@ class SSGClient:
                         "uitemOptnTypeNm1": "사이즈",
                         "uitemOptnNm1": opt_name,
                         "baseInvQty": 0 if is_sold_out else opt_stock,
-                        "useYn": "Y",  # 품절이어도 Y — useYn='N'이면 liveUitemCnt=0으로 등록 실패
+                        "useYn": "Y",
                     }
                 )
                 uitem_prices_list.append(
                     {
                         "tempUitemId": temp_id,
-                        "splprc": cost,  # 공급가 (필수)
-                        "sellprc": sale_price,  # 판매가 (필수)
-                        "mrgrt": margin_pct,  # 마진율 (필수)
+                        "splprc": cost,
+                        "sellprc": sale_price,
+                        "mrgrt": margin_pct,
                     }
                 )
 
-            data["itemSellTypeCd"] = "20"  # 옵션상품
+            data["itemSellTypeCd"] = "20"
             data["uitemAttr"] = {
                 "uitemCacOptnYn": "N",
                 "uitemOptnChoiTypeCd1": "10",
                 "uitemOptnExpsrTypeCd1": "10",
             }
-            # uitems/uitemPluralPrcs는 옵션 1개라도 항상 배열이어야 함
             data["uitems"] = self._wrap_list_always_array(uitems_list, "uitem")
             data["uitemPluralPrcs"] = self._wrap_list_always_array(
                 uitem_prices_list, "uitemPrc"
