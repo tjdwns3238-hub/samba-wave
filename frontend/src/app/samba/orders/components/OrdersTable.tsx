@@ -363,8 +363,8 @@ export default function OrdersTable(props: OrdersTableProps) {
                           if (co && tn && alreadyShipped) {
                             const ts = fmtTime
                             try { await orderApi.update(o.id, { shipping_company: co, tracking_number: tn }) } catch { /* ignore */ }
+                            patchOrder(o.id, { shipping_company: co, tracking_number: tn })
                             setLogMessages(prev => [...prev, `[${ts()}] ${o.order_number} 송장 수정 저장완료 (${co} ${tn}) — 마켓에서는 송장수정이 반영되지 않습니다. 마켓 판매자센터에서 직접 수정해주세요.`])
-                            loadOrders()
                           } else if (co && tn) {
                             const ts = fmtTime
                             setLogMessages(prev => [...prev, `[${ts()}] ${o.order_number} 송장 전송 중... (${co} ${tn})`])
@@ -372,18 +372,20 @@ export default function OrdersTable(props: OrdersTableProps) {
                               const res = await orderApi.shipOrder(o.id, co, tn)
                               if (!res.market_sent) {
                                 await orderApi.updateStatus(o.id, 'ship_failed')
+                                patchOrder(o.id, { shipping_company: co, tracking_number: tn, status: 'ship_failed' })
                                 setLogMessages(prev => [...prev, `[${ts()}] ${o.order_number} ${res.message}`])
                               } else {
+                                patchOrder(o.id, { shipping_company: co, tracking_number: tn, shipping_status: '송장전송완료' })
                                 setLogMessages(prev => [...prev, `[${ts()}] ${o.order_number} ${res.message}`])
                               }
-                              loadOrders()
                             } catch {
                               await orderApi.updateStatus(o.id, 'ship_failed').catch(() => {})
+                              patchOrder(o.id, { shipping_company: co, tracking_number: tn, status: 'ship_failed' })
                               setLogMessages(prev => [...prev, `[${ts()}] ${o.order_number} 송장 전송 실패`])
-                              loadOrders()
                             }
                           } else if (co) {
                             try { await orderApi.update(o.id, { shipping_company: co }) } catch { /* ignore */ }
+                            patchOrder(o.id, { shipping_company: co })
                           }
                         }}
                       >
@@ -406,8 +408,8 @@ export default function OrdersTable(props: OrdersTableProps) {
                             // 이미 발송된 주문 — DB만 저장, 마켓 수정은 판매자센터에서
                             const ts = fmtTime
                             try { await orderApi.update(o.id, { shipping_company: co, tracking_number: tn }) } catch { /* ignore */ }
+                            patchOrder(o.id, { shipping_company: co, tracking_number: tn })
                             setLogMessages(prev => [...prev, `[${ts()}] ${o.order_number} 송장 수정 저장완료 (${co} ${tn}) — 마켓에서는 송장수정이 반영되지 않습니다. 마켓 판매자센터에서 직접 수정해주세요.`])
-                            loadOrders()
                           } else if (co && tn && (changed || retry)) {
                             const ts = fmtTime
                             setLogMessages(prev => [...prev, `[${ts()}] ${o.order_number} 송장 전송 중... (${co} ${tn})`])
@@ -415,18 +417,20 @@ export default function OrdersTable(props: OrdersTableProps) {
                               const res = await orderApi.shipOrder(o.id, co, tn)
                               if (!res.market_sent) {
                                 await orderApi.updateStatus(o.id, 'ship_failed')
+                                patchOrder(o.id, { shipping_company: co, tracking_number: tn, status: 'ship_failed' })
                                 setLogMessages(prev => [...prev, `[${ts()}] ${o.order_number} ${res.message}`])
                               } else {
+                                patchOrder(o.id, { shipping_company: co, tracking_number: tn, shipping_status: '송장전송완료' })
                                 setLogMessages(prev => [...prev, `[${ts()}] ${o.order_number} ${res.message}`])
                               }
-                              loadOrders()
                             } catch {
                               await orderApi.updateStatus(o.id, 'ship_failed').catch(() => {})
+                              patchOrder(o.id, { shipping_company: co, tracking_number: tn, status: 'ship_failed' })
                               setLogMessages(prev => [...prev, `[${ts()}] ${o.order_number} 송장 전송 실패`])
-                              loadOrders()
                             }
                           } else if (tn && tn !== (o.tracking_number || '')) {
                             try { await orderApi.update(o.id, { tracking_number: tn }) } catch { /* ignore */ }
+                            patchOrder(o.id, { tracking_number: tn })
                           }
                         }}
                         onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
@@ -445,12 +449,14 @@ export default function OrdersTable(props: OrdersTableProps) {
                             setLogMessages(prev => [...prev, `[${fmtTime()}] ${o.order_number} ${res.message}`])
                             if (!res.market_sent) {
                               await orderApi.updateStatus(o.id, 'ship_failed').catch(() => {})
+                              patchOrder(o.id, { shipping_company: co, tracking_number: tn, status: 'ship_failed' })
+                            } else {
+                              patchOrder(o.id, { shipping_company: co, tracking_number: tn, shipping_status: '송장전송완료' })
                             }
-                            loadOrders()
                           } catch (err) {
                             await orderApi.updateStatus(o.id, 'ship_failed').catch(() => {})
+                            patchOrder(o.id, { shipping_company: co, tracking_number: tn, status: 'ship_failed' })
                             setLogMessages(prev => [...prev, `[${fmtTime()}] ${o.order_number} 마켓 전송 실패: ${(err as Error).message}`])
-                            loadOrders()
                           }
                         }}
                         style={{ padding: '0.18rem 0.5rem', fontSize: '0.7rem', borderRadius: '4px', background: o.status === 'ship_failed' ? '#dc2626' : '#16a34a', color: '#fff', border: '1px solid #4b5563', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}

@@ -103,10 +103,15 @@ async def _get_mpn_cache(
             for _k, _v in _mpnos.items():
                 if not _v or _k.endswith("_qa") or _k.endswith("_sites"):
                     continue
+                # _origin 키도 인덱싱한다 — 스마트스토어 주문 product_id 에는
+                # channelProductNo 대신 originProductNo 가 들어오는 케이스가 있어
+                # 매칭 실패 → source_site/source_url 공란 저장 사고가 반복되어 추가.
+                # 정확 매칭 인덱스 키는 account_id 로 정규화하여 동일 account 의
+                # 두 키(channel/origin) 가 동일 entry 를 가리키도록 통일.
                 if _k.endswith("_origin"):
-                    continue
-                # _k는 통상 account_id (혹은 master_code 키). 정확 매칭 인덱스 빌드용.
-                _account_key = str(_k)
+                    _account_key = _k[: -len("_origin")]
+                else:
+                    _account_key = str(_k)
                 if isinstance(_v, dict):
                     _values = [
                         _v.get("smartstoreChannelProductNo"),

@@ -288,7 +288,9 @@ async def brand_refresh(
             f = existing_cat_codes[cat_code]
             filter_ids.append(str(f.id))
             update_data: dict[str, Any] = {}
-            update_data["requested_count"] = count
+            # 누적된 실제 수집수가 더 크면 그대로 유지 (스캔 샘플로 축소 금지)
+            if count > (f.requested_count or 0):
+                update_data["requested_count"] = count
 
             # keyword URL의 includeSoldOut 파라미터를 현재 옵션과 동기화
             _cur_kw = f.keyword or ""

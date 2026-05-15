@@ -1699,42 +1699,78 @@ const ProductCard = React.memo(function ProductCard({
                     ? `${fmtNum(getByteLength(dispName))}/${fmtNum(byteLimit)}B`
                     : `${fmtNum(dispName.length)}/${fmtNum(nameLimit)}`
                   const ph = byteLimit ? truncateToBytes(_composed, byteLimit) : _composed.slice(0, nameLimit)
+                  const _sentAt = p.last_sent_data?.[rm.accId]?.sent_at
+                  let _sentLabel: string | null = null
+                  if (_sentAt) {
+                    const _d = new Date(_sentAt)
+                    const _mm = String(_d.getMonth() + 1).padStart(2, '0')
+                    const _dd = String(_d.getDate()).padStart(2, '0')
+                    const _hh = String(_d.getHours()).padStart(2, '0')
+                    const _mi = String(_d.getMinutes()).padStart(2, '0')
+                    _sentLabel = `${_mm}-${_dd} ${_hh}:${_mi}`
+                  }
+                  const _mappedCat = productCatMapping[rm.marketId] || ''
                   return (
                     <tr key={`store-name-${rm.accId}`} style={{ borderBottom: '1px solid #1E1E1E' }}>
                       <td style={tdLabel}>{mktName}</td>
                       <td style={tdVal}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <input
-                            type="text"
-                            defaultValue={curName}
-                            placeholder={ph}
-                            style={{
-                              ...marketNameInputBaseStyle,
-                              border: `1px solid ${isOver ? '#FF6B6B' : '#2D2D2D'}`,
-                              color: isOver ? '#FF6B6B' : '#C5C5C5',
-                            }}
-                            onMouseDown={(e) => e.stopPropagation()}
-                            onClick={(e) => e.stopPropagation()}
-                            onBlur={(e) => {
-                              const val = e.target.value.trim()
-                              if (val === curName) return
-                              const updated = { ..._mktNames, [mktName]: val || undefined }
-                              if (!val) delete updated[mktName]
-                              const clean = Object.fromEntries(Object.entries(updated).filter(([, v]) => v))
-                              collectorApi.updateProduct(p.id, { market_names: Object.keys(clean).length > 0 ? clean : undefined } as Partial<SambaCollectedProduct>).then(() => {
-                                onProductUpdate(p.id, { market_names: Object.keys(clean).length > 0 ? clean : undefined } as Partial<SambaCollectedProduct>)
-                                e.target.style.borderColor = '#51CF66'
-                                setTimeout(() => { e.target.style.borderColor = '#2D2D2D' }, 1500)
-                              }).catch(() => {
-                                e.target.style.borderColor = '#FF6B6B'
-                                setTimeout(() => { e.target.style.borderColor = '#2D2D2D' }, 1500)
-                              })
-                            }}
-                            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-                          />
-                          <span style={{ fontSize: '0.65rem', color: isOver ? '#FF6B6B' : '#555', whiteSpace: 'nowrap' }}>
-                            {cntLabel}
-                          </span>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                          {/* 등록 계정 초록 버튼 + 마지막 발송 시각 + 카테고리 (정책 marketsConfig 비어 있어도 표시) */}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                            {rm.url ? (
+                              <button
+                                onClick={() => window.open(rm.url, '_blank')}
+                                style={{ fontSize: '0.6rem', padding: '1px 5px', background: 'rgba(81,207,102,0.08)', color: '#51CF66', border: '1px solid rgba(81,207,102,0.25)', borderRadius: '3px', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                                onMouseEnter={e => { e.currentTarget.style.background = 'rgba(81,207,102,0.2)' }}
+                                onMouseLeave={e => { e.currentTarget.style.background = 'rgba(81,207,102,0.08)' }}
+                                title={`${rm.label} 판매페이지`}
+                              >{rm.accountName}</button>
+                            ) : (
+                              <span
+                                style={{ fontSize: '0.6rem', padding: '1px 5px', background: 'rgba(81,207,102,0.08)', color: '#51CF66', border: '1px solid rgba(81,207,102,0.25)', borderRadius: '3px', whiteSpace: 'nowrap' }}
+                                title={`${rm.label} 등록됨`}
+                              >{rm.accountName}</span>
+                            )}
+                            {_sentLabel && <span style={{ fontSize: '0.6rem', color: '#666', whiteSpace: 'nowrap' }}>{_sentLabel}</span>}
+                            {_mappedCat ? (
+                              <span style={{ fontSize: '0.68rem', color: '#888', background: 'rgba(255,255,255,0.04)', padding: '1px 6px', borderRadius: '3px', border: '1px solid #2D2D2D' }}>{_mappedCat}</span>
+                            ) : (
+                              <span style={{ fontSize: '0.68rem', color: '#555' }}>미매핑</span>
+                            )}
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <input
+                              type="text"
+                              defaultValue={curName}
+                              placeholder={ph}
+                              style={{
+                                ...marketNameInputBaseStyle,
+                                border: `1px solid ${isOver ? '#FF6B6B' : '#2D2D2D'}`,
+                                color: isOver ? '#FF6B6B' : '#C5C5C5',
+                              }}
+                              onMouseDown={(e) => e.stopPropagation()}
+                              onClick={(e) => e.stopPropagation()}
+                              onBlur={(e) => {
+                                const val = e.target.value.trim()
+                                if (val === curName) return
+                                const updated = { ..._mktNames, [mktName]: val || undefined }
+                                if (!val) delete updated[mktName]
+                                const clean = Object.fromEntries(Object.entries(updated).filter(([, v]) => v))
+                                collectorApi.updateProduct(p.id, { market_names: Object.keys(clean).length > 0 ? clean : undefined } as Partial<SambaCollectedProduct>).then(() => {
+                                  onProductUpdate(p.id, { market_names: Object.keys(clean).length > 0 ? clean : undefined } as Partial<SambaCollectedProduct>)
+                                  e.target.style.borderColor = '#51CF66'
+                                  setTimeout(() => { e.target.style.borderColor = '#2D2D2D' }, 1500)
+                                }).catch(() => {
+                                  e.target.style.borderColor = '#FF6B6B'
+                                  setTimeout(() => { e.target.style.borderColor = '#2D2D2D' }, 1500)
+                                })
+                              }}
+                              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+                            />
+                            <span style={{ fontSize: '0.65rem', color: isOver ? '#FF6B6B' : '#555', whiteSpace: 'nowrap' }}>
+                              {cntLabel}
+                            </span>
+                          </div>
                         </div>
                       </td>
                     </tr>

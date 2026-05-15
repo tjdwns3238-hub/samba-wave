@@ -644,9 +644,12 @@ async def get_extension_key(request: Request):
     import logging as _logging
 
     from backend.core.config import settings
+    from backend.core.rate_limit import _client_key
 
     _logger = _logging.getLogger(__name__)
-    client_ip = request.client.host if request.client else "unknown"
+    # Caddy 리버스 프록시 뒤라 request.client.host는 docker bridge IP로 뭉침 →
+    # X-Forwarded-For 마지막 IP 사용 (rate_limit._client_key와 동일 정책).
+    client_ip = _client_key(request)
     now = _time.time()
     cutoff = now - _EXT_KEY_RATE_LIMIT_WINDOW_S
     bucket = _ext_key_rate_log.setdefault(client_ip, [])

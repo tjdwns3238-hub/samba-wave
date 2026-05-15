@@ -1722,8 +1722,8 @@ class JobWorker:
             except Exception:
                 pass
 
-        # 기존 수집 수 확인
-        requested_count = FIXED_REQUESTED_COUNT
+        # 기존 수집 수 확인 — sf.requested_count(사용자 수정값)가 있으면 우선, 없으면 기본 1000
+        requested_count = sf.requested_count or FIXED_REQUESTED_COUNT
         count_stmt = select(_func.count()).where(CPModel.search_filter_id == filter_id)
         existing_count = (await session.execute(count_stmt)).scalar() or 0
         remaining = (
@@ -2015,7 +2015,6 @@ class JobWorker:
             logger.info(
                 f"[잡워커] 실제 {_actual}건 < 요청 {requested_count}건 (축소 방지로 유지)"
             )
-        _upd_vals.pop("requested_count", None)
         await session.execute(
             _sa_upd(SambaSearchFilter)
             .where(SambaSearchFilter.id == filter_id)
@@ -4160,7 +4159,7 @@ class JobWorker:
         filter_id = sf.id
         keyword = sf.keyword or ""
         _original_url = keyword  # URL 원본 보존 (카테고리 필터 포함)
-        requested_count = FIXED_REQUESTED_COUNT
+        requested_count = sf.requested_count or FIXED_REQUESTED_COUNT
         _payload = job.payload or {}
         _dgi = _payload.get("group_index")
         _dgt = _payload.get("group_total")

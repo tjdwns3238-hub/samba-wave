@@ -915,6 +915,44 @@ async def _parse_musinsa(product: Any) -> RefreshResult:
             else f"{_err_brand} {_err_name}".strip()
         )
         _err_msg = str(e).strip() or type(e).__name__
+        # TCP 좀비 연결류(ConnectError/ConnectTimeout/RemoteProtocolError/ReadError) →
+        # asyncio.TimeoutError와 동일 증상(공유 httpx pool 좀비). 카운터 증가 + reset 트리거.
+        _err_type_name = type(e).__name__
+        _is_connect_error = any(
+            _marker in _err_type_name
+            for _marker in (
+                "ConnectError",
+                "ConnectTimeout",
+                "RemoteProtocolError",
+                "ReadError",
+            )
+        )
+        if _is_connect_error:
+            _site_consecutive_timeouts["MUSINSA"] = (
+                _site_consecutive_timeouts.get("MUSINSA", 0) + 1
+            )
+            _consecutive = _site_consecutive_timeouts["MUSINSA"]
+            _log_refresh(
+                "MUSINSA",
+                product.id,
+                _err_label,
+                f"실패 — {_err_msg} (연속 {_consecutive}회)",
+                level="warning",
+                idx=_idx,
+                total=_total,
+            )
+            if _consecutive >= TIMEOUT_RESET_THRESHOLD:
+                logger.warning(
+                    f"[refresher] MUSINSA 연속 {_consecutive}회 연결오류 → 공유 httpx 클라이언트 풀 강제 폐기 (좀비 연결 복구)"
+                )
+                try:
+                    await reset_musinsa_shared_clients()
+                except Exception as _e:
+                    logger.error(f"[refresher] 공유 클라이언트 폐기 실패: {_e}")
+                _site_consecutive_timeouts["MUSINSA"] = 0
+            return RefreshResult(
+                product_id=product.id, error=f"무신사 API 오류: {_err_msg}"
+            )
         if "상품 데이터 없음" in _err_msg:
             # 소싱처 영구 삭제 → 기존 sold_out 플로우와 동일하게 처리
             _log_refresh(
