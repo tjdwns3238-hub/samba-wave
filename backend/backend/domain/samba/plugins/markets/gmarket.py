@@ -181,16 +181,17 @@ class GMarketMarketPlugin(MarketPlugin):
         if not goods_no:
             return {"success": False, "message": "상품번호가 없어 가격/재고 수정 불가"}
 
-        # 등록 API는 PascalCase(Gmkt), sell-status API는 camelCase(gmkt) — ESM Plus 스펙
+        # ESM Plus 스펙 — 등록과 sell-status 모두 PascalCase(Gmkt). 실 호출 검증 결과
+        # 'isSell' camelCase 는 'IsSell 필드가 필요합니다' 응답 → PascalCase 통일.
         price = data.get("itemAddtionalInfo", {}).get("price", {}).get("Gmkt", 0)
         stock = data.get("itemAddtionalInfo", {}).get("stock", {}).get("Gmkt", 0)
 
         sell_data: dict[str, Any] = {
-            "isSell": {"gmkt": True},
+            "IsSell": {"Gmkt": True},
             "itemBasicInfo": {
-                "price": {"gmkt": price},
-                "stock": {"gmkt": stock},
-                "sellingPeriod": {"gmkt": 0},  # 0=기존 유지
+                "price": {"Gmkt": price},
+                "stock": {"Gmkt": stock},
+                "sellingPeriod": {"Gmkt": 0},  # 0=기존 유지
             },
         }
 
@@ -234,15 +235,8 @@ class GMarketMarketPlugin(MarketPlugin):
             return {"success": False, "message": "호스팅 인증정보(환경변수) 없음"}
         client = ESMPlusClient(hosting_id, secret_key, seller_id, site="gmarket")
 
-        # 판매중지
-        suspend_data = {
-            "isSell": {"gmkt": False},
-            "itemBasicInfo": {
-                "price": {"gmkt": 0},
-                "stock": {"gmkt": 0},
-                "sellingPeriod": {"gmkt": 0},
-            },
-        }
+        # 판매중지 — 실 호출 검증 schema (PascalCase). 'IsSell' 만으로도 ESM 측 검증 통과.
+        suspend_data = {"IsSell": {"Gmkt": False}}
         await client.update_sell_status(product_no, suspend_data)
         logger.info(f"[지마켓] 판매중지 완료: goodsNo={product_no}")
         return {"success": True, "message": "지마켓 판매중지 완료"}

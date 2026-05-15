@@ -173,16 +173,17 @@ class AuctionPlugin(MarketPlugin):
         if not goods_no:
             return {"success": False, "message": "상품번호가 없어 가격/재고 수정 불가"}
 
-        # 등록 API는 PascalCase(Iac), sell-status API는 camelCase(iac) — ESM Plus 스펙
+        # ESM Plus 스펙 — 등록과 sell-status 모두 PascalCase(Iac). 실 호출 검증 결과
+        # 'isSell' camelCase 는 'IsSell 필드가 필요합니다' 응답 → PascalCase 통일.
         price = data.get("itemAddtionalInfo", {}).get("price", {}).get("Iac", 0)
         stock = data.get("itemAddtionalInfo", {}).get("stock", {}).get("Iac", 0)
 
         sell_data: dict[str, Any] = {
-            "isSell": {"iac": True},
+            "IsSell": {"Iac": True},
             "itemBasicInfo": {
-                "price": {"iac": price},
-                "stock": {"iac": stock},
-                "sellingPeriod": {"iac": 0},
+                "price": {"Iac": price},
+                "stock": {"Iac": stock},
+                "sellingPeriod": {"Iac": 0},
             },
         }
 
@@ -226,14 +227,8 @@ class AuctionPlugin(MarketPlugin):
             return {"success": False, "message": "호스팅 인증정보(환경변수) 없음"}
         client = ESMPlusClient(hosting_id, secret_key, seller_id, site="auction")
 
-        suspend_data = {
-            "isSell": {"iac": False},
-            "itemBasicInfo": {
-                "price": {"iac": 0},
-                "stock": {"iac": 0},
-                "sellingPeriod": {"iac": 0},
-            },
-        }
+        # 판매중지 — 실 호출 검증 schema (PascalCase). 'IsSell' 만으로도 ESM 측 검증 통과.
+        suspend_data = {"IsSell": {"Iac": False}}
         await client.update_sell_status(product_no, suspend_data)
         logger.info(f"[옥션] 판매중지 완료: goodsNo={product_no}")
         return {"success": True, "message": "옥션 판매중지 완료"}
