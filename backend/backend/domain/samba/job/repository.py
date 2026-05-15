@@ -57,6 +57,7 @@ class SambaJobRepository(BaseRepository[SambaJob]):
                               transmit 잡은 건너뜀 → 같은 계정은 순차 실행 보장.
         """
         from sqlalchemy import and_, case, func, or_
+        from sqlalchemy import text as _sa_text
 
         # transmit 잡은 product_ids 개수가 적은 것부터 우선 픽 — 짧은 잡이
         # 큰 잡 뒤에 묶여 대기하는 것을 방지. 다른 타입은 key=0으로 FIFO 유지.
@@ -71,10 +72,32 @@ class SambaJobRepository(BaseRepository[SambaJob]):
             else_=0,
         )
 
+        # PlayAuto 마켓 계정이 포함된 transmit 잡은 최우선 픽 — 5개 슬롯 안에 항상 진입.
+        # 동일 PlayAuto 계정 동시실행 차단(_db_account_lock)은 그대로 유지되어 순차 보장.
+        _job_accounts_for_priority = self._payload_account_array_sql("samba_jobs")
+        _playauto_priority_key = case(
+            (
+                and_(
+                    SambaJob.job_type == "transmit",
+                    _sa_text(
+                        "EXISTS (SELECT 1 FROM samba_market_account ma "
+                        f"WHERE ma.id::text = ANY({_job_accounts_for_priority}) "
+                        "AND ma.market_type = 'playauto')"
+                    ),
+                ),
+                0,
+            ),
+            else_=1,
+        )
+
         stmt = (
             select(SambaJob)
             .where(SambaJob.status == JobStatus.PENDING)
-            .order_by(_transmit_size_key.asc(), SambaJob.created_at.asc())
+            .order_by(
+                _playauto_priority_key.asc(),
+                _transmit_size_key.asc(),
+                SambaJob.created_at.asc(),
+            )
             .limit(1)
             .with_for_update(skip_locked=True)
         )
@@ -105,7 +128,6 @@ class SambaJobRepository(BaseRepository[SambaJob]):
         # transmit 잡은 항상 검사: 현재 running 상태인 다른 transmit 잡과
         # target_account_ids 배열이 하나라도 겹치면 SKIP.
         # 인메모리 exclude_accounts(같은 워커 내) + DB self-join(워커 간) 이중 방어.
-        from sqlalchemy import text as _sa_text
 
         _job_accounts_sql = self._payload_account_array_sql("samba_jobs")
         _running_accounts_sql = self._payload_account_array_sql("r")
