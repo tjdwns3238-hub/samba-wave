@@ -377,6 +377,51 @@ async def reply_cs_inquiry(
                             market_sent = True
                             market_msg = "11번가 Q&A 답변 전송 완료"
 
+            elif inquiry.market == "쿠팡":
+                from backend.domain.samba.account.model import SambaMarketAccount
+                from backend.domain.samba.proxy.coupang import CoupangClient
+
+                cp_acc = None
+                if inquiry.account_id:
+                    acc_result = await session.execute(
+                        select(SambaMarketAccount).where(
+                            SambaMarketAccount.id == inquiry.account_id,
+                            SambaMarketAccount.is_active == True,  # noqa: E712
+                        )
+                    )
+                    cp_acc = acc_result.scalar_one_or_none()
+                if cp_acc is None:
+                    acc_result = await session.execute(
+                        select(SambaMarketAccount).where(
+                            SambaMarketAccount.market_type == "coupang",
+                            SambaMarketAccount.is_active == True,  # noqa: E712
+                        )
+                    )
+                    cp_acc = acc_result.scalars().first()
+                if cp_acc:
+                    af = cp_acc.additional_fields or {}
+                    access_key = af.get("accessKey", "") or cp_acc.api_key or ""
+                    secret_key = af.get("secretKey", "") or cp_acc.api_secret or ""
+                    vendor_id = af.get("vendorId", "") or cp_acc.seller_id or ""
+                    reply_by = (
+                        af.get("replyBy", "")
+                        or cp_acc.seller_id
+                        or af.get("wingLoginId", "")
+                        or af.get("loginId", "")
+                        or ""
+                    )
+                    if access_key and secret_key and vendor_id and reply_by:
+                        cp_client = CoupangClient(access_key, secret_key, vendor_id)
+                        await cp_client.reply_inquiry(
+                            inquiry_id=int(inquiry.market_inquiry_no),
+                            content=body.reply,
+                            reply_by=reply_by,
+                        )
+                        market_sent = True
+                        market_msg = "쿠팡 CS 답변 전송 완료"
+                    elif not reply_by:
+                        market_msg = "쿠팡 Wing 로그인 ID 미설정 (계정 스토어 ID 입력 필요)"
+
             elif inquiry.market == "eBay":
                 from backend.domain.samba.account.model import SambaMarketAccount
                 from backend.domain.samba.proxy.ebay import EbayClient
@@ -2241,6 +2286,145 @@ async def _do_sync_cs_from_markets(
         except Exception as e:
             logger.warning(f"[CS동기화] 11번가 계정 조회 실패: {e}")
 
+    # ── 쿠팡 CS 문의 동기화 ──
+    if not market_name or market_name == "쿠팡":
+        try:
+            from backend.domain.samba.account.model import SambaMarketAccount
+            from backend.domain.samba.proxy.coupang import CoupangClient
+
+            coupang_stmt = select(SambaMarketAccount).where(
+                SambaMarketAccount.market_type == "coupang",
+                SambaMarketAccount.is_active == True,  # noqa: E712
+            )
+            coupang_result = await session.execute(coupang_stmt)
+            coupang_accounts = list(coupang_result.scalars().all())
+            if account_id:
+                coupang_accounts = [a for a in coupang_accounts if a.id == account_id]
+
+            for cp_acc in coupang_accounts:
+                af = cp_acc.additional_fields or {}
+                access_key = af.get("accessKey", "") or cp_acc.api_key or ""
+                secret_key = af.get("secretKey", "") or cp_acc.api_secret or ""
+                vendor_id = af.get("vendorId", "") or cp_acc.seller_id or ""
+                if not (access_key and secret_key and vendor_id):
+                    continue
+                cp_label = cp_acc.account_label or cp_acc.business_name or "쿠팡"
+                cp_client = CoupangClient(
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    vendor_id=vendor_id,
+                )
+                try:
+                    items = await cp_client.get_inquiries(days=7)
+                    cp_synced = 0
+                    for item in items:
+                        inq_id = str(item.get("inquiryId", "") or "")
+                        if not inq_id:
+                            continue
+
+                        existing_result = await session.execute(
+                            select(SambaCSInquiry).where(
+                                SambaCSInquiry.market == "쿠팡",
+                                SambaCSInquiry.market_inquiry_no == inq_id,
+                                SambaCSInquiry.is_hidden == False,  # noqa: E712
+                            )
+                        )
+                        if existing_result.scalar_one_or_none():
+                            continue
+
+                        # v5 응답 키: inquiryId, content, inquiryAt, productId,
+                        #   sellerProductId, sellerItemId, vendorItemId, orderIds[],
+                        #   buyerEmail, commentDtoList[], sellerProductName
+                        product_no = str(
+                            item.get("productId", "")
+                            or item.get("sellerProductId", "")
+                            or ""
+                        )
+                        content = str(item.get("content", "") or "")
+                        questioner = str(item.get("buyerEmail", "") or "")
+                        order_ids = item.get("orderIds") or []
+                        order_id = str(order_ids[0]) if order_ids else ""
+
+                        comments = item.get("commentDtoList") or []
+                        is_answered = bool(comments)
+                        reply_content = ""
+                        if is_answered and isinstance(comments, list):
+                            last_comment = comments[-1] if comments else {}
+                            if isinstance(last_comment, dict):
+                                reply_content = str(
+                                    last_comment.get("content", "") or ""
+                                )
+
+                        raw_dt = str(item.get("inquiryAt", "") or "")
+                        parsed_date = None
+                        for fmt in (
+                            "%Y-%m-%dT%H:%M:%S",
+                            "%Y-%m-%d %H:%M:%S",
+                            "%Y-%m-%d",
+                        ):
+                            try:
+                                parsed_date = datetime.strptime(raw_dt[:19], fmt)
+                                break
+                            except Exception:
+                                continue
+                        if parsed_date is None:
+                            parsed_date = datetime.now(timezone.utc)
+
+                        matched = await _find_collected_product_by_market_product_no(
+                            session, product_no
+                        )
+                        product_link = (
+                            _build_market_product_url("쿠팡", product_no)
+                            if product_no
+                            else ""
+                        )
+
+                        inquiry_data = {
+                            "market": "쿠팡",
+                            "market_inquiry_no": inq_id,
+                            "market_answer_no": None,
+                            "market_order_id": order_id or None,
+                            "market_product_no": product_no or None,
+                            "account_id": cp_acc.id,
+                            "account_name": cp_label,
+                            "inquiry_type": "product_question",
+                            "questioner": questioner,
+                            "product_name": str(
+                                item.get("sellerProductName", "") or ""
+                            ),
+                            "product_image": matched["product_image"]
+                            if matched
+                            else "",
+                            "product_link": product_link,
+                            "original_link": matched["original_link"]
+                            if matched
+                            else "",
+                            "collected_product_id": matched["id"] if matched else None,
+                            "content": content,
+                            "reply": reply_content if is_answered else None,
+                            "reply_status": "replied" if is_answered else "pending",
+                            "inquiry_date": parsed_date,
+                            "replied_at": None,
+                        }
+                        try:
+                            await svc.create_inquiry(inquiry_data)
+                            cp_synced += 1
+                        except Exception as ce:
+                            logger.warning(
+                                f"[CS동기화] 쿠팡 문의 {inq_id} 저장 실패: {ce}"
+                            )
+
+                    if cp_synced > 0:
+                        logger.info(
+                            f"[CS동기화] 쿠팡({cp_label}): {cp_synced}건 동기화"
+                        )
+                    synced += cp_synced
+                except Exception as e:
+                    logger.warning(f"[CS동기화] 쿠팡({cp_label}) 실패: {e}")
+                    errors.append(f"쿠팡({cp_label}): {e}")
+        except Exception as e:
+            logger.warning(f"[CS동기화] 쿠팡 계정 조회 실패: {e}")
+
     # ── SSG 쪽지/Q&A 수집 ──
     try:
         from backend.domain.samba.account.model import SambaMarketAccount
@@ -2543,6 +2727,70 @@ async def send_reply_to_market(
             replied_at=datetime.now(timezone.utc),
         )
         return {"success": True, "message": "11번가 Q&A 답변 전송 완료", "data": {}}
+
+    if inquiry.market == "쿠팡":
+        from datetime import timezone
+
+        from sqlmodel import select as _sel
+
+        from backend.domain.samba.account.model import SambaMarketAccount
+        from backend.domain.samba.cs_inquiry.repository import SambaCSInquiryRepository
+        from backend.domain.samba.proxy.coupang import CoupangClient
+
+        cp_acc = None
+        if inquiry.account_id:
+            acc_result = await session.execute(
+                _sel(SambaMarketAccount).where(
+                    SambaMarketAccount.id == inquiry.account_id,
+                    SambaMarketAccount.is_active == True,  # noqa: E712
+                )
+            )
+            cp_acc = acc_result.scalar_one_or_none()
+        if cp_acc is None:
+            acc_result = await session.execute(
+                _sel(SambaMarketAccount).where(
+                    SambaMarketAccount.market_type == "coupang",
+                    SambaMarketAccount.is_active == True,  # noqa: E712
+                )
+            )
+            cp_acc = acc_result.scalars().first()
+        if not cp_acc:
+            raise HTTPException(400, "쿠팡 계정 설정이 없습니다")
+
+        af = cp_acc.additional_fields or {}
+        access_key = af.get("accessKey", "") or cp_acc.api_key or ""
+        secret_key = af.get("secretKey", "") or cp_acc.api_secret or ""
+        vendor_id = af.get("vendorId", "") or cp_acc.seller_id or ""
+        reply_by = (
+            af.get("replyBy", "")
+            or cp_acc.seller_id
+            or af.get("wingLoginId", "")
+            or af.get("loginId", "")
+            or ""
+        )
+        if not (access_key and secret_key and vendor_id):
+            raise HTTPException(400, "쿠팡 인증정보 없음")
+        if not reply_by:
+            raise HTTPException(
+                400,
+                "쿠팡 Wing 로그인 ID 가 설정되지 않았습니다. 계정 설정에서 스토어 ID 를 입력하세요.",
+            )
+
+        cp_client = CoupangClient(access_key, secret_key, vendor_id)
+        await cp_client.reply_inquiry(
+            inquiry_id=int(inquiry.market_inquiry_no),
+            content=body.reply,
+            reply_by=reply_by,
+        )
+
+        repo = SambaCSInquiryRepository(session)
+        await repo.update_async(
+            inquiry_id,
+            reply=body.reply,
+            reply_status="replied",
+            replied_at=datetime.now(timezone.utc),
+        )
+        return {"success": True, "message": "쿠팡 CS 답변 전송 완료", "data": {}}
 
     if inquiry.market == "eBay":
         # eBay 메시지 답장 — Trading API AddMemberMessageRTQ

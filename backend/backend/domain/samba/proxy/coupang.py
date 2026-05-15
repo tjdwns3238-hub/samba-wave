@@ -1306,40 +1306,56 @@ class CoupangClient:
     ) -> list[dict[str, Any]]:
         """CS 문의 목록 조회.
 
-        쿠팡 Wing API: GET /v2/.../vendors/{vendorId}/onlineInquiries
-        페이징: nextToken 기반 커서 방식
+        쿠팡 Wing API v5: GET /v2/.../api/v5/vendors/{vendorId}/onlineInquiries
+        페이징: pageNum 기반 offset 방식. 쿠팡 docs 조회 범위 최대 7일.
         """
+        # docs 제약: 조회 기간 최대 7일 (쿠팡 inquiryStartAt/EndAt inclusive)
+        if days > 7:
+            logger.warning(
+                f"[쿠팡] CS 문의 조회 days={days} 가 7 초과 — 7일로 clamp"
+            )
+            days = 7
 
         now = datetime.now(timezone.utc)
-        since = now - timedelta(days=days)
+        # inclusive 양 끝 포함 → 7일 범위는 6일 차이로 보내야 함
+        since = now - timedelta(days=max(days - 1, 0))
+
+        # answered(bool) → answeredType(enum) 변환
+        if answered is True:
+            answered_type = "ANSWERED"
+        elif answered is False:
+            answered_type = "NOANSWER"
+        else:
+            answered_type = "ALL"
 
         all_inquiries: list[dict[str, Any]] = []
-        next_token = ""
 
-        for _ in range(100):  # 무한루프 방지
+        for page_num in range(1, 101):  # 무한루프 방지 (최대 100페이지)
             params: dict[str, str] = {
-                "createdAtFrom": since.strftime("%Y-%m-%dT00:00:00"),
-                "createdAtTo": now.strftime("%Y-%m-%dT23:59:59"),
-                "maxPerPage": str(max_per_page),
+                "inquiryStartAt": since.strftime("%Y-%m-%d"),
+                "inquiryEndAt": now.strftime("%Y-%m-%d"),
+                "vendorId": self.vendor_id,
+                "answeredType": answered_type,
+                "pageSize": str(max_per_page),
+                "pageNum": str(page_num),
             }
-            if answered is not None:
-                params["answered"] = str(answered).lower()
-            if next_token:
-                params["nextToken"] = next_token
 
-            path = f"/v2/providers/openapi/apis/api/v4/vendors/{self.vendor_id}/onlineInquiries"
+            path = f"/v2/providers/openapi/apis/api/v5/vendors/{self.vendor_id}/onlineInquiries"
             result = await self._call_api("GET", path, params=params)
 
             data = result.get("data", []) if isinstance(result, dict) else []
+            page_items: list[dict[str, Any]] = []
             if isinstance(data, list):
-                all_inquiries.extend(data)
+                page_items = data
             elif isinstance(data, dict):
                 items = data.get("inquiries", data.get("content", []))
                 if isinstance(items, list):
-                    all_inquiries.extend(items)
+                    page_items = items
 
-            next_token = result.get("nextToken", "") if isinstance(result, dict) else ""
-            if not next_token:
+            all_inquiries.extend(page_items)
+
+            # 페이지 종료 판단: 반환 건수가 pageSize 미만이면 마지막 페이지
+            if len(page_items) < max_per_page:
                 break
 
         logger.info(f"[쿠팡] CS 문의 조회 완료: {len(all_inquiries)}건 (최근 {days}일)")
@@ -1349,13 +1365,20 @@ class CoupangClient:
         self,
         inquiry_id: int,
         content: str,
+        reply_by: str,
     ) -> dict[str, Any]:
         """CS 문의 답변 등록.
 
-        쿠팡 Wing API: POST /v2/.../vendors/{vendorId}/onlineInquiries/{inquiryId}/reply
+        쿠팡 Wing API v4: POST /v2/.../api/v4/vendors/{vendorId}/onlineInquiries/{inquiryId}/replies
+        body 필수 3종: content, vendorId, replyBy(Wing 로그인 ID).
+        중복 답변 금지 — 동일 inquiryId 에 이미 답변 있으면 HTTP 400.
         """
-        path = f"/v2/providers/openapi/apis/api/v4/vendors/{self.vendor_id}/onlineInquiries/{inquiry_id}/reply"
-        body = {"content": content, "vendorId": self.vendor_id}
+        path = f"/v2/providers/openapi/apis/api/v4/vendors/{self.vendor_id}/onlineInquiries/{inquiry_id}/replies"
+        body = {
+            "content": content,
+            "vendorId": self.vendor_id,
+            "replyBy": reply_by,
+        }
         result = await self._call_api("POST", path, body=body)
         logger.info(f"[쿠팡] CS 문의 답변 완료: inquiryId={inquiry_id}")
         return result
