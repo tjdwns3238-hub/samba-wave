@@ -12,6 +12,7 @@ from backend.domain.samba.job.model import JobStatus
 from backend.domain.samba.job.progress_tracker import get_recent_sec_per_item
 from backend.domain.samba.job.repository import SambaJobRepository
 from backend.domain.samba.job.service import SambaJobService
+from backend.domain.samba.tenant.middleware import get_optional_tenant_id
 
 router = APIRouter(prefix="/jobs", tags=["samba-jobs"])
 
@@ -45,8 +46,13 @@ def _is_stale_order_sync_job(active) -> bool:
 async def create_job(
     body: JobCreate,
     session: AsyncSession = Depends(get_write_session_dependency),
+    auth_tenant_id: Optional[str] = Depends(get_optional_tenant_id),
 ):
     """잡 생성 — 즉시 응답, 백그라운드 워커가 처리."""
+    # body.tenant_id 미지정 시 인증 컨텍스트의 tenant_id 사용
+    # — 테트리스 매칭 등 tenant 스코프 자원이 워커에서 매칭되도록 보장
+    if body.tenant_id is None:
+        body.tenant_id = auth_tenant_id
     svc = SambaJobService(SambaJobRepository(session))
 
     # 수집 잡: 대기 큐 위치 계산 (같은 소싱처 PENDING/RUNNING 수)
