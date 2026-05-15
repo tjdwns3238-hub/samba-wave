@@ -56,6 +56,28 @@ class _AsyncTokenBucket:
 _ESM_RATE_LIMITER = _AsyncTokenBucket(rate_per_min=30)
 
 
+# 옵션 그룹/값 TTL 캐시 — 옵션값 list 가 크고(색상 1.3K건) 자주 변하지 않음.
+# 카테고리당 그룹은 거의 영구. 옵션값은 신규 색상/사이즈 등 가끔 추가.
+_OPT_CACHE_TTL_SEC = 3600  # 1시간
+_opt_cache: dict[tuple[str, str], tuple[float, Any]] = {}
+
+
+def _opt_cache_get(key: tuple[str, str]) -> Any | None:
+    """TTL 캐시 조회. 만료 시 None."""
+    entry = _opt_cache.get(key)
+    if entry is None:
+        return None
+    expire_at, value = entry
+    if time.monotonic() > expire_at:
+        _opt_cache.pop(key, None)
+        return None
+    return value
+
+
+def _opt_cache_set(key: tuple[str, str], value: Any) -> None:
+    _opt_cache[key] = (time.monotonic() + _OPT_CACHE_TTL_SEC, value)
+
+
 class ESMPlusClient:
     """ESM Plus 판매자 API 클라이언트.
 
@@ -425,14 +447,20 @@ class ESMPlusClient:
         응답 key 'details' (응답 구조 확인: 색상/사이즈/직접입력 등).
         각 항목: { recommendedOptNo, recommendedOptName: {kor, eng, chi, jpn},
                   recommendedOptTypeName }
+        TTL 캐시 적용 (모듈 전역). 카테고리당 그룹은 거의 변하지 않음 — 1시간 TTL.
         """
+        cached = _opt_cache_get(("groups", cat_code))
+        if cached is not None:
+            return cached
         try:
             result = await self._call_api(
                 "GET",
                 "/item/v1/options/recommended-opts",
                 params={"catCode": cat_code},
             )
-            return result.get("details", []) or []
+            groups = result.get("details", []) or []
+            _opt_cache_set(("groups", cat_code), groups)
+            return groups
         except Exception as exc:
             logger.warning(
                 f"[{self.cfg['label']}] 추천옵션그룹 조회 실패 cat={cat_code}: {exc}"
@@ -442,20 +470,30 @@ class ESMPlusClient:
     async def get_recommended_opt_values(
         self, recommended_opt_no: int | str
     ) -> list[dict[str, Any]]:
-        """추천옵션그룹별 선택 항목 list — GET /item/v1/options/recommended-opts/{recommendedOptNo}"""
+        """추천옵션그룹별 선택 항목 list — GET /item/v1/options/recommended-opts/{recommendedOptNo}
+
+        recommendedOptValueNo=0 은 placeholder — 응답에 포함되지만 운영 매핑 시 제외.
+        TTL 캐시 (1시간) — 옵션값 list 가 크고 (예: 색상 1,312건) 자주 변하지 않음.
+        """
+        cache_key = ("values", str(recommended_opt_no))
+        cached = _opt_cache_get(cache_key)
+        if cached is not None:
+            return cached
         try:
             result = await self._call_api(
                 "GET", f"/item/v1/options/recommended-opts/{recommended_opt_no}"
             )
-            # 응답이 list 직접 또는 dict 안 list — 양쪽 처리
             if isinstance(result, list):
-                return result
-            # dict 안의 list 후보 키
-            for key in ("details", "values", "recommendedOptValues"):
-                v = result.get(key)
-                if isinstance(v, list):
-                    return v
-            return []
+                values = result
+            else:
+                values = []
+                for key in ("details", "values", "recommendedOptValues"):
+                    v = result.get(key)
+                    if isinstance(v, list):
+                        values = v
+                        break
+            _opt_cache_set(cache_key, values)
+            return values
         except Exception as exc:
             logger.warning(
                 f"[{self.cfg['label']}] 추천옵션값 조회 실패 optNo={recommended_opt_no}: {exc}"
@@ -491,6 +529,94 @@ class ESMPlusClient:
         return await self._call_api(
             "GET", f"/item/v1/goods/{goods_no}/recommended-options"
         )
+
+    @staticmethod
+    def detect_esm_option_group(
+        samba_option_name: str, esm_groups: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        """samba 옵션 이름 (예: '색상', '컬러', 'color') → ESM recommendedOpt 그룹 매칭.
+
+        매칭 후보 — recommendedOptName.{kor,eng,korEng} 정확/부분 일치.
+        '직접입력' (recommendedOptNo=0) 은 매칭 제외 (placeholder).
+        """
+        if not samba_option_name or not esm_groups:
+            return None
+        target = re.sub(r"\s+", "", samba_option_name.lower())
+
+        def _norm(v: Any) -> str:
+            return re.sub(r"\s+", "", v.lower()) if isinstance(v, str) else ""
+
+        # 정확 일치 1차
+        for g in esm_groups:
+            if not g.get("recommendedOptNo"):
+                continue
+            name = g.get("recommendedOptName") or {}
+            for key in ("kor", "eng", "korEng"):
+                if _norm(name.get(key)) == target:
+                    return g
+        # 부분 포함 2차
+        for g in esm_groups:
+            if not g.get("recommendedOptNo"):
+                continue
+            name = g.get("recommendedOptName") or {}
+            for key in ("kor", "eng", "korEng"):
+                v = _norm(name.get(key))
+                if v and (target in v or v in target):
+                    return g
+        return None
+
+    @staticmethod
+    def match_option_value(
+        samba_text: str, esm_values: list[dict[str, Any]]
+    ) -> int | None:
+        """samba 자유 텍스트 옵션값 → ESM recommendedOptValueNo 매칭.
+
+        매칭 우선순위 (대소문자/공백 무시):
+          1. kor 정확 일치
+          2. eng 정확 일치
+          3. korEng (한+영) 정확 일치
+          4. kor / eng 부분 포함 (substring)
+        없으면 None — 운영자가 '직접입력' 그룹 또는 텍스트형(type=5) 으로 fallback.
+
+        Args:
+          samba_text: samba 옵션값 (예: "네이비", "GREEN", "Navy", "검정")
+          esm_values: get_recommended_opt_values() 응답 list. recommendedOptValueNo=0
+                      placeholder 는 호출자가 사전 제외 권장.
+        """
+        if not samba_text or not esm_values:
+            return None
+        target = re.sub(r"\s+", "", samba_text.lower())
+        if not target:
+            return None
+
+        def _norm(value: Any) -> str:
+            if not isinstance(value, str):
+                return ""
+            return re.sub(r"\s+", "", value.lower())
+
+        # 1차: 정확 일치 (kor / eng / korEng)
+        for v in esm_values:
+            no = v.get("recommendedOptValueNo")
+            if not no:
+                continue
+            name = v.get("recommendedOptValueName") or {}
+            for key in ("kor", "eng", "korEng"):
+                if _norm(name.get(key)) == target:
+                    return int(no)
+
+        # 2차: 부분 포함 (samba 가 ESM 값에 포함되거나 그 반대)
+        for v in esm_values:
+            no = v.get("recommendedOptValueNo")
+            if not no:
+                continue
+            name = v.get("recommendedOptValueName") or {}
+            for key in ("kor", "eng", "korEng"):
+                normalized = _norm(name.get(key))
+                if not normalized:
+                    continue
+                if target in normalized or normalized in target:
+                    return int(no)
+        return None
 
     # ------------------------------------------------------------------
     # 카테고리 트리 전체 수집
@@ -981,3 +1107,103 @@ def esm_find_category_by_path(path: str, site: str) -> str:
     tree_name = "auction_cats" if site == "auction" else "gmarket_cats"
     tree = _load_cat_mapping(tree_name)
     return tree.get(path, "")
+
+
+# ------------------------------------------------------------------
+# samba options → ESM 추천옵션 흐름 헬퍼 (plugins 공유)
+# ------------------------------------------------------------------
+
+
+async def register_esm_options(
+    client: ESMPlusClient,
+    goods_no: str,
+    cat_code: str,
+    samba_options: list[dict[str, Any]],
+    *,
+    site: str = "gmarket",
+    stock_per_value: int = 99,
+) -> dict[str, Any]:
+    """samba options → ESM 추천옵션 매핑 + 등록.
+
+    samba options 형식: [{"name": "색상", "values": [{"name": "네이비", "stock": 10}, ...]}]
+
+    한계 (별도 PR 영역):
+      - 첫 옵션 그룹만 처리 (type=1 선택형). 2-3 조합형(type=2/3) 미지원.
+      - 매핑 실패한 옵션값 = 해당 항목 스킵 (운영자 수동 매핑 권장).
+    """
+    if not samba_options:
+        return {"success": False, "message": "samba_options 비어있음"}
+    first_opt = samba_options[0]
+    samba_opt_name = first_opt.get("name") or first_opt.get("option_name") or ""
+    samba_values = (
+        first_opt.get("values") or first_opt.get("option_values") or []
+    )
+    if not samba_opt_name or not samba_values:
+        return {"success": False, "message": "옵션 이름/값 누락"}
+
+    groups = await client.get_recommended_opt_groups(cat_code)
+    matched_group = ESMPlusClient.detect_esm_option_group(samba_opt_name, groups)
+    if not matched_group:
+        return {
+            "success": False,
+            "message": f"ESM 그룹 매칭 실패: samba='{samba_opt_name}', cat={cat_code}",
+        }
+    rec_opt_no = matched_group["recommendedOptNo"]
+    values_pool = await client.get_recommended_opt_values(rec_opt_no)
+    values_pool = [v for v in values_pool if v.get("recommendedOptValueNo")]
+
+    site_key = ESMPlusClient.SITE_CONFIG[site]["siteKey"]
+    details: list[dict[str, Any]] = []
+    matched = 0
+    for sv in samba_values:
+        if isinstance(sv, dict):
+            value_text = sv.get("name") or sv.get("value") or ""
+            qty = int(sv.get("stock", stock_per_value) or stock_per_value)
+            add_amnt = int(
+                sv.get("priceAdjust", 0) or sv.get("addPrice", 0) or 0
+            )
+            sold_out = bool(sv.get("isSoldOut") or sv.get("is_sold_out"))
+        else:
+            value_text = str(sv)
+            qty = stock_per_value
+            add_amnt = 0
+            sold_out = False
+        rec_val_no = ESMPlusClient.match_option_value(value_text, values_pool)
+        if not rec_val_no:
+            logger.warning(
+                f"[ESM] 옵션값 매칭 실패: cat={cat_code} group={rec_opt_no} text='{value_text}'"
+            )
+            continue
+        details.append(
+            {
+                "recommendedOptValueNo": rec_val_no,
+                "addAmnt": add_amnt,
+                "qty": {site_key: 0 if sold_out else qty},
+                "isSoldOut": sold_out,
+                "isDisplay": True,
+                "manageCode": f"OPT{rec_val_no}",
+            }
+        )
+        matched += 1
+
+    if not details:
+        return {
+            "success": False,
+            "matched": 0,
+            "requested": len(samba_values),
+            "message": "매칭된 옵션값 0건",
+        }
+
+    payload = {
+        "type": 1,
+        "isStockManage": True,
+        "independent": {"recommendedOptNo": rec_opt_no, "details": details},
+        "combination": None,
+    }
+    await client.set_recommended_options(goods_no, payload)
+    return {
+        "success": True,
+        "matched": matched,
+        "requested": len(samba_values),
+        "group": matched_group.get("recommendedOptName"),
+    }

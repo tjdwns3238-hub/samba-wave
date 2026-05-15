@@ -96,15 +96,24 @@ class AuctionPlugin(MarketPlugin):
         if existing_no:
             return await self._update_product(client, existing_no, data, pending_images)
         else:
-            return await self._register_product(client, data, pending_images)
+            samba_options = product.get("options") or []
+            return await self._register_product(
+                client,
+                data,
+                pending_images,
+                samba_options=samba_options,
+                cat_code=category_id,
+            )
 
     async def _register_product(
         self,
         client: Any,
         data: dict[str, Any],
         pending_images: dict | None,
+        samba_options: list[dict] | None = None,
+        cat_code: str = "",
     ) -> dict[str, Any]:
-        """신규 상품 등록."""
+        """신규 상품 등록 + 옵션/이미지 후처리."""
         result = await client.register_product(data)
         goods_no = result.get("goodsNo", "")
         site_goods_no = result.get("siteGoodsNo", "")
@@ -116,6 +125,28 @@ class AuctionPlugin(MarketPlugin):
                 logger.info(f"[옥션] 추가 이미지 설정 완료: goodsNo={goods_no}")
             except Exception as img_e:
                 logger.warning(f"[옥션] 추가 이미지 설정 실패: {img_e}")
+
+        # 추천옵션 등록 — samba options 있고 cat_code 있을 때만 (image propagation 대기 30s)
+        if samba_options and goods_no and cat_code:
+            try:
+                from backend.domain.samba.proxy.esmplus import register_esm_options
+
+                await asyncio.sleep(30)
+                opt_result = await register_esm_options(
+                    client, goods_no, cat_code, samba_options, site="auction"
+                )
+                if opt_result.get("success"):
+                    logger.info(
+                        f"[옥션] 옵션 등록 완료: goodsNo={goods_no} matched={opt_result.get('matched')}/{opt_result.get('requested')}"
+                    )
+                else:
+                    logger.warning(
+                        f"[옥션] 옵션 등록 부분 실패: {opt_result.get('message')}"
+                    )
+            except Exception as opt_e:
+                logger.warning(
+                    f"[옥션] 옵션 등록 실패 (상품 등록은 성공 처리): {opt_e}"
+                )
 
         return {
             "success": True,

@@ -97,30 +97,60 @@ class GMarketMarketPlugin(MarketPlugin):
         if existing_no:
             return await self._update_product(client, existing_no, data, pending_images)
         else:
-            return await self._register_product(client, data, pending_images)
+            samba_options = product.get("options") or []
+            return await self._register_product(
+                client,
+                data,
+                pending_images,
+                samba_options=samba_options,
+                cat_code=category_id,
+            )
 
     async def _register_product(
         self,
         client: Any,
         data: dict[str, Any],
         pending_images: dict | None,
+        samba_options: list[dict] | None = None,
+        cat_code: str = "",
     ) -> dict[str, Any]:
-        """신규 상품 등록."""
+        """신규 상품 등록 + 옵션/이미지 후처리."""
         result = await client.register_product(data)
         goods_no = result.get("goodsNo", "")
         site_goods_no = result.get("siteGoodsNo", "")
 
-        # 추가 이미지 설정 (등록 후 2~3분 대기 후 호출 가능 → 비동기 예약은 하지 않음)
-        # 기본 이미지는 등록 시 포함되므로 추가 이미지만 별도 처리
+        # 추가 이미지 설정 (등록 후 propagation 대기 필요 — ESM CDN 캐시)
         if pending_images and goods_no:
             try:
-                # 등록 직후에는 이미지 API 실패할 수 있으므로 재시도
                 await asyncio.sleep(3)
                 await client.update_images(goods_no, {"imageModel": pending_images})
                 logger.info(f"[지마켓] 추가 이미지 설정 완료: goodsNo={goods_no}")
             except Exception as img_e:
                 logger.warning(
                     f"[지마켓] 추가 이미지 설정 실패 (등록 직후 제한): {img_e}"
+                )
+
+        # 추천옵션 등록 — samba options 있고 cat_code 있을 때만.
+        # ESM 측 이미지 캐시 propagation 미완료 시 옵션 PUT 거부 → 30s sleep.
+        if samba_options and goods_no and cat_code:
+            try:
+                from backend.domain.samba.proxy.esmplus import register_esm_options
+
+                await asyncio.sleep(30)
+                opt_result = await register_esm_options(
+                    client, goods_no, cat_code, samba_options, site="gmarket"
+                )
+                if opt_result.get("success"):
+                    logger.info(
+                        f"[지마켓] 옵션 등록 완료: goodsNo={goods_no} matched={opt_result.get('matched')}/{opt_result.get('requested')}"
+                    )
+                else:
+                    logger.warning(
+                        f"[지마켓] 옵션 등록 부분 실패: {opt_result.get('message')}"
+                    )
+            except Exception as opt_e:
+                logger.warning(
+                    f"[지마켓] 옵션 등록 실패 (상품 등록은 성공 처리): {opt_e}"
                 )
 
         return {
