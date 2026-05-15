@@ -92,6 +92,33 @@ class ESMPlusClient:
         self.site = site
         self.cfg = self.SITE_CONFIG[site]
         self._timeout = httpx.Timeout(30.0, connect=10.0)
+        # 재사용 httpx client — 매 호출마다 새 TCP/TLS handshake 회피.
+        # 첫 사용 시 lazy 생성. aclose() 명시 호출 또는 async-with 패턴 권장.
+        self._http_client: httpx.AsyncClient | None = None
+
+    async def _get_http_client(self) -> httpx.AsyncClient:
+        """공유 httpx.AsyncClient — connection pool + keep-alive 재사용."""
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.AsyncClient(
+                timeout=self._timeout,
+                limits=httpx.Limits(
+                    max_connections=20, max_keepalive_connections=10
+                ),
+            )
+        return self._http_client
+
+    async def aclose(self) -> None:
+        """공유 client 종료. 운영자가 인스턴스 폐기 전 호출 권장."""
+        if self._http_client is not None and not self._http_client.is_closed:
+            await self._http_client.aclose()
+            self._http_client = None
+
+    async def __aenter__(self) -> "ESMPlusClient":
+        await self._get_http_client()
+        return self
+
+    async def __aexit__(self, *exc_info: Any) -> None:
+        await self.aclose()
 
     # ------------------------------------------------------------------
     # JWT 토큰 생성
@@ -156,14 +183,14 @@ class ESMPlusClient:
             await _ESM_RATE_LIMITER.acquire()
 
             try:
-                async with httpx.AsyncClient(timeout=self._timeout) as client:
-                    resp = await client.request(
-                        method,
-                        url,
-                        headers=self._headers(),
-                        json=data,
-                        params=params,
-                    )
+                client = await self._get_http_client()
+                resp = await client.request(
+                    method,
+                    url,
+                    headers=self._headers(),
+                    json=data,
+                    params=params,
+                )
             except (httpx.ConnectError, httpx.ReadTimeout) as exc:
                 # 네트워크 일시 오류 → 재시도. 마지막 시도에서도 실패 시 raise.
                 if attempt >= self._MAX_RETRIES:
@@ -253,9 +280,24 @@ class ESMPlusClient:
 
     async def delete_product(self, goods_no: str) -> dict[str, Any]:
         """상품 삭제 — DELETE /item/v1/goods/{goodsNo}
-        주의: 판매중지 상태에서만 삭제 가능
+
+        주의:
+        - 판매중지 상태에서만 삭제 가능 (그렇지 않으면 ESM 측에서 거부).
+        - 등록 직후(<~15초) 즉시 삭제 시도 시 [F001000] cooldown 응답 발생 가능 —
+          ESM 측 내부 lock. cooldown 회복 후 1회 재시도.
         """
-        return await self._call_api("DELETE", f"/item/v1/goods/{goods_no}")
+        try:
+            return await self._call_api("DELETE", f"/item/v1/goods/{goods_no}")
+        except RuntimeError as exc:
+            err = str(exc)
+            # ESM 의 등록직후 cooldown 메시지 — 15초 대기 후 1회 재시도
+            if "F001000" in err or "다른 판매자의 주문" in err:
+                logger.warning(
+                    f"[{self.cfg['label']}] 삭제 cooldown 감지 — 15초 대기 후 재시도 (goodsNo={goods_no})"
+                )
+                await asyncio.sleep(15)
+                return await self._call_api("DELETE", f"/item/v1/goods/{goods_no}")
+            raise
 
     # ------------------------------------------------------------------
     # 판매상태/가격/재고
@@ -270,8 +312,34 @@ class ESMPlusClient:
         )
 
     async def get_sell_status(self, goods_no: str) -> dict[str, Any]:
-        """판매상태 조회 — GET /item/v1/goods/{goodsNo}/sell-status"""
+        """판매상태 조회 — GET /item/v1/goods/{goodsNo}/sell-status
+
+        ESM 응답은 케이스 일관성 부족 — 'IsSell.gmkt'(camelCase) + 'Price.Gmkt'(PascalCase)
+        mixed. ci_get() 헬퍼로 case-insensitive 조회 권장.
+        """
         return await self._call_api("GET", f"/item/v1/goods/{goods_no}/sell-status")
+
+    @staticmethod
+    def ci_get(obj: dict[str, Any] | None, key: str, default: Any = None) -> Any:
+        """ESM 응답 dict 의 case-insensitive 키 조회.
+
+        ESM API 응답이 일관성 부족 — 등록 시 PascalCase 보내지만 조회 응답에서는
+        필드별 case mixed (예: 'IsSell.gmkt' camelCase + 'Price.Gmkt' PascalCase).
+        운영 코드는 ci_get() 으로 안전 접근.
+
+        Example:
+            >>> body = await client.get_sell_status(goods_no)
+            >>> is_sell_gmkt = ESMPlusClient.ci_get(
+            ...     ESMPlusClient.ci_get(body, "IsSell"), "Gmkt"
+            ... )
+        """
+        if not isinstance(obj, dict):
+            return default
+        key_lower = key.lower()
+        for k, v in obj.items():
+            if k.lower() == key_lower:
+                return v
+        return default
 
     # ------------------------------------------------------------------
     # 이미지
@@ -290,17 +358,20 @@ class ESMPlusClient:
     # ------------------------------------------------------------------
 
     async def get_places(self) -> list[dict[str, Any]]:
-        """출고지/반품지 목록 — GET /shipping/v1/places"""
+        """출고지/반품지 목록 — GET /item/v1/shipping/places
+
+        응답 key 'shippingPlaces' (본진 'places' 추출은 잘못).
+        """
         try:
-            result = await self._call_api("GET", "/shipping/v1/places")
-            return result.get("places", [])
+            result = await self._call_api("GET", "/item/v1/shipping/places")
+            return result.get("shippingPlaces", [])
         except Exception:
             return []
 
     async def get_dispatch_policies(self) -> list[dict[str, Any]]:
-        """발송정책 목록 — GET /shipping/v1/dispatch-policies"""
+        """발송정책 목록 — GET /item/v1/shipping/dispatch-policies"""
         try:
-            result = await self._call_api("GET", "/shipping/v1/dispatch-policies")
+            result = await self._call_api("GET", "/item/v1/shipping/dispatch-policies")
             return result.get("dispatchPolicies", [])
         except Exception:
             return []
