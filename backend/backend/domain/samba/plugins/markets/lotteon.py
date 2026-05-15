@@ -1862,6 +1862,18 @@ class LotteonPlugin(MarketPlugin):
                 f"통과 {_kept_count}장 (제외 {_excluded}장, URL 정규화 {_changed}장)"
             )
 
+        # ── 이미지 0장 사전 차단 가드 ──────────────────────────────────
+        # itmImgLst 빈 배열로 호출하면 롯데ON이 9999/itmImgLst 입력 필수 에러를 낸다.
+        # 사전검증 후 0장이면 여기서 차단해 더 명확한 메시지로 실패시킨다.
+        if not (product_copy.get("images") or []):
+            return {
+                "success": False,
+                "message": (
+                    "롯데ON 등록 실패: 유효한 이미지 0장 "
+                    "(원본 URL 만료/거부 가능성 — 재수집 또는 R2 업로드 후 재시도 필요)"
+                ),
+            }
+
         data = LotteonClient.transform_product(
             product_copy,
             category_id,
@@ -2601,8 +2613,12 @@ class LotteonPlugin(MarketPlugin):
                     "spdNo": spd_no,
                 }
         except Exception as e:
+            import traceback as _tb
+
             action = "수정" if existing_no else "등록"
-            logger.error(f"[롯데ON] {action} 실패: {e}")
+            # 광범위 except가 진짜 위치를 숨겨 'NoneType has no attribute' 같은 메시지의
+            # 발생 라인 추적이 안 되던 문제 — traceback 전체를 로그에 남긴다.
+            logger.error(f"[롯데ON] {action} 실패: {e}\n{_tb.format_exc()}")
             return {"success": False, "message": f"롯데ON {action} 실패: {e}"}
 
     @staticmethod
