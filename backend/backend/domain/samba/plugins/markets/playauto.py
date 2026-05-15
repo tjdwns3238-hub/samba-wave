@@ -104,36 +104,76 @@ class PlayAutoPlugin(MarketPlugin):
         client = PlayAutoClient(api_key)
 
         try:
-            # 상품 데이터 변환
-            emp_data = self.transform(product, category_id)
+            # ── 경량 PATCH 모드 (오토튠 가격/재고만) ─────────────────────
+            # _skip_image_upload=True + existing_no → MasterCode + Price + Count + Opts 만 전송.
+            # detail_html(65KB)/Images/MyCateName 등 무거운 필드 제외하여 PATCH 0.5초 안에 완료.
+            # 2026-05-15 검증: MasterCode + Options만 PATCH 응답 0.4~0.7초.
+            if existing_no and product.get("_skip_image_upload"):
+                from backend.domain.samba.proxy.playauto import _build_options
 
-            # 디버그: 실제 전송 데이터 확인
-            _img_debug = {
-                f"Image{i}": str(emp_data.get(f"Image{i}", ""))[:80]
-                for i in range(1, 11)
-                if emp_data.get(f"Image{i}")
-            }
-            logger.info(
-                f"[플레이오토] 전송 데이터: ProdName={emp_data.get('ProdName', '')[:30]}, "
-                f"Price={emp_data.get('Price')}, "
-                f"StreetPrice={emp_data.get('StreetPrice')}, Count={emp_data.get('Count')}, "
-                f"MadeIn={emp_data.get('MadeIn')}, "
-                f"Images={_img_debug}, "
-                f"Opts={len(emp_data.get('Opts', []))}건, "
-                f"Content={len(emp_data.get('Content', ''))}자, "
-                f"MyCateName={emp_data.get('MyCateName', '(미설정)')}"
-            )
-            logger.info(
-                f"[플레이오토] 원본 images 필드: {[str(u)[:80] for u in (product.get('images') or [])]}"
-            )
+                max_stock = int(product.get("_max_stock") or 0)
+                options = product.get("options") or []
+                real_stock = sum(
+                    int(o.get("stock") or 0) for o in options if not o.get("isSoldOut")
+                )
+                if max_stock > 0 and real_stock > 0:
+                    stock_qty = min(real_stock, max_stock)
+                elif max_stock > 0:
+                    stock_qty = max_stock
+                elif real_stock > 0:
+                    stock_qty = real_stock
+                else:
+                    stock_qty = 99
 
-            if existing_no:
-                emp_data["MasterCode"] = existing_no
-                logger.info(f"[플레이오토] 기존 상품 수정(PATCH): {existing_no}")
-                results = await client.update_product([emp_data])
+                sale_price = int(product.get("sale_price") or 0)
+                minimal: dict[str, Any] = {
+                    "MasterCode": existing_no,
+                    "Price": str(sale_price),
+                    "Count": str(stock_qty),
+                }
+                if options and isinstance(options, list):
+                    emp_opts = _build_options(options, stock_qty)
+                    if emp_opts:
+                        minimal["Opts"] = emp_opts
+                        has_two_axes = any(o.get("title2") for o in emp_opts)
+                        minimal["OptSelectType"] = "SM" if has_two_axes else "SS"
+
+                logger.info(
+                    f"[플레이오토] 경량 PATCH(가격/재고): MasterCode={existing_no} "
+                    f"Price={sale_price} Count={stock_qty} Opts={len(minimal.get('Opts', []))}건"
+                )
+                results = await client.update_product([minimal], use_no_edit_slave=True)
             else:
-                logger.info("[플레이오토] 신규 등록(POST)")
-                results = await client.register_product([emp_data])
+                # 상품 데이터 변환 (전체 payload)
+                emp_data = self.transform(product, category_id)
+
+                # 디버그: 실제 전송 데이터 확인
+                _img_debug = {
+                    f"Image{i}": str(emp_data.get(f"Image{i}", ""))[:80]
+                    for i in range(1, 11)
+                    if emp_data.get(f"Image{i}")
+                }
+                logger.info(
+                    f"[플레이오토] 전송 데이터: ProdName={emp_data.get('ProdName', '')[:30]}, "
+                    f"Price={emp_data.get('Price')}, "
+                    f"StreetPrice={emp_data.get('StreetPrice')}, Count={emp_data.get('Count')}, "
+                    f"MadeIn={emp_data.get('MadeIn')}, "
+                    f"Images={_img_debug}, "
+                    f"Opts={len(emp_data.get('Opts', []))}건, "
+                    f"Content={len(emp_data.get('Content', ''))}자, "
+                    f"MyCateName={emp_data.get('MyCateName', '(미설정)')}"
+                )
+                logger.info(
+                    f"[플레이오토] 원본 images 필드: {[str(u)[:80] for u in (product.get('images') or [])]}"
+                )
+
+                if existing_no:
+                    emp_data["MasterCode"] = existing_no
+                    logger.info(f"[플레이오토] 기존 상품 수정(PATCH): {existing_no}")
+                    results = await client.update_product([emp_data])
+                else:
+                    logger.info("[플레이오토] 신규 등록(POST)")
+                    results = await client.register_product([emp_data])
 
             if not results:
                 return {
