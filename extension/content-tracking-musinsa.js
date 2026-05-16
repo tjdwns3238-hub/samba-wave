@@ -42,6 +42,18 @@
     } catch { return false }
   }
 
+  // 현재 로그인 무신사 계정에 해당 주문이 없는 경우 — 다른 계정 주문
+  // (주문상세 페이지가 정상 로드됐는데 주문번호와 매칭되는 데이터가 없는 패턴)
+  function isWrongAccount() {
+    try {
+      const text = (document.body?.innerText || '').slice(0, 4000)
+      if (/주문\s*정보가?\s*(없|존재하지)/.test(text)) return true
+      if (/조회\s*(된|할\s*수\s*있는)?\s*주문이?\s*(없|존재하지)/.test(text)) return true
+      if (/잘못된\s*접근/.test(text)) return true
+      return false
+    } catch { return false }
+  }
+
   async function waitFor(selector, timeoutMs) {
     const start = Date.now()
     while (Date.now() - start < timeoutMs) {
@@ -118,6 +130,13 @@
     if (isOrderCancelled()) {
       // 취소된 주문이면 더 진행하지 않고 결과 전송
       send(requestId, { success: false, cancelled: true, error: 'order_cancelled' })
+      try { sessionStorage.removeItem(SS_KEY) } catch {}
+      return
+    }
+
+    if (isWrongAccount()) {
+      // 현재 로그인된 무신사 계정에 해당 주문이 존재하지 않음 — 다른 계정 주문
+      send(requestId, { success: false, error: 'wrong_account: 현재 로그인 계정에 해당 주문 없음' })
       try { sessionStorage.removeItem(SS_KEY) } catch {}
       return
     }

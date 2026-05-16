@@ -32,6 +32,7 @@ from backend.domain.samba.tracking_sync.model import (
     STATUS_PENDING,
     STATUS_SCRAPED,
     STATUS_SENT,
+    STATUS_WRONG_ACCOUNT,
     SambaTrackingSyncJob,
 )
 from backend.utils.logger import logger
@@ -588,13 +589,24 @@ async def apply_tracking_result(
             return {"success": False, "status": job.status, "reason": "원주문 취소"}
 
         if not success or not tracking_number:
-            # 캡챠/미발송/실패 — 재시도 여지 두기
+            # 캡챠/미발송/계정불일치/실패 — 재시도 여지 두기
             reason = (error or "송장번호 없음")[:500]
             job.last_error = reason
+            reason_lc = reason.lower()
+            # 계정불일치 — 확장앱이 현재 로그인된 소싱처 계정으로 해당 주문 못 찾음
+            # 운영자가 해당 계정 PC에서 재시도하거나 다른 PC 폴링 대기 필요
             if (
-                "captcha" in reason.lower()
+                "wrong_account" in reason_lc
+                or "not_my_order" in reason_lc
+                or "account_mismatch" in reason_lc
+                or "계정불일치" in reason
+                or "다른 계정" in reason
+            ):
+                job.status = STATUS_WRONG_ACCOUNT
+            elif (
+                "captcha" in reason_lc
                 or "미발송" in reason
-                or "no_tracking" in reason.lower()
+                or "no_tracking" in reason_lc
             ):
                 job.status = STATUS_NO_TRACKING
             else:

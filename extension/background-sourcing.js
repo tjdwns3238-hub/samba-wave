@@ -475,28 +475,136 @@ async function _processJobWithCap(job) {
 const _trackingPending = new Map() // requestId → {resolve, timeoutId, tabId}
 
 // 송장 잡 site(대문자) → 자동로그인 siteKey 매핑.
-// SPA_DIRECT_LOGIN_SITES(ssg/lotteon/abcmart)는 주문매칭 계정으로 강제 로그인 지원.
+// SPA_DIRECT_LOGIN_SITES(ssg/lotteon/abcmart/musinsa)는 주문매칭 계정으로 강제 로그인 지원.
 const _TRACKING_AUTO_LOGIN_MAP = {
   SSG: 'ssg',
   LOTTEON: 'lotteon',
   ABCMART: 'abcmart',
   GRANDSTAGE: 'abcmart',
+  MUSINSA: 'musinsa',
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 현재 로그인된 소싱처 계정 감지 — 송장수집 안전망: 매칭 잡 우선 처리용.
+// 사이트별 마이페이지 진입 → username/nickname 스크랩 → 백엔드 find-by-username
+// → account_id 캐싱(chrome.storage.local, TTL 30분).
+// 매칭 잡은 빠른 경로(현재 로그인 그대로), 미매칭 잡은 느린 경로(2단계 재로그인 + 재시도).
+// ─────────────────────────────────────────────────────────────────────────────
+const _CURRENT_ACCOUNT_CACHE_TTL_MS = 30 * 60 * 1000  // 30분
+
+// 사이트별 마이페이지 URL + username 스크랩 함수
+const _CURRENT_ACCOUNT_DETECTORS = {
+  MUSINSA: {
+    mypageUrl: 'https://www.musinsa.com/mypage/order',
+    scrape: () => {
+      // 프로필 영역에서 닉네임/아이디 추출 — 무신사 마이페이지 헤더 패턴
+      for (const el of document.querySelectorAll('a[href*="/my"], a[href*="/member"], a[href*="/mypage"]')) {
+        const t = (el.textContent || '').trim().replace(/\s*>.*/, '')
+        if (t && t.length >= 2 && t.length <= 30 && !t.includes('마이') && !t.includes('로그') && !t.includes('주문') && !t.includes('회원')) {
+          return t
+        }
+      }
+      // 폴백: "OOO님" 패턴
+      const greet = (document.body?.innerText || '').match(/([가-힣A-Za-z0-9_]{2,20})\s*님/)
+      if (greet) return greet[1]
+      return ''
+    },
+  },
+}
+
+async function _detectCurrentSourcingAccount(site) {
+  const detector = _CURRENT_ACCOUNT_DETECTORS[site]
+  if (!detector) return null
+  const cacheKey = `_currentSourcingAccountId_${site}`
+  // 캐시 조회
+  try {
+    const stored = await chrome.storage.local.get(cacheKey)
+    const entry = stored[cacheKey]
+    if (entry && entry.accountId && entry.at && Date.now() - entry.at < _CURRENT_ACCOUNT_CACHE_TTL_MS) {
+      return entry.accountId
+    }
+  } catch {}
+
+  // 마이페이지 진입 → 스크랩
+  let tabId = null
+  try {
+    const tab = await chrome.tabs.create({ url: detector.mypageUrl, active: false })
+    tabId = tab.id
+    try { await waitForTabLoad(tabId, 20000) } catch {}
+    await wait(2500)
+    // 로그인 페이지 리다이렉트면 비로그인 — null 캐시
+    const tabInfo = await chrome.tabs.get(tabId)
+    const curUrl = tabInfo.url || ''
+    if (curUrl.includes('/auth/login') || curUrl.includes('member.one.musinsa.com/login') || curUrl.includes('/login.ssg') || curUrl.includes('/member/login')) {
+      console.log(`[송장][계정감지] ${site} 비로그인 상태 — 캐시 스킵`)
+      return null
+    }
+    const [r] = await chrome.scripting.executeScript({ target: { tabId }, func: detector.scrape })
+    const username = (r?.result || '').trim()
+    if (!username) {
+      console.log(`[송장][계정감지] ${site} username 스크랩 실패`)
+      return null
+    }
+    // 백엔드 find-by-username 호출
+    const stored = await chrome.storage.local.get('proxyUrl')
+    const proxyUrl = stored.proxyUrl || ''
+    const apiFetch = globalThis.SambaBackgroundCore?.apiFetch
+    if (!apiFetch) return null
+    const res = await apiFetch(
+      `${proxyUrl}/api/v1/samba/sourcing-accounts/find-by-username?site_name=${encodeURIComponent(site)}&username=${encodeURIComponent(username)}`,
+      { method: 'GET' }
+    )
+    if (!res.ok) {
+      console.log(`[송장][계정감지] ${site} username="${username}" 백엔드 매칭 실패 (${res.status})`)
+      return null
+    }
+    const data = await res.json()
+    const accountId = data?.id || ''
+    if (accountId) {
+      try { await chrome.storage.local.set({ [cacheKey]: { accountId, username, at: Date.now() } }) } catch {}
+      console.log(`[송장][계정감지] ${site} 현재 로그인 계정 식별: ${data.account_label} (id=${accountId})`)
+    }
+    return accountId || null
+  } catch (e) {
+    console.warn(`[송장][계정감지] ${site} 예외: ${e?.message || e}`)
+    return null
+  } finally {
+    if (tabId) {
+      try { await chrome.tabs.remove(tabId) } catch {}
+    }
+  }
+}
+
+// 계정 캐시 무효화 — 자동로그인 성공 직후 호출하면 다음 잡에서 재감지
+async function _invalidateCurrentAccountCache(site) {
+  const cacheKey = `_currentSourcingAccountId_${site}`
+  try { await chrome.storage.local.remove(cacheKey) } catch {}
 }
 
 async function handleTrackingJob(job) {
   const { requestId, site, url, sourcingOrderNumber, sourcingAccountId } = job
   console.log(`[송장] 잡 수신 site=${site} ord=${sourcingOrderNumber} acc=${sourcingAccountId || '-'} req=${requestId}`)
 
-  // 잡 처리 전 자동로그인 — 주문 매칭 계정으로 강제 로그인
-  // sourcingAccountId 없으면 라디오 기본 계정 fallback (기존 동작과 동일)
+  // [안전망 정책] — 현재 로그인된 계정으로 먼저 시도 (강제 재로그인 안함).
+  // 잡당 무조건 재로그인하면 캡챠 한 번 막혔을 때 정상 작동하던 계정 처리까지 도미노로 깨짐.
+  // → 0단계: 현재 로그인된 계정 식별 (캐시 30분)
+  //   - 잡 매칭 계정 = 현재 계정 → 빠른 경로 (1차 시도만, 재로그인 비용 0)
+  //   - 잡 매칭 계정 ≠ 현재 계정 → 느린 경로 (1차 시도 + wrong_account면 재로그인 후 재시도)
+  // → 1차: 현재 로그인 상태 그대로 스크랩
+  // → 2차: wrong_account 또는 needsLogin 감지 시에만 주문 매칭 계정으로 강제 재로그인 후 재시도
+
+  // 0단계 — 현재 로그인 계정 식별
+  let currentAccountId = null
   try {
-    const autoLoginKey = _TRACKING_AUTO_LOGIN_MAP[site]
-    if (autoLoginKey && typeof globalThis.ensureLoggedIn === 'function') {
-      console.log(`[송장] ensureLoggedIn(${autoLoginKey}, acc=${sourcingAccountId || '-'}) 호출`)
-      await globalThis.ensureLoggedIn(autoLoginKey, { accountId: sourcingAccountId || '' })
-    }
+    currentAccountId = await _detectCurrentSourcingAccount(site)
   } catch (e) {
-    console.warn(`[송장] ensureLoggedIn 실패 (무시하고 진행): ${e?.message || e}`)
+    console.warn(`[송장] 계정 감지 실패 (무시): ${e?.message || e}`)
+  }
+  const _isCurrentMatch = currentAccountId && sourcingAccountId && currentAccountId === sourcingAccountId
+  if (currentAccountId) {
+    console.log(`[송장] 현재 로그인=${currentAccountId} / 잡 매칭=${sourcingAccountId || '-'} → ${_isCurrentMatch ? '빠른 경로(매칭)' : '느린 경로(미매칭, 재로그인 가능성)'}`)
+  } else {
+    console.log(`[송장] 현재 로그인 계정 식별 불가 — 기본 경로(1차+조건부재시도)`)
   }
 
   let tabId = null
@@ -504,7 +612,7 @@ async function handleTrackingJob(job) {
   try {
     if (!url) throw new Error('tracking URL 누락')
 
-    // 송장 페이지 진입 → 결과 수신 (needsLogin 시 1회 재시도)
+    // 송장 페이지 진입 → 결과 수신
     // MUSINSA: Next.js SPA + 백그라운드 탭 hydration 지연으로 React click이 무시되는 회귀
     // 차단을 위해 active: true 로 강제. 사용자 화면이 잠깐 튐 — 직렬화(_musinsaTrackingLock)와
     // 결합해 한 번에 1건만 처리.
@@ -534,21 +642,57 @@ async function handleTrackingJob(job) {
       })
     }
 
-    let result = await _runOnce()
+    // 사전 미매칭 판정 — 현재 로그인 계정이 식별됐고 잡 계정과 다르면 처리 자체를 스킵.
+    // [중요] 이 PC가 현재 로그인 계정의 매칭 잡 처리에 집중할 수 있도록, 미매칭 잡은
+    //   로그인 스왑하지 않고 wrong_account 로 즉시 보고 → 백엔드가 WRONG_ACCOUNT 분류.
+    //   해당 계정 PC가 폴링하거나 운영자가 수동 스위치 후 재시도하게 위임.
+    //   (강제 스왑하면 현재 처리 중인 매칭 잡 + 다른 매칭 잡 큐 전체 도미노로 깨짐)
+    const _knownMismatch = currentAccountId && sourcingAccountId && currentAccountId !== sourcingAccountId
+    let result
+    let _skipSwap = false
+    if (_knownMismatch) {
+      console.log(`[송장] 사전 미매칭 감지 → 매칭 잡 우선 처리 위해 스킵 (이 PC는 ${currentAccountId} 전담)`)
+      result = {
+        success: false,
+        error: `wrong_account: 현재 로그인 계정(${currentAccountId}) 과 잡 매칭 계정(${sourcingAccountId}) 불일치 — 해당 계정 PC가 처리 필요`,
+        wrongAccount: true,
+      }
+      _skipSwap = true  // 강제 재로그인 절대 금지 — 현재 계정 세션 보호
+    } else {
+      // 1차 시도 — 현재 로그인된 계정 그대로 (매칭이거나 식별 불가일 때)
+      result = await _runOnce()
+    }
 
-    // 로그인 페이지 리다이렉트 → 주문매칭 계정으로 강제 로그인 후 1회 재시도
-    if (result && result.needsLogin) {
-      console.log(`[송장] needsLogin 감지 → ensureLoggedIn 재시도 (acc=${sourcingAccountId || '-'})`)
+    // 2차 — wrong_account 또는 needsLogin 감지 시에만 주문 매칭 계정으로 강제 로그인 후 재시도
+    // (계정불일치만 재시도 — 단순 미발송/captcha는 재시도해도 결과 동일)
+    const _isWrongAccount = result && (
+      result.wrongAccount === true ||
+      (typeof result.error === 'string' && /wrong_account|not_my_order|account_mismatch|계정불일치/i.test(result.error))
+    )
+    const _needsLogin = result && result.needsLogin
+    if ((_isWrongAccount || _needsLogin) && !_skipSwap) {
+      const reason = _isWrongAccount ? 'wrong_account' : 'needsLogin'
+      console.log(`[송장] ${reason} 감지 → 주문 매칭 계정으로 강제 재로그인 후 재시도 (acc=${sourcingAccountId || '-'})`)
       try { if (tabId) { await chrome.tabs.remove(tabId); tabId = null } } catch {}
+      let loginOk = false
       try {
         const autoLoginKey = _TRACKING_AUTO_LOGIN_MAP[site]
-        if (autoLoginKey && typeof globalThis.ensureLoggedIn === 'function') {
-          await globalThis.ensureLoggedIn(autoLoginKey, { accountId: sourcingAccountId || '' })
+        if (autoLoginKey && typeof globalThis.ensureLoggedIn === 'function' && sourcingAccountId) {
+          loginOk = await globalThis.ensureLoggedIn(autoLoginKey, { accountId: sourcingAccountId })
+        } else {
+          console.log(`[송장] 강제 재로그인 스킵 — 미지원 사이트(${site}) 또는 accountId 없음`)
         }
       } catch (e) {
         console.warn(`[송장] 재로그인 실패: ${e?.message || e}`)
       }
-      result = await _runOnce()
+      // 재로그인 성공 시에만 재시도 — 실패 시 1차 결과(wrong_account)를 그대로 보고해서
+      // 백엔드가 WRONG_ACCOUNT 상태로 분류하게 함. 캡챠 등으로 로그인 못한 케이스에서
+      // 무한 retry 폭주 방지.
+      if (loginOk) {
+        // 로그인 계정이 바뀌었으니 현재 계정 캐시 무효화 — 다음 잡에서 재감지
+        try { await _invalidateCurrentAccountCache(site) } catch {}
+        result = await _runOnce()
+      }
     }
 
     await postResult('sourcing/tracking-result', {

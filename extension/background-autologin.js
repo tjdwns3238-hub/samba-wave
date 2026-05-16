@@ -164,6 +164,31 @@ async function _spaDirectLogin(siteKey, username, password) {
     try { await waitForTabLoad(tabId, 30000) } catch {}
     await wait(2000)
 
+    // SPA 사이트는 input이 동적 렌더링 — input 등장까지 폴링 (최대 10초)
+    // 무신사는 /auth/login → member.one.musinsa.com/login 리다이렉트 후 SPA 렌더링됨
+    const SPA_INPUT_WAIT_SITES = ['musinsa', 'lotteon']
+    if (SPA_INPUT_WAIT_SITES.includes(siteKey)) {
+      const spaStart = Date.now()
+      const SPA_WAIT_MAX = 10000
+      while (Date.now() - spaStart < SPA_WAIT_MAX) {
+        try {
+          const [r] = await chrome.scripting.executeScript({
+            target: { tabId },
+            func: () => {
+              const id = document.querySelector('input[type="email"], input[type="text"]:not([type="hidden"])')
+              const pw = document.querySelector('input[type="password"]')
+              return !!(id && id.offsetParent !== null && pw && pw.offsetParent !== null)
+            },
+          })
+          if (r?.result) {
+            console.log(`[자동로그인][SPA] ${site.name} input 렌더링 감지 (${Date.now() - spaStart}ms)`)
+            break
+          }
+        } catch {}
+        await wait(300)
+      }
+    }
+
     // alert dialog 자동 닫기 핸들러 — chrome.debugger Page.handleJavaScriptDialog
     // (가짜 자격증명 또는 잘못된 자격증명 시 alert로 에러 메시지 노출됨, freeze 방지용)
     const target = { tabId }
@@ -204,6 +229,18 @@ async function _spaDirectLogin(siteKey, username, password) {
               pw: ['#inp_pw', 'input[type="password"]'],
               btnId: '#loginBtn, #btn_login, .btn_login, button[type="submit"]',
             },
+            musinsa: {
+              // member.one.musinsa.com/login — SPA, selector 실측 불가 → 흔한 패턴 다 등록
+              // 첫 매칭 input 사용. 첫 실행 시 콘솔 로그에서 어떤 selector가 매칭됐는지 확인.
+              id: [
+                '#id', '#userId', '#loginId', '#email',
+                'input[name="id"]', 'input[name="userId"]', 'input[name="loginId"]', 'input[name="email"]', 'input[name="memberId"]',
+                'input[type="email"]', 'input[type="text"]:not([type="hidden"])',
+              ],
+              pw: ['#password', '#userPw', '#loginPw', 'input[name="password"]', 'input[name="pw"]', 'input[type="password"]'],
+              btnId: 'button[type="submit"], button.login-btn, button.btn-login, #loginBtn',
+              btnText: '로그인',
+            },
           }
           const sel = SELECTORS[siteKeyArg]
           if (!sel) return { success: false, error: 'unsupported site' }
@@ -228,15 +265,16 @@ async function _spaDirectLogin(siteKey, username, password) {
           pwField.dispatchEvent(new Event('input', { bubbles: true }))
           pwField.dispatchEvent(new Event('change', { bubbles: true }))
 
-          // 로그인 버튼 찾기 — id 셀렉터 또는 버튼 텍스트로
+          // 로그인 버튼 찾기 — id 셀렉터 우선, 미발견 시 텍스트 매칭 폴백
           let btn = null
           if (sel.btnId) {
             btn = document.querySelector(sel.btnId)
-          } else if (sel.btnText) {
-            btn = Array.from(document.querySelectorAll('button, input[type="submit"], input[type="button"]'))
+          }
+          if (!btn && sel.btnText) {
+            btn = Array.from(document.querySelectorAll('button, input[type="submit"], input[type="button"], a[role="button"]'))
               .find(b => {
                 const txt = (b.textContent || b.value || '').trim()
-                return b.type === 'submit' && txt === sel.btnText && b.offsetParent !== null
+                return txt === sel.btnText && b.offsetParent !== null
               })
           }
           if (!btn) return { success: false, error: 'login button not found' }
@@ -495,7 +533,7 @@ async function _ensureLoggedInSingle(siteKey, accountId) {
   // [SPA 분기] LOTTEON / ABCmart / SSG는 백엔드 라디오 지정 계정으로만 자동로그인
   // 사용자 요구 — 소싱처계정의 username/password를 직접 .value 설정 (Chrome 자동완성 드롭다운 사용 X)
   // 백엔드 자격증명 없으면 즉시 실패. chrome.debugger triple-click 폴백 제거 (드롭다운 노출 방지).
-  const SPA_DIRECT_LOGIN_SITES = ['lotteon', 'abcmart', 'ssg']
+  const SPA_DIRECT_LOGIN_SITES = ['lotteon', 'abcmart', 'ssg', 'musinsa']
   if (SPA_DIRECT_LOGIN_SITES.includes(siteKey)) {
     // accountId 지정 시 — 현재 세션이 어떤 계정인지 확인 불가하므로 pre-check 스킵하고 강제 로그인.
     // (잘못된 계정으로 이미 로그인된 상태일 수 있음 → 무조건 지정 계정으로 새 세션 만든다)

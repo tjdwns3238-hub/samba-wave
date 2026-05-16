@@ -771,6 +771,73 @@ async def get_login_credential(
     }
 
 
+@extension_router.get("/find-by-username")
+async def find_account_by_username(
+    site_name: str = Query(..., description="사이트 ID (예: MUSINSA, LOTTEON)"),
+    username: str = Query(..., description="현재 브라우저에 로그인된 사용자 식별자 (아이디/이메일/닉네임)"),
+    session: AsyncSession = Depends(get_read_session_dependency),
+):
+    """확장앱 전용 — 현재 로그인된 username을 SambaSourcingAccount의 account_id로 매핑.
+
+    송장수집 시 확장앱이 현재 로그인 계정을 식별 후 매칭 잡을 우선 처리하려면
+    "현재 로그인된 username 문자열" → "백엔드 account_id" 변환이 필요.
+    이 엔드포인트는 site_name + username 으로 단건 매칭 후 account_id를 반환.
+
+    조회 우선순위:
+      1. 정확 매칭 (account.username == username)
+      2. account_label 매칭 (사용자가 라벨에 username을 적어두는 케이스 대응)
+
+    찾지 못하면 404. is_active 무관 (만료 계정도 매칭 허용 — 일단 식별만이 목적).
+    """
+    from sqlalchemy import select as sa_select, or_
+    from backend.domain.samba.sourcing_account.model import SambaSourcingAccount
+
+    if not username.strip():
+        raise HTTPException(400, "username 비어있음")
+
+    normalized_site_name = _normalize_sourcing_site_name(site_name)
+    site_candidates = [
+        candidate
+        for candidate in dict.fromkeys(
+            [
+                site_name,
+                normalized_site_name,
+                site_name.upper(),
+                site_name.lower(),
+            ]
+        )
+        if candidate
+    ]
+
+    stmt = (
+        sa_select(SambaSourcingAccount)
+        .where(SambaSourcingAccount.site_name.in_(site_candidates))
+        .where(
+            or_(
+                SambaSourcingAccount.username == username,
+                SambaSourcingAccount.account_label == username,
+            )
+        )
+        .order_by(
+            SambaSourcingAccount.is_active.desc(),
+            SambaSourcingAccount.updated_at.desc(),
+        )
+        .limit(1)
+    )
+    account = (await session.execute(stmt)).scalars().first()
+    if not account:
+        raise HTTPException(
+            404,
+            f"매칭 계정 없음: site={site_name} username={username}",
+        )
+    return {
+        "id": account.id,
+        "site_name": account.site_name,
+        "account_label": account.account_label,
+        "username": account.username,
+    }
+
+
 @extension_router.post("/sync-chrome-profile")
 async def sync_chrome_profile(
     body: SyncChromeProfileRequest,

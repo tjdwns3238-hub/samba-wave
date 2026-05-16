@@ -23,6 +23,7 @@ STATUS_DISPATCH_FAILED = (
     "DISPATCH_FAILED"  # 추출은 성공했으나 마켓 전송 실패 (재시도 대상)
 )
 STATUS_NO_TRACKING = "NO_TRACKING"  # 소싱처에 송장 아직 없음 (재시도 대상)
+STATUS_WRONG_ACCOUNT = "WRONG_ACCOUNT"  # 현재 로그인된 소싱처 계정과 주문 계정 불일치 (해당 계정 PC에서 재시도 필요)
 STATUS_CANCELLED = "CANCELLED"  # 소싱처에서 원주문이 취소됨 (재시도 안함)
 
 

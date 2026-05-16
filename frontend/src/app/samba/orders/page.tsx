@@ -783,6 +783,7 @@ export default function OrdersPage() {
                 { key: 'SENT_TO_MARKET', label: '마켓전송', color: '#22c55e' },
                 { key: 'DISPATCH_FAILED', label: '송장전송실패', color: '#dc2626' },
                 { key: 'NO_TRACKING', label: '미발송', color: '#f59e0b' },
+                { key: 'WRONG_ACCOUNT', label: '계정불일치', color: '#fb923c' },
                 { key: 'CANCELLED', label: '원주문취소', color: '#a855f7' },
                 { key: 'FAILED', label: '실패', color: '#ef4444' },
               ].map(({ key, label, color }) => {
@@ -822,7 +823,7 @@ export default function OrdersPage() {
                 const statusColor: Record<string, string> = {
                   PENDING: '#6b7280', DISPATCHED: '#0ea5e9', SCRAPED: '#16a34a',
                   SENT_TO_MARKET: '#22c55e', DISPATCH_FAILED: '#dc2626',
-                  NO_TRACKING: '#f59e0b', CANCELLED: '#a855f7', FAILED: '#ef4444',
+                  NO_TRACKING: '#f59e0b', WRONG_ACCOUNT: '#fb923c', CANCELLED: '#a855f7', FAILED: '#ef4444',
                 }
                 // 소싱처 원주문링크 URL 매핑 (대소문자/한글 변형 모두 대응)
                 // 롯데ON 선물주문은 일반 orderDetail 페이지에서 조회 안 됨 → giftBoxDetail 사용
@@ -916,6 +917,10 @@ export default function OrdersPage() {
 
             <div style={{ marginTop: 12, fontSize: 11, color: '#6b7280' }}>
               💡 송장수집 클릭 시점의 미입력건 큐잉 상태입니다. 자동 갱신 안 함 — 결과는 주문 테이블에서 확인하세요.
+              <div style={{ marginTop: 4 }}>
+                <span style={{ color: '#f59e0b' }}>미발송</span> = 소싱처에 송장 아직 미도착(시간 지나면 자동 재시도) ·{' '}
+                <span style={{ color: '#fb923c' }}>계정불일치</span> = 현재 로그인된 소싱처 계정과 주문 계정이 다름(해당 계정 PC에서 재시도 필요)
+              </div>
             </div>
           </div>
         </div>
