@@ -591,3 +591,6 @@ backend/.env.dev_backup
 
 # 세션 리포트 HTML (임시 산출물)
 session-report-*.html
+
+# 일회성 스크립트/로그
+tmp/
