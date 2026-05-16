@@ -900,6 +900,17 @@ _BLOCKED_PATHS: dict[str, str] = {
     "스포츠의류/운동화 > 여성스포츠의류 > 다운/패딩": "스포츠의류/운동화 > 여성스포츠의류 > 점퍼",
 }
 
+# 거래처 미허용 전시카테고리(FC) 코드 — disp_cat_id 해석 결과가 여기 들어가면 폴백 필요
+# FC08090202: (구) 다운/패딩 계열 미허용
+# FC08030602: 2026-05-16 moonol06 여성 점퍼 등록 시 9999 차단 확인
+_BLOCKED_DISP_CAT_IDS: frozenset[str] = frozenset({"FC08090202", "FC08030602"})
+
+# 미허용 FC 발생 시 폴백할 표준 BC 코드 (집업) — 점퍼와 가까운 안전 카테고리
+_FALLBACK_BC_FOR_BLOCKED_DISP = {
+    "여성": "BC41101400",  # 여성스포츠의류 > 집업
+    "남성": "BC41041300",  # 남성스포츠의류 > 집업
+}
+
 # BC23 패션의류 → BC41 스포츠의류 BC코드 변환
 _BC23_TO_BC41: dict[str, str] = {
     "BC23110400": "BC41101800",  # 여성의류>스커트 → 여성스포츠의류>스커트
@@ -1725,6 +1736,13 @@ class LotteonPlugin(MarketPlugin):
             disp_cat_id = _cached_data["disp_cat_id"]
             category_attr_ids = _cached_data["category_attr_ids"]
             _attr_raw = _cached_data["_attr_raw"]
+            # 폴백으로 BC 코드가 갈아끼워졌으면 캐시된 최종 BC도 복원
+            _cached_bc = _cached_data.get("resolved_category_id")
+            if _cached_bc and _cached_bc != category_id:
+                logger.info(
+                    f"[롯데ON] 캐시된 폴백 BC 적용: {category_id} → {_cached_bc}"
+                )
+                category_id = _cached_bc
             logger.info(
                 f"[롯데ON] 카테고리 캐시 히트: {category_id} → disp={disp_cat_id}, attr_ids={len(category_attr_ids)}개"
             )
@@ -1756,12 +1774,51 @@ class LotteonPlugin(MarketPlugin):
                 logger.info(
                     f"[롯데ON] 전시카테고리 조회: {category_id} → {disp_cat_id}, attr_ids={len(category_attr_ids)}개"
                 )
+
+                # ── 거래처 미허용 disp_cat_id 폴백 ──
+                # FC08030602/FC08090202 등 거래처가 못 쓰는 전시카테고리로 해석된 경우
+                # 집업 카테고리로 BC 코드를 갈아끼우고 disp/attr 재조회.
+                if disp_cat_id and disp_cat_id in _BLOCKED_DISP_CAT_IDS:
+                    _sex_for_fb = (product.get("sex") or "").strip()
+                    _fb_bc = _FALLBACK_BC_FOR_BLOCKED_DISP.get(
+                        _sex_for_fb, _FALLBACK_BC_FOR_BLOCKED_DISP["남성"]
+                    )
+                    logger.info(
+                        f"[롯데ON] 거래처 미허용 FC 감지 — 집업 폴백: "
+                        f"{category_id}({disp_cat_id}) → {_fb_bc}"
+                    )
+                    category_id = _fb_bc
+                    disp_cat_id = ""
+                    category_attr_ids = []
+                    _attr_raw = []
+                    try:
+                        cat_result2 = await client.get_categories(cat_id=category_id)
+                        items2 = cat_result2.get("itemList") or []
+                        if items2:
+                            d2 = items2[0].get("data", {})
+                            disp_list2 = d2.get("disp_list", [])
+                            if disp_list2:
+                                disp_cat_id = disp_list2[0].get("disp_cat_id", "")
+                            _attr_raw = d2.get("attr_list") or []
+                            category_attr_ids = [
+                                str(a.get("attr_id", ""))
+                                for a in _attr_raw
+                                if a.get("attr_id")
+                            ]
+                        logger.info(
+                            f"[롯데ON] 폴백 재조회: {category_id} → {disp_cat_id}, "
+                            f"attr_ids={len(category_attr_ids)}개"
+                        )
+                    except Exception as _e:
+                        logger.warning(f"[롯데ON] 폴백 카테고리 재조회 실패: {_e}")
+
                 _category_cache[_cat_cache_key] = (
                     time.time(),
                     {
                         "disp_cat_id": disp_cat_id,
                         "category_attr_ids": category_attr_ids,
                         "_attr_raw": _attr_raw,
+                        "resolved_category_id": category_id,
                     },
                 )
                 # 속성값 목록 상세 조회 (디버그 로깅 전용 — 캐시 미적용)

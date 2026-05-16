@@ -774,7 +774,9 @@ async def get_login_credential(
 @extension_router.get("/find-by-username")
 async def find_account_by_username(
     site_name: str = Query(..., description="사이트 ID (예: MUSINSA, LOTTEON)"),
-    username: str = Query(..., description="현재 브라우저에 로그인된 사용자 식별자 (아이디/이메일/닉네임)"),
+    username: str = Query(
+        ..., description="현재 브라우저에 로그인된 사용자 식별자 (아이디/이메일/닉네임)"
+    ),
     session: AsyncSession = Depends(get_read_session_dependency),
 ):
     """확장앱 전용 — 현재 로그인된 username을 SambaSourcingAccount의 account_id로 매핑.

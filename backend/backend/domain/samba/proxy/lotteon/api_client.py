@@ -1149,6 +1149,8 @@ class LotteonClient:
         brand = product.get("brand", "") or ""
         # 제조사: manufacturer → brand → "제조사 미확인" 순 폴백
         manufacturer = product.get("manufacturer", "") or brand or "제조사 미확인"
+        # 롯데ON mfcrNm 100Byte 제한 (UTF-8 기준)
+        manufacturer = _truncate_to_bytes(manufacturer, 100)
         style_code = product.get("style_code", "") or product.get("styleCode", "") or ""
         origin = product.get("origin", "") or ""
 
