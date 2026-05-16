@@ -645,7 +645,7 @@ async function handleTrackingJob(job) {
         const timeoutId = setTimeout(() => {
           _trackingPending.delete(requestId)
           resolve({ success: false, error: 'timeout: content script 응답 없음' })
-        }, 60000)
+        }, 120000)  // 60s → 120s: 자동 로그인 직후 무신사 SPA hydration + 모달 폴링 여유
         _trackingPending.set(requestId, { resolve, timeoutId, tabId })
 
         try {

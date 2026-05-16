@@ -16,7 +16,7 @@
 ;(() => {
   'use strict'
 
-  const MAX_WAIT_MS = 15000
+  const MAX_WAIT_MS = 30000  // 15s → 30s: 자동 로그인 직후 무신사 SPA 모달 늦게 뜨는 케이스 + Next.js hydration
   const POLL_INTERVAL = 300
   const SS_KEY = 'samba_tracking_request_id'
 

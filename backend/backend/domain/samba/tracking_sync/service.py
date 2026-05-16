@@ -367,14 +367,37 @@ async def enqueue_for_order(order_id: str, *, force: bool = False) -> dict[str, 
                 }
         else:
             # 기존 PENDING/DISPATCHED 잡을 FAILED 로 닫고 신규 잡 생성 — 중복 누적 방지
+            # PENDING 만 만료 — DISPATCHED(확장앱이 이미 받아 처리 중)는 보호해서 끝까지 처리.
+            # 무신사 잡은 직렬화 + SPA 응답 60~120초 걸리므로 진행 중 잡 닫으면 결과 손실.
+            # 사용자가 송장수집 빠르게 다시 누를 때 진행 중 잡까지 만료되던 회귀 차단.
             stale_stmt = select(SambaTrackingSyncJob).where(
                 SambaTrackingSyncJob.order_id == order_id,
-                SambaTrackingSyncJob.status.in_([STATUS_PENDING, STATUS_DISPATCHED]),
+                SambaTrackingSyncJob.status == STATUS_PENDING,
             )
+            stale_existed = False
             for stale in (await session.execute(stale_stmt)).scalars().all():
                 stale.status = STATUS_FAILED
                 stale.last_error = "강제 재큐잉으로 만료 처리"
                 stale.updated_at = datetime.now(_UTC)
+                stale_existed = True
+            # DISPATCHED 잡이 이미 있으면 중복 큐잉 안 함 (진행 중 보호)
+            dispatched_stmt = (
+                select(SambaTrackingSyncJob)
+                .where(
+                    SambaTrackingSyncJob.order_id == order_id,
+                    SambaTrackingSyncJob.status == STATUS_DISPATCHED,
+                )
+                .limit(1)
+            )
+            dispatched = (await session.execute(dispatched_stmt)).scalars().first()
+            if dispatched:
+                return {
+                    "success": True,
+                    "skipped": True,
+                    "reason": "이미 처리 중인 잡이 있어 강제 재큐잉 스킵",
+                    "jobId": dispatched.id,
+                }
+            _ = stale_existed  # 컨벤션 유지용
 
         # owner_device_id 미사용 — 어느 PC가 폴링하든 잡을 가져갈 수 있게 None 으로 적재.
         # 확장앱이 받아 현재 로그인 계정으로 시도 → 다른 계정 주문이면 패스(NO_TRACKING).

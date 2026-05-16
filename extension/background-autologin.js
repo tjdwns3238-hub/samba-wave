@@ -156,7 +156,7 @@ async function _spaDirectLogin(siteKey, username, password) {
   // 쿠키 직접 삭제는 서버 세션 잔존 + localStorage 잔여 + 무신사 보안 비정상 패턴 감지 위험.
   const _LOGOUT_URLS = {
     musinsa: 'https://www.musinsa.com/auth/logout',
-    ssg: 'https://my.ssg.com/member/logout.ssg',
+    ssg: 'https://www.ssg.com/comm/login/logout.ssg',
     lotteon: 'https://www.lotteon.com/p/member/logout',
     abcmart: 'https://abcmart.a-rt.com/member/logout',
   }
