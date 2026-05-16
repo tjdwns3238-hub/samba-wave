@@ -54,7 +54,8 @@ def build_tracking_url(site: str, sourcing_order_number: str) -> str:
         # 주문상세 페이지로 진입 → 확장앱이 "배송 조회" 버튼 클릭 → trace 페이지로 navigation.
         return f"https://www.musinsa.com/order/order-detail/{ord_no}"
     if s == "LOTTEON":
-        return f"https://www.lotteon.com/p/order/claim/orderDetail?odNo={ord_no}"
+        # orderDetail 페이지는 조회 실패(선물/직배 무관) → giftBoxDetail?type=snd 통일
+        return f"https://www.lotteon.com/p/order/claim/giftBoxDetail?odNo={ord_no}&type=snd"
     if s == "SSG":
         return f"https://pay.ssg.com/myssg/orderInfoDetail.ssg?orordNo={ord_no}"
     if s == "ABCMART":

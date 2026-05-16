@@ -108,7 +108,10 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://www.lotteon.com/p/order/claim/orderDetail*"],
+      "matches": [
+        "https://www.lotteon.com/p/order/claim/orderDetail*",
+        "https://www.lotteon.com/p/order/claim/giftBoxDetail*"
+      ],
       "js": ["content-tracking-lotteon.js"],
       "run_at": "document_idle"
     },
