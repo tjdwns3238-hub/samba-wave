@@ -163,11 +163,11 @@ export default function RewardsPage() {
   }
 
   return (
-    <div style={{ padding: '1rem', maxWidth: '1400px', margin: '0 auto' }}>
+    <div style={{ padding: '1rem', maxWidth: '1400px', margin: '0 auto', color: '#E5E5E5' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.75rem', marginBottom: '1rem' }}>
-        <h1 style={{ fontSize: '1.4rem', fontWeight: 700 }}>적립금</h1>
+        <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#E5E5E5' }}>적립금</h1>
         <span style={{ fontSize: '0.85rem', color: '#888' }}>
-          소싱처 계정별 무신사 머니 / 적립금 / ABC마트 스탬프 현황. 24시간 1회 자동 실행.
+          소싱처 계정별 무신사 머니 / 적립금 / ABC마트 스탬프 / 리뷰 현황. 24시간 1회 자동 실행.
         </span>
       </div>
 
@@ -200,14 +200,15 @@ export default function RewardsPage() {
           alignItems: 'center',
           gap: '0.75rem',
           marginBottom: '1rem',
-          padding: '0.6rem 0.8rem',
-          background: '#f4f6fa',
-          borderRadius: '6px',
-          border: '1px solid #dde2eb',
+          padding: '0.7rem 0.9rem',
+          background: 'rgba(30,30,30,0.5)',
+          backdropFilter: 'blur(20px)',
+          borderRadius: '8px',
+          border: '1px solid #2D2D2D',
           flexWrap: 'wrap',
         }}
       >
-        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>자동 실행:</span>
+        <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#E5E5E5' }}>자동 실행:</span>
         <input
           type="number"
           min={0}
@@ -218,11 +219,14 @@ export default function RewardsPage() {
             width: '70px',
             padding: '0.3rem 0.5rem',
             fontSize: '0.85rem',
-            border: '1px solid #c5cbd6',
+            background: '#1A1A1A',
+            border: '1px solid #2D2D2D',
             borderRadius: '4px',
+            color: '#E5E5E5',
+            outline: 'none',
           }}
         />
-        <span style={{ fontSize: '0.85rem' }}>시간마다 (0 = 비활성)</span>
+        <span style={{ fontSize: '0.85rem', color: '#A0A0A0' }}>시간마다 (0 = 비활성)</span>
         <button
           onClick={handleSaveInterval}
           disabled={busy === 'interval'}
@@ -230,7 +234,7 @@ export default function RewardsPage() {
         >
           {busy === 'interval' ? '저장 중' : '저장'}
         </button>
-        <span style={{ fontSize: '0.8rem', color: '#666' }}>
+        <span style={{ fontSize: '0.8rem', color: '#888' }}>
           마지막 자동 실행: {data?.last_auto_run_at ? formatRelative(data.last_auto_run_at) : '-'}
         </span>
         <div style={{ flex: 1 }} />
@@ -243,11 +247,12 @@ export default function RewardsPage() {
         <div
           style={{
             padding: '0.5rem 0.8rem',
-            background: '#fff3cd',
-            border: '1px solid #ffe69c',
+            background: 'rgba(255,68,68,0.1)',
+            border: '1px solid rgba(255,68,68,0.3)',
             borderRadius: '4px',
             fontSize: '0.85rem',
             marginBottom: '0.75rem',
+            color: '#FFB3B3',
           }}
         >
           {msg}
@@ -262,19 +267,21 @@ export default function RewardsPage() {
             <div
               key={site}
               style={{
-                border: '1px solid #dde2eb',
+                border: '1px solid #2D2D2D',
                 borderRadius: '8px',
                 overflow: 'hidden',
-                background: '#fff',
+                background: 'rgba(30,30,30,0.5)',
+                backdropFilter: 'blur(20px)',
               }}
             >
               <div
                 style={{
-                  padding: '0.6rem 0.9rem',
-                  background: '#f9fafc',
-                  borderBottom: '1px solid #dde2eb',
+                  padding: '0.65rem 0.9rem',
+                  background: 'rgba(20,20,20,0.6)',
+                  borderBottom: '1px solid #2D2D2D',
                   fontWeight: 700,
                   fontSize: '0.95rem',
+                  color: '#E5E5E5',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '0.5rem',
@@ -287,7 +294,7 @@ export default function RewardsPage() {
               </div>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                 <thead>
-                  <tr style={{ background: '#fafbfd', borderBottom: '1px solid #e3e7ee' }}>
+                  <tr>
                     <th style={thStyle}>계정</th>
                     {site === 'MUSINSA' && (
                       <>
@@ -323,8 +330,18 @@ export default function RewardsPage() {
             </div>
           ))}
           {grouped.size === 0 && (
-            <div style={{ color: '#888', fontSize: '0.9rem', padding: '1rem' }}>
-              활성 소싱처 계정이 없습니다. 설정 페이지에서 무신사/ABC마트 계정을 추가하세요.
+            <div
+              style={{
+                color: '#888',
+                fontSize: '0.9rem',
+                padding: '1.5rem',
+                textAlign: 'center',
+                background: 'rgba(30,30,30,0.5)',
+                border: '1px solid #2D2D2D',
+                borderRadius: '8px',
+              }}
+            >
+              활성 소싱처 계정이 없습니다. 설정 페이지에서 무신사/ABC마트/SSG/GS샵/롯데ON/네이버/크림 계정을 추가하세요.
             </div>
           )}
         </div>
@@ -349,9 +366,9 @@ function AccountRow({
   const abcFresh = isFresh24h(a.last_abcmart_attendance_at)
 
   return (
-    <tr style={{ borderBottom: '1px solid #f0f2f6' }}>
+    <tr style={{ borderBottom: '1px solid #2D2D2D' }}>
       <td style={tdStyle}>
-        <div style={{ fontWeight: 600 }}>{a.account_label}</div>
+        <div style={{ fontWeight: 600, color: '#E5E5E5' }}>{a.account_label}</div>
         <div style={{ color: '#888', fontSize: '0.75rem' }}>{a.username}</div>
       </td>
 
@@ -371,7 +388,7 @@ function AccountRow({
             <div>
               {a.musinsa_attendance_streak ? `${fmtNum(a.musinsa_attendance_streak)}일 연속` : '-'}
             </div>
-            <div style={{ color: attendanceFresh ? '#51CF66' : '#999', fontSize: '0.75rem' }}>
+            <div style={{ color: attendanceFresh ? '#51CF66' : '#666', fontSize: '0.75rem' }}>
               {formatRelative(a.last_musinsa_attendance_at)}
             </div>
           </td>
@@ -379,7 +396,7 @@ function AccountRow({
             <div>
               {a.last_musinsa_snap_reward ? `${fmtNum(a.last_musinsa_snap_reward)}원` : '-'}
             </div>
-            <div style={{ color: snapFresh ? '#51CF66' : '#999', fontSize: '0.75rem' }}>
+            <div style={{ color: snapFresh ? '#51CF66' : '#666', fontSize: '0.75rem' }}>
               {formatRelative(a.last_musinsa_snap_like_at)}
             </div>
           </td>
@@ -391,7 +408,7 @@ function AccountRow({
           <td style={tdStyle}>{fmtNum(a.abcmart_stamp_count ?? 0)}개</td>
           <td style={tdStyle}>{fmtNum(a.abcmart_stamp_score ?? 0)}</td>
           <td style={tdStyle}>
-            <div style={{ color: abcFresh ? '#51CF66' : '#999', fontSize: '0.75rem' }}>
+            <div style={{ color: abcFresh ? '#51CF66' : '#666', fontSize: '0.75rem' }}>
               {formatRelative(a.last_abcmart_attendance_at)}
             </div>
           </td>
@@ -410,7 +427,7 @@ function AccountRow({
             <div>
               {fmtNum(Number(total))}건 누적 {last ? `(+${fmtNum(Number(last))})` : ''}
             </div>
-            <div style={{ color: fresh ? '#51CF66' : '#999', fontSize: '0.75rem' }}>
+            <div style={{ color: fresh ? '#51CF66' : '#666', fontSize: '0.75rem' }}>
               {formatRelative(at)}
             </div>
           </td>
@@ -490,40 +507,47 @@ function AccountRow({
 }
 
 const cardStyle: React.CSSProperties = {
-  padding: '0.7rem 1rem',
-  background: '#fff',
-  border: '1px solid #dde2eb',
-  borderRadius: '6px',
+  padding: '0.75rem 1rem',
+  background: 'rgba(30,30,30,0.5)',
+  backdropFilter: 'blur(20px)',
+  border: '1px solid #2D2D2D',
+  borderRadius: '8px',
+  color: '#E5E5E5',
 }
 
 const labelStyle: React.CSSProperties = {
   fontSize: '0.75rem',
-  color: '#666',
-  marginBottom: '0.2rem',
+  color: '#888',
+  marginBottom: '0.25rem',
 }
 
 const valueStyle: React.CSSProperties = {
   fontSize: '1.2rem',
   fontWeight: 700,
+  color: '#E5E5E5',
 }
 
 const thStyle: React.CSSProperties = {
-  padding: '0.45rem 0.7rem',
+  padding: '0.5rem 0.75rem',
   textAlign: 'left',
   fontWeight: 600,
-  color: '#444',
-  fontSize: '0.8rem',
+  color: '#A0A0A0',
+  fontSize: '0.78rem',
+  borderBottom: '1px solid #2D2D2D',
+  background: 'rgba(20,20,20,0.6)',
 }
 
 const tdStyle: React.CSSProperties = {
-  padding: '0.45rem 0.7rem',
+  padding: '0.5rem 0.75rem',
   verticalAlign: 'top',
+  color: '#E5E5E5',
+  fontSize: '0.85rem',
 }
 
 const btnStylePrimary: React.CSSProperties = {
   padding: '0.35rem 0.7rem',
   fontSize: '0.8rem',
-  background: '#4C9AFF',
+  background: '#FF4444',
   color: '#fff',
   border: 'none',
   borderRadius: '4px',
@@ -534,9 +558,9 @@ const btnStylePrimary: React.CSSProperties = {
 const btnStyleSmall: React.CSSProperties = {
   padding: '0.2rem 0.5rem',
   fontSize: '0.75rem',
-  background: '#f4f6fa',
-  color: '#333',
-  border: '1px solid #d2d8e0',
+  background: '#1A1A1A',
+  color: '#E5E5E5',
+  border: '1px solid #2D2D2D',
   borderRadius: '3px',
   cursor: 'pointer',
 }
@@ -544,7 +568,7 @@ const btnStyleSmall: React.CSSProperties = {
 const btnStyleSmallPrimary: React.CSSProperties = {
   padding: '0.2rem 0.55rem',
   fontSize: '0.75rem',
-  background: '#4C9AFF',
+  background: '#FF4444',
   color: '#fff',
   border: 'none',
   borderRadius: '3px',
