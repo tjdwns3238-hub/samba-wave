@@ -615,8 +615,25 @@ async function handleTrackingJob(job) {
     // 송장 페이지 진입 → 결과 수신
     // 사용자 요청(2026-05-16): 송장수집 시 포커스 뺏지 않도록 모든 사이트 active:false 통일.
     // MUSINSA hydration 이슈는 content-tracking-musinsa.js 의 폴링 로직으로 대응.
+    // chrome.tabs.create 호출은 다른 탭이 detach/close 전이 중이거나 사용자가 탭을 드래그하는
+      // 짧은 순간에 "Tabs cannot be edited right now (user may be dragging a tab)" 로 거부될 수 있다.
+      // 일시적이므로 짧은 백오프로 최대 3회 재시도.
+      const _createTabWithRetry = async () => {
+        let lastErr = null
+        for (let i = 0; i < 3; i++) {
+          try {
+            return await chrome.tabs.create({ url, active: false })
+          } catch (e) {
+            lastErr = e
+            const msg = String(e?.message || e)
+            if (!/Tabs cannot be edited|dragging/i.test(msg)) throw e
+            await new Promise(r => setTimeout(r, 800 + i * 600))
+          }
+        }
+        throw lastErr
+      }
     const _runOnce = async () => {
-      const tab = await chrome.tabs.create({ url, active: false })
+      const tab = await _createTabWithRetry()
       tabId = tab.id
       await waitForTabLoad(tabId, 30000)
 

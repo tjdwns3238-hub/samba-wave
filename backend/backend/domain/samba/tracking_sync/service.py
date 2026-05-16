@@ -607,6 +607,7 @@ async def apply_tracking_result(
             elif (
                 "captcha" in reason_lc
                 or "미발송" in reason
+                or "배송대기" in reason
                 or "no_tracking" in reason_lc
             ):
                 job.status = STATUS_NO_TRACKING
