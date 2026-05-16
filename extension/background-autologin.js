@@ -152,6 +152,34 @@ async function _spaDirectLogin(siteKey, username, password) {
   const site = AUTO_LOGIN_SITES[siteKey]
   if (!site) return false
 
+  // [계정 전환 필수] 이미 로그인된 세션이 있으면 무신사/SSG 등이 로그인 페이지 진입 시
+  // 자동으로 마이페이지로 리다이렉트 → 로그인 폼 안 보임 → SPA input 폴링 timeout → 실패.
+  // → 진입 전 해당 사이트 쿠키 전부 삭제(로그아웃 효과)해서 항상 새 로그인 페이지 보장.
+  const _COOKIE_CLEAR_DOMAINS = {
+    musinsa: 'musinsa.com',
+    ssg: 'ssg.com',
+    lotteon: 'lotteon.com',
+    abcmart: 'a-rt.com',
+  }
+  const _clearDomain = _COOKIE_CLEAR_DOMAINS[siteKey]
+  if (_clearDomain) {
+    try {
+      const cookies = await chrome.cookies.getAll({ domain: _clearDomain })
+      let removed = 0
+      for (const c of cookies) {
+        const cleanDomain = c.domain.replace(/^\./, '')
+        const url = `${c.secure ? 'https' : 'http'}://${cleanDomain}${c.path}`
+        try {
+          await chrome.cookies.remove({ url, name: c.name })
+          removed++
+        } catch {}
+      }
+      console.log(`[자동로그인][SPA] ${site.name} 기존 세션 쿠키 ${removed}개 삭제 (계정 전환 위해 로그아웃)`)
+    } catch (e) {
+      console.warn(`[자동로그인][SPA] 쿠키 삭제 실패: ${e?.message || e}`)
+    }
+  }
+
   let tabId = null
   let tabCreated = false
 

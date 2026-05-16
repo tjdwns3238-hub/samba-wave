@@ -581,6 +581,11 @@ async function _invalidateCurrentAccountCache(site) {
   try { await chrome.storage.local.remove(cacheKey) } catch {}
 }
 
+// 송장수집용 — 마지막으로 ensureLoggedIn 성공한 계정 메모리 캐시 (autoLoginKey → accountId).
+// _detectCurrentSourcingAccount 가 username 스크랩에 실패해도(currentAccountId=null)
+// 이 캐시로 잡 계정과 비교해 선제 스왑 여부 판단 → 같은 계정 잡 연속이면 스왑 스킵.
+const _lastEnsuredTrackingAccount = {}
+
 async function handleTrackingJob(job) {
   const { requestId, site, url, sourcingOrderNumber, sourcingAccountId } = job
   console.log(`[송장] 잡 수신 site=${site} ord=${sourcingOrderNumber} acc=${sourcingAccountId || '-'} req=${requestId}`)
@@ -657,8 +662,8 @@ async function handleTrackingJob(job) {
     }
 
     // 선제 스왑 헬퍼 — 잡 계정으로 ensureLoggedIn → 캐시 무효화. 성공 여부 반환.
+    const autoLoginKey = _TRACKING_AUTO_LOGIN_MAP[site]
     const _swapToJobAccount = async (reason) => {
-      const autoLoginKey = _TRACKING_AUTO_LOGIN_MAP[site]
       if (!autoLoginKey || typeof globalThis.ensureLoggedIn !== 'function' || !sourcingAccountId) {
         console.log(`[송장] 스왑 스킵(${reason}) — 미지원 사이트(${site}) 또는 accountId 없음`)
         return false
@@ -668,6 +673,8 @@ async function handleTrackingJob(job) {
         const ok = await globalThis.ensureLoggedIn(autoLoginKey, { accountId: sourcingAccountId })
         if (ok) {
           try { await _invalidateCurrentAccountCache(site) } catch {}
+          // 메모리 캐시 갱신 — 다음 잡에서 같은 계정이면 스왑 스킵
+          _lastEnsuredTrackingAccount[autoLoginKey] = sourcingAccountId
           console.log(`[송장] 계정 스왑 성공 — acc=${sourcingAccountId}`)
         } else {
           console.warn(`[송장] 계정 스왑 실패(${reason}) acc=${sourcingAccountId}`)
@@ -679,16 +686,25 @@ async function handleTrackingJob(job) {
       }
     }
 
-    // 1단계 — 잡 계정 식별됐고 현재 로그인과 다르면 선제 스왑
-    const _knownMismatch = currentAccountId && sourcingAccountId && currentAccountId !== sourcingAccountId
+    // 1단계 — 잡 계정과 "마지막 스왑 계정" 또는 "현재 로그인 계정" 이 다르면 선제 스왑
+    //   • currentAccountId(DOM 스크랩)는 무신사 mypage username 못 잡으면 null → 신뢰 못함.
+    //   • _lastEnsuredTrackingAccount(메모리 캐시)는 ensureLoggedIn 성공 이력 — ground truth.
+    //   • 둘 다 잡 계정과 다르면 선제 스왑. 메모리 캐시 매칭이면 굳이 스왑 안 함(빠른 경로).
+    const _lastEnsured = autoLoginKey ? _lastEnsuredTrackingAccount[autoLoginKey] : null
+    const _knownMismatch = sourcingAccountId && (
+      (_lastEnsured && _lastEnsured !== sourcingAccountId) ||  // 메모리 캐시와 불일치
+      (!_lastEnsured && currentAccountId && currentAccountId !== sourcingAccountId) ||  // DOM 캐시와 불일치
+      (!_lastEnsured && !currentAccountId)  // 둘 다 모름 → 안전하게 스왑
+    )
     let _preemptiveSwapAttempted = false
     if (_knownMismatch) {
       _preemptiveSwapAttempted = true
-      const swapOk = await _swapToJobAccount('preemptive-mismatch')
+      const swapOk = await _swapToJobAccount('preemptive')
       if (!swapOk) {
-        // 스왑 실패 — 현재 세션 그대로 1차 시도 (어차피 wrong_account 날 가능성 큼).
-        // 결과적으로 wrong_account 보고 → 다른 PC fallback 또는 운영자 수동 처리.
+        // 스왑 실패 — 현재 세션 그대로 1차 시도. wrong_account 보고 후 다른 PC fallback.
       }
+    } else if (_lastEnsured && _lastEnsured === sourcingAccountId) {
+      console.log(`[송장] 메모리 캐시 매칭 — 스왑 스킵 (acc=${sourcingAccountId})`)
     }
 
     // 2단계 — 1차 시도
