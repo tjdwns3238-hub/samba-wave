@@ -585,13 +585,12 @@ async function handleTrackingJob(job) {
   const { requestId, site, url, sourcingOrderNumber, sourcingAccountId } = job
   console.log(`[송장] 잡 수신 site=${site} ord=${sourcingOrderNumber} acc=${sourcingAccountId || '-'} req=${requestId}`)
 
-  // [안전망 정책] — 현재 로그인된 계정으로 먼저 시도 (강제 재로그인 안함).
-  // 잡당 무조건 재로그인하면 캡챠 한 번 막혔을 때 정상 작동하던 계정 처리까지 도미노로 깨짐.
-  // → 0단계: 현재 로그인된 계정 식별 (캐시 30분)
-  //   - 잡 매칭 계정 = 현재 계정 → 빠른 경로 (1차 시도만, 재로그인 비용 0)
-  //   - 잡 매칭 계정 ≠ 현재 계정 → 느린 경로 (1차 시도 + wrong_account면 재로그인 후 재시도)
-  // → 1차: 현재 로그인 상태 그대로 스크랩
-  // → 2차: wrong_account 또는 needsLogin 감지 시에만 주문 매칭 계정으로 강제 재로그인 후 재시도
+  // [정책 2026-05-16] — 한 PC 다계정 순회 지원.
+  // → 0단계: 현재 로그인 계정 감지 (캐시 30분)
+  // → 1단계: 잡 계정 ≠ 현재 계정이면 **선제적 ensureLoggedIn 스왑** (잡 처리 전 미리 로그인 전환)
+  //          백엔드가 sourcing_account_id 로 그룹화 적재하므로 스왑 횟수는 계정 수 ≈ N회로 최소화.
+  // → 2단계: 1차 시도. 실패면 wrong_account/needsLogin 시 한 번 더 재로그인 시도.
+  // 멀티 PC 운영 시: ensureLoggedIn 자체가 실패하면 wrong_account 보고 → 다른 PC fallback.
 
   // 0단계 — 현재 로그인 계정 식별
   let currentAccountId = null
@@ -602,9 +601,9 @@ async function handleTrackingJob(job) {
   }
   const _isCurrentMatch = currentAccountId && sourcingAccountId && currentAccountId === sourcingAccountId
   if (currentAccountId) {
-    console.log(`[송장] 현재 로그인=${currentAccountId} / 잡 매칭=${sourcingAccountId || '-'} → ${_isCurrentMatch ? '빠른 경로(매칭)' : '느린 경로(미매칭, 재로그인 가능성)'}`)
+    console.log(`[송장] 현재 로그인=${currentAccountId} / 잡 매칭=${sourcingAccountId || '-'} → ${_isCurrentMatch ? '매칭(스왑 불필요)' : '미매칭(선제 스왑 시도)'}`)
   } else {
-    console.log(`[송장] 현재 로그인 계정 식별 불가 — 기본 경로(1차+조건부재시도)`)
+    console.log(`[송장] 현재 로그인 계정 식별 불가 — 1차 시도 후 조건부 스왑`)
   }
 
   let tabId = null
@@ -657,55 +656,58 @@ async function handleTrackingJob(job) {
       })
     }
 
-    // 사전 미매칭 판정 — 현재 로그인 계정이 식별됐고 잡 계정과 다르면 처리 자체를 스킵.
-    // [중요] 이 PC가 현재 로그인 계정의 매칭 잡 처리에 집중할 수 있도록, 미매칭 잡은
-    //   로그인 스왑하지 않고 wrong_account 로 즉시 보고 → 백엔드가 WRONG_ACCOUNT 분류.
-    //   해당 계정 PC가 폴링하거나 운영자가 수동 스위치 후 재시도하게 위임.
-    //   (강제 스왑하면 현재 처리 중인 매칭 잡 + 다른 매칭 잡 큐 전체 도미노로 깨짐)
-    const _knownMismatch = currentAccountId && sourcingAccountId && currentAccountId !== sourcingAccountId
-    let result
-    let _skipSwap = false
-    if (_knownMismatch) {
-      console.log(`[송장] 사전 미매칭 감지 → 매칭 잡 우선 처리 위해 스킵 (이 PC는 ${currentAccountId} 전담)`)
-      result = {
-        success: false,
-        error: `wrong_account: 현재 로그인 계정(${currentAccountId}) 과 잡 매칭 계정(${sourcingAccountId}) 불일치 — 해당 계정 PC가 처리 필요`,
-        wrongAccount: true,
+    // 선제 스왑 헬퍼 — 잡 계정으로 ensureLoggedIn → 캐시 무효화. 성공 여부 반환.
+    const _swapToJobAccount = async (reason) => {
+      const autoLoginKey = _TRACKING_AUTO_LOGIN_MAP[site]
+      if (!autoLoginKey || typeof globalThis.ensureLoggedIn !== 'function' || !sourcingAccountId) {
+        console.log(`[송장] 스왑 스킵(${reason}) — 미지원 사이트(${site}) 또는 accountId 없음`)
+        return false
       }
-      _skipSwap = true  // 강제 재로그인 절대 금지 — 현재 계정 세션 보호
-    } else {
-      // 1차 시도 — 현재 로그인된 계정 그대로 (매칭이거나 식별 불가일 때)
-      result = await _runOnce()
+      console.log(`[송장] 계정 스왑 시도(${reason}) → acc=${sourcingAccountId}`)
+      try {
+        const ok = await globalThis.ensureLoggedIn(autoLoginKey, { accountId: sourcingAccountId })
+        if (ok) {
+          try { await _invalidateCurrentAccountCache(site) } catch {}
+          console.log(`[송장] 계정 스왑 성공 — acc=${sourcingAccountId}`)
+        } else {
+          console.warn(`[송장] 계정 스왑 실패(${reason}) acc=${sourcingAccountId}`)
+        }
+        return ok
+      } catch (e) {
+        console.warn(`[송장] 계정 스왑 예외: ${e?.message || e}`)
+        return false
+      }
     }
 
-    // 2차 — wrong_account 또는 needsLogin 감지 시에만 주문 매칭 계정으로 강제 로그인 후 재시도
-    // (계정불일치만 재시도 — 단순 미발송/captcha는 재시도해도 결과 동일)
+    // 1단계 — 잡 계정 식별됐고 현재 로그인과 다르면 선제 스왑
+    const _knownMismatch = currentAccountId && sourcingAccountId && currentAccountId !== sourcingAccountId
+    let _preemptiveSwapAttempted = false
+    if (_knownMismatch) {
+      _preemptiveSwapAttempted = true
+      const swapOk = await _swapToJobAccount('preemptive-mismatch')
+      if (!swapOk) {
+        // 스왑 실패 — 현재 세션 그대로 1차 시도 (어차피 wrong_account 날 가능성 큼).
+        // 결과적으로 wrong_account 보고 → 다른 PC fallback 또는 운영자 수동 처리.
+      }
+    }
+
+    // 2단계 — 1차 시도
+    let result = await _runOnce()
+
+    // 3단계 — wrong_account/needsLogin 감지 시 (선제 스왑 안 했거나 스왑 후에도 실패) 재로그인 후 1회 재시도
     const _isWrongAccount = result && (
       result.wrongAccount === true ||
       (typeof result.error === 'string' && /wrong_account|not_my_order|account_mismatch|계정불일치/i.test(result.error))
     )
     const _needsLogin = result && result.needsLogin
-    if ((_isWrongAccount || _needsLogin) && !_skipSwap) {
+    if ((_isWrongAccount || _needsLogin) && !_preemptiveSwapAttempted) {
       const reason = _isWrongAccount ? 'wrong_account' : 'needsLogin'
-      console.log(`[송장] ${reason} 감지 → 주문 매칭 계정으로 강제 재로그인 후 재시도 (acc=${sourcingAccountId || '-'})`)
+      console.log(`[송장] ${reason} 감지 → 재로그인 후 재시도 (acc=${sourcingAccountId || '-'})`)
       try { if (tabId) { await chrome.tabs.remove(tabId); tabId = null } } catch {}
-      let loginOk = false
-      try {
-        const autoLoginKey = _TRACKING_AUTO_LOGIN_MAP[site]
-        if (autoLoginKey && typeof globalThis.ensureLoggedIn === 'function' && sourcingAccountId) {
-          loginOk = await globalThis.ensureLoggedIn(autoLoginKey, { accountId: sourcingAccountId })
-        } else {
-          console.log(`[송장] 강제 재로그인 스킵 — 미지원 사이트(${site}) 또는 accountId 없음`)
-        }
-      } catch (e) {
-        console.warn(`[송장] 재로그인 실패: ${e?.message || e}`)
-      }
-      // 재로그인 성공 시에만 재시도 — 실패 시 1차 결과(wrong_account)를 그대로 보고해서
-      // 백엔드가 WRONG_ACCOUNT 상태로 분류하게 함. 캡챠 등으로 로그인 못한 케이스에서
-      // 무한 retry 폭주 방지.
+      const loginOk = await _swapToJobAccount(reason)
+      // 재로그인 성공 시에만 재시도 — 실패 시 1차 결과를 그대로 보고해서
+      // 백엔드가 WRONG_ACCOUNT 상태로 분류. 캡챠 등으로 로그인 못한 케이스에서 무한 retry 폭주 방지.
       if (loginOk) {
-        // 로그인 계정이 바뀌었으니 현재 계정 캐시 무효화 — 다음 잡에서 재감지
-        try { await _invalidateCurrentAccountCache(site) } catch {}
         result = await _runOnce()
       }
     }

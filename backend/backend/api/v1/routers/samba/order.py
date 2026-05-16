@@ -1542,6 +1542,51 @@ async def list_tracking_sync_jobs_by_ids(body: dict) -> dict:
     return {"counts": counts, "recent": items}
 
 
+@router.post("/tracking-sync/cancel-batch")
+async def cancel_tracking_sync_batch(body: dict) -> dict:
+    """송장수집 모달 닫기 시 배치 잡 일괄 취소.
+
+    PENDING/DISPATCHED 상태의 잡만 CANCELLED 로 전환. 이미 SCRAPED/SENT 등
+    완료된 잡은 변경 안 함 (결과 보존). 확장앱이 in-flight 로 들고 있는 잡은
+    apply_tracking_result 진입 시 상태가 CANCELLED 면 결과 폐기.
+    """
+    from sqlalchemy import update
+    from datetime import datetime, timezone
+    from backend.db.orm import get_write_session
+    from backend.domain.samba.tracking_sync.model import (
+        SambaTrackingSyncJob,
+        STATUS_PENDING,
+        STATUS_DISPATCHED,
+        STATUS_CANCELLED,
+    )
+
+    raw_ids = body.get("job_ids") or []
+    if not isinstance(raw_ids, list):
+        raise HTTPException(400, "job_ids 는 배열이어야 합니다")
+    job_ids: list[str] = [str(x) for x in raw_ids if x]
+    if not job_ids:
+        return {"cancelled": 0}
+    if len(job_ids) > 1000:
+        job_ids = job_ids[:1000]
+
+    async with get_write_session() as session:
+        stmt = (
+            update(SambaTrackingSyncJob)
+            .where(
+                SambaTrackingSyncJob.id.in_(job_ids),
+                SambaTrackingSyncJob.status.in_([STATUS_PENDING, STATUS_DISPATCHED]),
+            )
+            .values(
+                status=STATUS_CANCELLED,
+                last_error="모달 닫기로 배치 취소",
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        result = await session.execute(stmt)
+        await session.commit()
+        return {"cancelled": result.rowcount or 0}
+
+
 @router.get("/cancel-alert-count")
 async def get_cancel_alert_count(
     session: AsyncSession = Depends(get_read_session_dependency),

@@ -1173,7 +1173,9 @@ class JobWorker:
                     if blocked_account_ids and effective_account_ids:
                         _before = list(effective_account_ids)
                         effective_account_ids = [
-                            a for a in effective_account_ids if a not in blocked_account_ids
+                            a
+                            for a in effective_account_ids
+                            if a not in blocked_account_ids
                         ]
                         _removed = [a for a in _before if a in blocked_account_ids]
                         if _removed:
@@ -1245,7 +1247,10 @@ class JobWorker:
                                 f"[{i + 1}/{total:,}] {prod_name} → {acc_label}: {err}{rl}",
                             )
                             # 계정 등록 한도 초과 등 — 이후 상품에서 이 계정 자동 스킵
-                            if _is_account_blocking_error(err) and acc_id not in blocked_account_ids:
+                            if (
+                                _is_account_blocking_error(err)
+                                and acc_id not in blocked_account_ids
+                            ):
                                 blocked_account_ids.add(acc_id)
                                 blocked_account_reasons[acc_id] = err
                                 _add_job_log(

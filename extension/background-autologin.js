@@ -300,11 +300,32 @@ async function _spaDirectLogin(siteKey, username, password) {
       const POLL_INTERVAL = 1500
       const TIMEOUT = 15000
       const startTime = Date.now()
-      // 자격증명 오류로 간주할 alert 메시지 키워드 — 그 외 부수 alert(예: 비번변경 권장,
-      // 약관/이벤트 안내)는 로그인 성공 여부와 무관하므로 false-positive 차단.
-      const CREDENTIAL_ERROR_TOKENS = [
-        '아이디', '비밀번호', '비번', '일치하지', '일치하는', '존재하지', '잘못',
-        '오류', '실패', '다시', '확인', '재입력', '에러', '캡차', 'captcha',
+      // 자격증명 오류로 간주할 alert 메시지 — 다단어 구문만 사용.
+      // 단독 키워드("비밀번호"/"확인" 등)는 부수 alert("비밀번호를 변경해 주세요" 등)에
+      // 걸려 false-positive 알람을 유발하므로 사용 금지.
+      const CREDENTIAL_ERROR_PHRASES = [
+        '일치하지 않',
+        '일치하는 회원',
+        '아이디 또는',
+        '비밀번호가 일치',
+        '비밀번호를 잘못',
+        '비밀번호를 다시',
+        '비밀번호가 틀',
+        '비밀번호를 확인',
+        '아이디를 잘못',
+        '아이디를 다시',
+        '아이디를 확인',
+        '존재하지 않',
+        '잘못 입력',
+        '잘못되었',
+        '재입력',
+        '5회 이상',
+        '5회를 초과',
+        '캡차',
+        'captcha',
+        '보안문자',
+        '로그인 정보가',
+        '회원이 아닙',
       ]
       while (Date.now() - startTime < TIMEOUT) {
         await wait(POLL_INTERVAL)
@@ -321,7 +342,7 @@ async function _spaDirectLogin(siteKey, username, password) {
         // 자격증명 오류 alert만 실패로 간주 (URL이 로그인 페이지에 남아있을 때만)
         if (dialogMessage && dialogMessage.length > 0 && !urlLeftLoginPage) {
           const msgLower = dialogMessage.toLowerCase()
-          const looksLikeCredentialError = CREDENTIAL_ERROR_TOKENS.some(t => msgLower.includes(t.toLowerCase()))
+          const looksLikeCredentialError = CREDENTIAL_ERROR_PHRASES.some(p => msgLower.includes(p.toLowerCase()))
           if (looksLikeCredentialError) {
             console.log(`[자동로그인][SPA] ${site.name} 자격증명 오류 alert: "${dialogMessage.substring(0, 60)}"`)
             chrome.debugger.onEvent.removeListener(dialogHandler)
@@ -484,6 +505,20 @@ async function _ensureLoggedInImpl(siteKey, accountId) {
     }
   }
 
+  // 계정별 최근 성공 캐시 체크 — 같은 계정으로 10분 이내 로그인 확인됐으면 스킵
+  // (송장수집 100건 잡 돌릴 때 매 주문마다 ensureLoggedIn 트리거되는 비용 + alert 폭주 차단)
+  const ACCOUNT_LOGIN_TTL_MS = 10 * 60 * 1000
+  try {
+    const cache = globalThis._lastAutoLoginSuccessAt?.[siteKey]
+    const accKey = accountId || '_default'
+    const lastTs = (cache && typeof cache === 'object') ? (cache[accKey] || 0) : 0
+    if (lastTs && (Date.now() - lastTs) < ACCOUNT_LOGIN_TTL_MS) {
+      const ageSec = Math.round((Date.now() - lastTs) / 1000)
+      console.log(`[자동로그인] ${site.name}(${accKey}) ${ageSec}초 전 성공 — 스킵`)
+      return true
+    }
+  } catch {}
+
   autoLoginState.inProgress[siteKey] = true
   autoLoginState.lastAttemptAt[siteKey] = Date.now()
 
@@ -508,17 +543,18 @@ async function _ensureLoggedInImpl(siteKey, accountId) {
     if (ok) {
       autoLoginState.failedAttempts[siteKey] = 0
       autoLoginState.cooldownUntil[siteKey] = 0
-      // 자동로그인 성공 시각 기록 — sourcing detail의 _detectLoginStatus false-positive 방지용
-      // (LOTTEON 상세페이지처럼 헤더 셀렉터로 로그인 판정 어려운 사이트의 무한 트리거 차단)
-      // storage에도 저장 — 서비스 워커 재시작 후에도 1시간 이내 성공 이력 유지
-      try { globalThis._lastAutoLoginSuccessAt = globalThis._lastAutoLoginSuccessAt || {} } catch {}
+      // 자동로그인 성공 시각 기록 — [siteKey][accountId] 2계층 구조.
+      // 같은 사이트라도 계정이 다르면 별도 캐시. accountId 없으면 '_default' 키로 저장.
+      // storage 동기화로 서비스 워커 재시작 후에도 캐시 복원.
       try {
-        globalThis._lastAutoLoginSuccessAt[siteKey] = Date.now()
-        const stored = {}
-        for (const k of Object.keys(globalThis._lastAutoLoginSuccessAt || {})) {
-          stored[k] = globalThis._lastAutoLoginSuccessAt[k]
-        }
-        chrome.storage.local.set({ _lastAutoLoginSuccessAt: stored }).catch(() => {})
+        globalThis._lastAutoLoginSuccessAt = globalThis._lastAutoLoginSuccessAt || {}
+        const accKey = accountId || '_default'
+        const prevSite = globalThis._lastAutoLoginSuccessAt[siteKey]
+        // 기존에 number(구버전)였으면 객체로 마이그레이션
+        const siteMap = (prevSite && typeof prevSite === 'object') ? prevSite : {}
+        siteMap[accKey] = Date.now()
+        globalThis._lastAutoLoginSuccessAt[siteKey] = siteMap
+        chrome.storage.local.set({ _lastAutoLoginSuccessAt: globalThis._lastAutoLoginSuccessAt }).catch(() => {})
       } catch {}
       console.log(`[자동로그인] ✅ ${site.name} 성공 — 폴링 자동 재개`)
     } else {

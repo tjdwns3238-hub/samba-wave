@@ -386,6 +386,11 @@ export const orderApi = {
       method: 'POST',
       body: JSON.stringify({ job_ids: jobIds }),
     }),
+  cancelTrackingSyncBatch: (jobIds: string[]) =>
+    request<{ cancelled: number }>(`${SAMBA_PREFIX}/orders/tracking-sync/cancel-batch`, {
+      method: 'POST',
+      body: JSON.stringify({ job_ids: jobIds }),
+    }),
   getAlarmSettings: () =>
     request<{ hour: number; min: number; sleep_start: string; sleep_end: string }>(`${SAMBA_PREFIX}/orders/alarm-settings`),
   saveAlarmSettings: (data: { hour: number; min: number; sleep_start: string; sleep_end: string }) =>

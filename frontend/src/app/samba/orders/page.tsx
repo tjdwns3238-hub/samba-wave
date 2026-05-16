@@ -728,7 +728,20 @@ export default function OrdersPage() {
       {/* 송장 자동전송 진행 현황 모달 */}
       {trackingStatusOpen && (
         <div
-          onClick={() => setTrackingStatusOpen(false)}
+          onClick={() => {
+            // 모달 닫기 = 송장 수집 프로세스 즉시 종료 — 배치 PENDING/DISPATCHED 잡을
+            // CANCELLED 로 일괄 전환. 확장앱 in-flight 잡은 결과 폐기 가드로 무시됨.
+            if (trackingBatchIds.length > 0) {
+              orderApi.cancelTrackingSyncBatch(trackingBatchIds)
+                .then(res => {
+                  if ((res?.cancelled || 0) > 0) {
+                    setLogMessages(prev => [...prev, `[송장] 배치 취소: ${fmtNum(res.cancelled)}건`])
+                  }
+                })
+                .catch(err => setLogMessages(prev => [...prev, `[송장] 취소 실패: ${(err as Error).message}`]))
+            }
+            setTrackingStatusOpen(false)
+          }}
           style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
             display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
@@ -768,7 +781,18 @@ export default function OrdersPage() {
                   style={{ padding: '4px 10px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 12 }}
                 >새로고침</button>
                 <button
-                  onClick={() => setTrackingStatusOpen(false)}
+                  onClick={() => {
+                    if (trackingBatchIds.length > 0) {
+                      orderApi.cancelTrackingSyncBatch(trackingBatchIds)
+                        .then(res => {
+                          if ((res?.cancelled || 0) > 0) {
+                            setLogMessages(prev => [...prev, `[송장] 배치 취소: ${fmtNum(res.cancelled)}건`])
+                          }
+                        })
+                        .catch(err => setLogMessages(prev => [...prev, `[송장] 취소 실패: ${(err as Error).message}`]))
+                    }
+                    setTrackingStatusOpen(false)
+                  }}
                   style={{ padding: '4px 10px', background: '#4b5563', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 12 }}
                 >닫기</button>
               </div>

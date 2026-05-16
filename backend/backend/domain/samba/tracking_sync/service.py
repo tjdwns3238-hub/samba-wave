@@ -488,7 +488,13 @@ async def enqueue_pending_orders(
                 ~SambaOrder.status.in_(EXCLUDED_ORDER_STATUSES),
                 ~action_tag_expr.like("%,kkadaegi,%"),
             )
-            .order_by(date_col.desc())
+            # 계정별 그룹화 적재 — 확장앱이 같은 계정 잡을 연속으로 받게 해서
+            # ensureLoggedIn 자동 스왑 횟수를 "계정 수"만큼만 발생시킨다.
+            # NULLS LAST 로 계정 미지정 잡은 뒤로 밀어둠.
+            .order_by(
+                SambaOrder.sourcing_account_id.asc().nulls_last(),
+                date_col.desc(),
+            )
             .limit(limit)
         )
         for kw in SHIPPED_SHIPPING_STATUS_KEYWORDS:
@@ -567,6 +573,13 @@ async def apply_tracking_result(
         if not job:
             logger.warning(f"[송장동기화] request_id 매칭 실패: {request_id}")
             return {"success": False, "error": "잡을 찾을 수 없습니다"}
+
+        # 모달 닫기 등으로 이미 취소된 잡은 결과 폐기 — 상태 덮어쓰기 차단
+        if job.status == STATUS_CANCELLED:
+            logger.info(
+                f"[송장동기화] 취소된 잡 결과 폐기: request_id={request_id} job_id={job.id}"
+            )
+            return {"success": False, "status": STATUS_CANCELLED, "reason": "취소된 잡"}
 
         job.attempts = (job.attempts or 0) + 1
         job.updated_at = datetime.now(_UTC)
