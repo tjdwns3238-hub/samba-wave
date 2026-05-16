@@ -4201,11 +4201,19 @@ class JobWorker:
 
             client = AdidasClient()
         elif site == "LOTTEON":
+            from backend.domain.samba.collector.refresher import get_collect_proxy_url
             from backend.domain.samba.proxy.lotteon_sourcing import (
                 LotteonSourcingClient,
             )
 
-            client = LotteonSourcingClient()
+            # 롯데ON WAF가 데이터센터 IP에서 502로 소프트 차단 — collect 프록시 적용
+            _lotteon_proxy = get_collect_proxy_url()
+            client = LotteonSourcingClient(proxy_url=_lotteon_proxy)
+            if _lotteon_proxy:
+                logger.info(
+                    f"[잡워커] 롯데ON 수집 프록시: "
+                    f"{_lotteon_proxy.split('@')[-1] if '@' in _lotteon_proxy else 'on'}"
+                )
         elif site == "ABCmart":
             from backend.domain.samba.collector.refresher import get_collect_proxies
             from backend.domain.samba.proxy.abcmart import ARTSourcingClient

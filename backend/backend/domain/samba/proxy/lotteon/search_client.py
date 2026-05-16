@@ -37,6 +37,14 @@ class SearchClientMixin:
         """타임아웃 객체 반환 (하위 클래스의 self._timeout 참조)."""
         return self._timeout  # type: ignore[attr-defined]
 
+    def _httpx_kwargs(self, **extra: Any) -> dict[str, Any]:  # type: ignore[override]
+        """LotteonSourcingClient에서 오버라이드 — 믹스인 단독 사용 시 폴백."""
+        return dict(extra)
+
+    @staticmethod
+    def _is_transient_5xx_s(status: int) -> bool:
+        return status in (502, 503, 504)
+
     # ------------------------------------------------------------------
     # qapi JSON 검색 API (페이지네이션 지원)
     # ------------------------------------------------------------------
@@ -84,7 +92,9 @@ class SearchClientMixin:
         try:
             qapi_headers = {**self.HEADERS, "Accept": "application/json, */*"}
             async with httpx.AsyncClient(
-                timeout=self._timeout_obj(), follow_redirects=True
+                **self._httpx_kwargs(
+                    timeout=self._timeout_obj(), follow_redirects=True
+                )
             ) as client:
                 resp = await client.get(search_url, headers=qapi_headers)
 
@@ -93,6 +103,15 @@ class SearchClientMixin:
                     retry_after = int(resp.headers.get("Retry-After", "60"))
                     logger.warning(f"[LOTTEON] 차단 감지 HTTP {resp.status_code}")
                     raise RateLimitError(resp.status_code, retry_after)
+
+                # WAF/엣지 일시 차단(502/503/504) — 재시도 대상으로 변환
+                if self._is_transient_5xx_s(resp.status_code):
+                    retry_after = int(resp.headers.get("Retry-After", "10"))
+                    logger.warning(
+                        f"[LOTTEON] qapi 5xx 감지 HTTP {resp.status_code} "
+                        f"Server={resp.headers.get('Server', '')!r}"
+                    )
+                    raise RateLimitError(resp.status_code, max(retry_after, 5))
 
                 if resp.status_code != 200:
                     logger.warning(f"[LOTTEON] qapi HTTP {resp.status_code}")
@@ -133,7 +152,9 @@ class SearchClientMixin:
         try:
             qapi_headers = {**self.HEADERS, "Accept": "application/json, */*"}
             async with httpx.AsyncClient(
-                timeout=self._timeout_obj(), follow_redirects=True
+                **self._httpx_kwargs(
+                    timeout=self._timeout_obj(), follow_redirects=True
+                )
             ) as client:
                 resp = await client.get(url, headers=qapi_headers)
                 if resp.status_code == 200:
@@ -249,7 +270,9 @@ class SearchClientMixin:
 
         try:
             async with httpx.AsyncClient(
-                timeout=self._timeout_obj(), follow_redirects=True
+                **self._httpx_kwargs(
+                    timeout=self._timeout_obj(), follow_redirects=True
+                )
             ) as client:
                 resp = await client.get(search_url, headers=self.HEADERS)
 
@@ -259,6 +282,14 @@ class SearchClientMixin:
                         f"[LOTTEON] 인기상품 검색 차단 HTTP {resp.status_code}"
                     )
                     raise RateLimitError(resp.status_code, retry_after)
+
+                if self._is_transient_5xx_s(resp.status_code):
+                    retry_after = int(resp.headers.get("Retry-After", "10"))
+                    logger.warning(
+                        f"[LOTTEON] 인기상품 5xx HTTP {resp.status_code} "
+                        f"Server={resp.headers.get('Server', '')!r}"
+                    )
+                    raise RateLimitError(resp.status_code, max(retry_after, 5))
 
                 if resp.status_code != 200:
                     logger.warning(f"[LOTTEON] 인기상품 검색 HTTP {resp.status_code}")

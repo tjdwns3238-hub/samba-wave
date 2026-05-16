@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 import httpx
 
@@ -32,10 +32,36 @@ class DetailClientMixin:
     PRODUCT_URL: str
     PBF_BASE: str
     HEADERS: dict[str, str]
+    proxy_url: Optional[str]
 
     def _timeout_obj(self) -> httpx.Timeout:
         """타임아웃 객체 반환 (하위 클래스의 self._timeout 참조)."""
         return self._timeout  # type: ignore[attr-defined]
+
+    def _httpx_kwargs(self, **extra: Any) -> dict[str, Any]:  # type: ignore[override]
+        """LotteonSourcingClient에서 오버라이드 — 믹스인 단독 사용 시 폴백."""
+        return dict(extra)
+
+    @staticmethod
+    def _is_transient_5xx(status: int) -> bool:
+        """롯데ON WAF/엣지의 일시적 차단/장애 응답 — 재시도 대상."""
+        return status in (502, 503, 504)
+
+    @staticmethod
+    def _log_5xx_headers(resp: "httpx.Response", ctx: str) -> None:
+        """502/503/504 응답 헤더 1줄 로깅 — WAF 식별용 (Server/Akamai 등)."""
+        try:
+            _server = resp.headers.get("Server", "")
+            _akamai = resp.headers.get("X-Akamai-Request-ID", "") or resp.headers.get(
+                "Akamai-True-Client-IP", ""
+            )
+            _ray = resp.headers.get("CF-RAY", "")
+            logger.warning(
+                f"[LOTTEON] 5xx 헤더 {ctx}: status={resp.status_code} "
+                f"Server={_server!r} Akamai={_akamai!r} CF-RAY={_ray!r}"
+            )
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # 상세 조회
@@ -64,7 +90,9 @@ class DetailClientMixin:
 
         try:
             async with httpx.AsyncClient(
-                timeout=self._timeout_obj(), follow_redirects=True
+                **self._httpx_kwargs(
+                    timeout=self._timeout_obj(), follow_redirects=True
+                )
             ) as client:
                 resp = await client.get(url, headers=self.HEADERS)
 
@@ -75,6 +103,12 @@ class DetailClientMixin:
                         f"[LOTTEON] 차단 감지 HTTP {resp.status_code}: {product_no}"
                     )
                     raise RateLimitError(resp.status_code, retry_after)
+
+                # WAF/엣지 일시 차단(502/503/504) — 재시도 대상으로 변환
+                if self._is_transient_5xx(resp.status_code):
+                    self._log_5xx_headers(resp, f"detail/{product_no}")
+                    retry_after = int(resp.headers.get("Retry-After", "10"))
+                    raise RateLimitError(resp.status_code, max(retry_after, 5))
 
                 if resp.status_code != 200:
                     logger.warning(
@@ -258,16 +292,23 @@ class DetailClientMixin:
         return await self.get_product_detail(product_id)
 
     # 공유 httpx 클라이언트 — refresh 빠른경로에서 커넥션 풀 재사용
-    _pbf_shared_client: Optional[httpx.AsyncClient] = None
+    # proxy_url별로 별도 클라이언트를 캐시 (None = 메인 IP). 무신사
+    # _get_musinsa_shared_client 패턴 미러.
+    _pbf_shared_clients: Dict[Optional[str], httpx.AsyncClient] = {}
 
     async def _get_pbf_client(self) -> httpx.AsyncClient:
-        """pbf refresh용 공유 클라이언트 (커넥션 풀 재사용으로 TCP 핸드셰이크 절감)."""
-        if self._pbf_shared_client is None or self._pbf_shared_client.is_closed:
-            DetailClientMixin._pbf_shared_client = httpx.AsyncClient(
-                timeout=httpx.Timeout(15.0, connect=5.0),
-                limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
-            )
-        return self._pbf_shared_client
+        """pbf refresh용 공유 클라이언트 (proxy_url별 커넥션 풀 재사용)."""
+        key = self.proxy_url
+        existing = DetailClientMixin._pbf_shared_clients.get(key)
+        if existing is not None and not existing.is_closed:
+            return existing
+        kw = self._httpx_kwargs(
+            timeout=httpx.Timeout(15.0, connect=5.0),
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+        )
+        new_client = httpx.AsyncClient(**kw)
+        DetailClientMixin._pbf_shared_clients[key] = new_client
+        return new_client
 
     async def fetch_pbf_standalone(self, sitm_no: str) -> Optional[dict[str, Any]]:
         """pbf.lotteon.com API — 공유 클라이언트로 커넥션 풀 재사용."""
@@ -291,9 +332,13 @@ class DetailClientMixin:
             )
             qapi_headers = {**self.HEADERS, "Accept": "application/json, */*"}
             async with httpx.AsyncClient(
-                timeout=httpx.Timeout(10.0, connect=5.0), follow_redirects=True
+                **self._httpx_kwargs(
+                    timeout=httpx.Timeout(10.0, connect=5.0), follow_redirects=True
+                )
             ) as client:
                 resp = await client.get(url, headers=qapi_headers)
+                if self._is_transient_5xx(resp.status_code):
+                    self._log_5xx_headers(resp, f"qapi/{spd_no}")
                 if resp.status_code != 200:
                     return None
                 data = resp.json()

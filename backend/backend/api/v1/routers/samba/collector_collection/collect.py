@@ -1016,7 +1016,11 @@ async def collect_by_url(
             )
             filter_id = search_filter.id
 
-            client = LotteonSourcingClient()
+            from backend.domain.samba.collector.refresher import (
+                get_collect_proxy_url as _get_collect_proxy_url_lot,
+            )
+
+            client = LotteonSourcingClient(proxy_url=_get_collect_proxy_url_lot())
 
             # 기존 수집 수 확인
             from backend.domain.samba.collector.model import (
@@ -1228,7 +1232,11 @@ async def collect_by_url(
 
             use_max_discount = False  # 단일 수집 시 기본값
 
-            client = LotteonSourcingClient()
+            from backend.domain.samba.collector.refresher import (
+                get_collect_proxy_url as _get_collect_proxy_url_lot,
+            )
+
+            client = LotteonSourcingClient(proxy_url=_get_collect_proxy_url_lot())
             data = await client.get_product_detail(item_id)
             if not data or not data.get("name"):
                 raise HTTPException(502, "롯데ON 상품 조회 실패")
@@ -1435,9 +1443,10 @@ async def collect_by_keyword(
         return {"success": True, "data": data}
 
     elif body.source_site == "LOTTEON":
+        from backend.domain.samba.collector.refresher import get_collect_proxy_url
         from backend.domain.samba.proxy.lotteon_sourcing import LotteonSourcingClient
 
-        client = LotteonSourcingClient()
+        client = LotteonSourcingClient(proxy_url=get_collect_proxy_url())
         data = await client.search_products(
             keyword=body.keyword, page=body.page, size=body.size
         )

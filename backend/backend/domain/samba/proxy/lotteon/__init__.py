@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
 
 from backend.domain.samba.proxy.lotteon.category_map import _LOTTEON_SCAT_NAMES
@@ -74,12 +76,26 @@ class LotteonSourcingClient(
         "Referer": "https://www.lotteon.com/",
     }
 
-    def __init__(self) -> None:
+    def __init__(self, proxy_url: str | None = None) -> None:
         self._timeout = httpx.Timeout(20.0, connect=10.0)
+        # 롯데ON WAF가 데이터센터 IP에서 502 Bad Gateway로 소프트 차단하는 사례
+        # 확인됨(2026-05-16) — 프록시 로테이션으로 회피. None이면 메인 IP 사용.
+        self.proxy_url: str | None = proxy_url
 
     def _timeout_obj(self) -> httpx.Timeout:
         """타임아웃 객체 반환."""
         return self._timeout
+
+    def _httpx_kwargs(self, **extra: Any) -> dict[str, Any]:
+        """모든 httpx.AsyncClient 생성 시 공통으로 적용할 인자.
+
+        proxy_url이 설정돼 있으면 proxy 키를 주입한다. detail/search/pbf 모든 호출이
+        동일 IP로 나가도록 보장하기 위함.
+        """
+        kw: dict[str, Any] = dict(extra)
+        if self.proxy_url:
+            kw["proxy"] = self.proxy_url
+        return kw
 
 
 from backend.domain.samba.proxy.lotteon.api_client import (

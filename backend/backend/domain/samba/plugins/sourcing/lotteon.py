@@ -24,6 +24,29 @@ _lotteon_safe_interval: float = 999.0  # 차단 없는 최소 인터벌 기록
 _sitm_no_cache: dict[str, str] = {}
 
 
+def _select_lotteon_proxy() -> str | None:
+    """현재 실행 컨텍스트에 따라 롯데ON 호출용 프록시 URL을 선택.
+
+    - autotune 컨텍스트: _get_rotated_proxy("LOTTEON")로 IP 순환
+    - 그 외(일반 refresh/수집): get_collect_proxy_url()로 collect 풀 사용
+
+    DB 설정의 프록시 풀이 비어있으면 None(메인 IP)을 반환한다.
+    롯데ON WAF는 데이터센터 IP에서 502/403 소프트 차단을 한다(2026-05-16 확인).
+    """
+    from backend.domain.samba.collector.refresher import (
+        _current_refresh_source,
+        _get_rotated_proxy,
+        get_collect_proxy_url,
+    )
+
+    try:
+        if _current_refresh_source.get() == "autotune":
+            return _get_rotated_proxy(site="LOTTEON")
+    except LookupError:
+        pass
+    return get_collect_proxy_url()
+
+
 # ── Phase 4 helpers — DOM 재고 병합 + 상품명 정합성 검증 (설계문서 §3.5/§12) ──
 
 
@@ -126,7 +149,7 @@ class LotteonSourcingPlugin(SourcingPlugin):
         """롯데ON 키워드 검색."""
         from backend.domain.samba.proxy.lotteon_sourcing import LotteonSourcingClient
 
-        client = LotteonSourcingClient()
+        client = LotteonSourcingClient(proxy_url=_select_lotteon_proxy())
         page = filters.get("page", 1)
         size = filters.get("size", 40)
         return await self.safe_call(
@@ -137,7 +160,7 @@ class LotteonSourcingPlugin(SourcingPlugin):
         """롯데ON 상품 상세 조회."""
         from backend.domain.samba.proxy.lotteon_sourcing import LotteonSourcingClient
 
-        client = LotteonSourcingClient()
+        client = LotteonSourcingClient(proxy_url=_select_lotteon_proxy())
         return await self.safe_call(client.get_product_detail(site_product_id))
 
     async def scan_categories(
@@ -154,7 +177,7 @@ class LotteonSourcingPlugin(SourcingPlugin):
         """
         from backend.domain.samba.proxy.lotteon_sourcing import LotteonSourcingClient
 
-        client = LotteonSourcingClient()
+        client = LotteonSourcingClient(proxy_url=_select_lotteon_proxy())
         return await client.scan_categories(
             keyword, selected_brands=selected_brands, max_scan=max_scan
         )
@@ -163,7 +186,7 @@ class LotteonSourcingPlugin(SourcingPlugin):
         """롯데ON 키워드 검색 → 발견된 브랜드 목록 반환 (사용자 선택용)."""
         from backend.domain.samba.proxy.lotteon_sourcing import LotteonSourcingClient
 
-        client = LotteonSourcingClient()
+        client = LotteonSourcingClient(proxy_url=_select_lotteon_proxy())
         return await client.discover_brands(keyword)
 
     async def _fetch_pbf_refresh(self, sitm_no: str) -> dict:
@@ -177,7 +200,7 @@ class LotteonSourcingPlugin(SourcingPlugin):
         """
         from backend.domain.samba.proxy.lotteon_sourcing import LotteonSourcingClient
 
-        client = LotteonSourcingClient()
+        client = LotteonSourcingClient(proxy_url=_select_lotteon_proxy())
         pbf = await client.fetch_pbf_standalone(sitm_no)
         if not pbf:
             return {}
@@ -316,7 +339,7 @@ class LotteonSourcingPlugin(SourcingPlugin):
                 error="롯데ON 상품 ID 없음",
             )
 
-        client = LotteonSourcingClient()
+        client = LotteonSourcingClient(proxy_url=_select_lotteon_proxy())
         detail = None
 
         # sitmNo 빠른경로: product 객체 → 인메모리 캐시 순서로 조회
