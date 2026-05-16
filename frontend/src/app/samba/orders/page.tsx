@@ -842,7 +842,7 @@ export default function OrdersPage() {
                     '올리브영': 'OLIVEYOUNG',
                   }
                   const code = aliasMap[raw] || raw
-                  const isGift = `,${(actionTag || '').trim()},`.includes(',gift,')
+                  void actionTag
                   const map: Record<string, string> = {
                     MUSINSA: `https://www.musinsa.com/order/order-detail/${srcNo}`,
                     KREAM: `https://kream.co.kr/my/purchasing/${srcNo}`,
@@ -851,9 +851,7 @@ export default function OrdersPage() {
                     GRANDSTAGE: `https://grandstage.a-rt.com/mypage/order/read-order-detail?orderNo=${srcNo}`,
                     NIKE: `https://www.nike.com/kr/orders/${srcNo}`,
                     SSG: `https://pay.ssg.com/myssg/orderInfoDetail.ssg?orordNo=${encodeURIComponent(srcNo)}&viewType=Ssg`,
-                    LOTTEON: isGift
-                      ? `https://www.lotteon.com/p/order/claim/giftBoxDetail?odNo=${srcNo}&type=snd`
-                      : `https://www.lotteon.com/p/order/claim/orderDetail?odNo=${srcNo}`,
+                    LOTTEON: `https://www.lotteon.com/p/order/claim/giftBoxDetail?odNo=${srcNo}&type=snd`,
                     GSSHOP: `https://www.gsshop.com/ord/dlvcursta/popup/ordDtl.gs?orderNo=${srcNo}`,
                     OLIVEYOUNG: `https://www.oliveyoung.co.kr/store/mypage/getOrderDetail.do?dlvNo=${srcNo}`,
                   }

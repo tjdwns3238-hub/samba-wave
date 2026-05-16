@@ -315,9 +315,7 @@ export default function OrderInfoCell(props: Props) {
             GrandStage: `https://grandstage.a-rt.com/mypage/order/read-order-detail?orderNo=${srcNo}`,
             Nike: `https://www.nike.com/kr/orders/${srcNo}`,
             SSG: `https://pay.ssg.com/myssg/orderInfoDetail.ssg?orordNo=${encodeURIComponent(srcNo)}&viewType=Ssg`,
-            LOTTEON: isGift
-              ? `https://www.lotteon.com/p/order/claim/giftBoxDetail?odNo=${srcNo}&type=snd`
-              : `https://www.lotteon.com/p/order/claim/orderDetail?odNo=${srcNo}`,
+            LOTTEON: `https://www.lotteon.com/p/order/claim/giftBoxDetail?odNo=${srcNo}&type=snd`,
           }
           const url = orderUrlMap[sourceSiteCode]
           if (!url) { showAlert(`${o.source_site || '알수없는'} 소싱처는 원주문링크를 지원하지 않습니다`, 'info'); return }
