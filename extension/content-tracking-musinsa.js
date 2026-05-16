@@ -43,10 +43,14 @@
   }
 
   // 현재 로그인 무신사 계정에 해당 주문이 없는 경우 — 다른 계정 주문
-  // (주문상세 페이지가 정상 로드됐는데 주문번호와 매칭되는 데이터가 없는 패턴)
+  // 무신사는 주문번호가 현재 로그인 계정 소유가 아니면
+  //   "주문정보를 찾을 수 없습니다." 모달 + 확인 버튼을 띄움.
+  // (커스텀 모달 — document.body.innerText 로 잡힘. native alert 아님)
   function isWrongAccount() {
     try {
       const text = (document.body?.innerText || '').slice(0, 4000)
+      // 무신사 실제 모달 문구: "주문정보를 찾을 수 없습니다."
+      if (/주문\s*정보를?\s*찾을\s*수\s*없/.test(text)) return true
       if (/주문\s*정보가?\s*(없|존재하지)/.test(text)) return true
       if (/조회\s*(된|할\s*수\s*있는)?\s*주문이?\s*(없|존재하지)/.test(text)) return true
       if (/잘못된\s*접근/.test(text)) return true
@@ -64,16 +68,21 @@
     return null
   }
 
-  // 주문상세 페이지에서 "배송 조회" 버튼 탐색 (텍스트 매칭 — class 변경에 견고)
-  async function findTraceButton(timeoutMs) {
+  // 주문상세 페이지에서 "배송 조회" 버튼 탐색 또는 "주문정보 없음" 모달 감지
+  // 모달은 XHR 응답 후 등장하므로 단발 체크가 아닌 폴링으로 잡아야 함.
+  // 반환: { btn } | { wrongAccount: true } | null(타임아웃)
+  async function findTraceButtonOrWrongAccount(timeoutMs) {
     const start = Date.now()
     while (Date.now() - start < timeoutMs) {
+      // 1) wrong_account 모달 우선 체크 — 등장 즉시 종료
+      if (isWrongAccount()) return { wrongAccount: true }
+      // 2) 배송조회 버튼 탐색
       const buttons = Array.from(document.querySelectorAll('button'))
       const btn = buttons.find(b => {
         const t = (b.textContent || '').replace(/\s+/g, '').trim()
         return t === '배송조회' || t.includes('배송조회')
       })
-      if (btn && !btn.disabled) return btn
+      if (btn && !btn.disabled) return { btn }
       await new Promise((r) => setTimeout(r, POLL_INTERVAL))
     }
     return null
@@ -134,20 +143,28 @@
       return
     }
 
+    // 즉시 체크 — 모달이 이미 떠 있는 경우(빠른 응답)
     if (isWrongAccount()) {
-      // 현재 로그인된 무신사 계정에 해당 주문이 존재하지 않음 — 다른 계정 주문
       send(requestId, { success: false, error: 'wrong_account: 현재 로그인 계정에 해당 주문 없음' })
       try { sessionStorage.removeItem(SS_KEY) } catch {}
       return
     }
 
-    const btn = await findTraceButton(MAX_WAIT_MS)
-    if (!btn) {
-      // 배송조회 버튼이 없음 = 아직 배송이 시작되지 않은 단계 (택배사가 송장 발급 전)
+    // 배송조회 버튼 or wrong_account 모달 — 폴링 (XHR 응답으로 모달이 늦게 뜨는 케이스 대응)
+    const found = await findTraceButtonOrWrongAccount(MAX_WAIT_MS)
+    if (!found) {
+      // 둘 다 안 뜸 = 아직 배송이 시작되지 않은 단계 (택배사가 송장 발급 전)
       send(requestId, { success: false, error: '배송대기중' })
       try { sessionStorage.removeItem(SS_KEY) } catch {}
       return
     }
+    if (found.wrongAccount) {
+      // 폴링 중 wrong_account 모달 감지 — 다른 계정 주문
+      send(requestId, { success: false, error: 'wrong_account: 현재 로그인 계정에 해당 주문 없음' })
+      try { sessionStorage.removeItem(SS_KEY) } catch {}
+      return
+    }
+    const btn = found.btn
     try {
       btn.click()
     } catch (e) {
