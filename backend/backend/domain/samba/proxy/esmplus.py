@@ -842,6 +842,75 @@ class ESMPlusClient:
         )
 
     # ------------------------------------------------------------------
+    # 카탈로그 (catalogs): 브랜드/제조사/마니샵
+    # 권한 OK (movestory1 검증): brands / makers
+    # 권한 별도 (401): shop (마니샵)
+    # ------------------------------------------------------------------
+
+    async def search_brands(self, brand_name: str) -> dict[str, Any]:
+        """브랜드 코드 조회 — GET /item/v1/catalogs/brands/{brandName}.
+
+        상품 등록 시 brand 단순 string → ESM 브랜드 코드 매핑 시 사용.
+        """
+        return await self._call_api(
+            "GET", f"/item/v1/catalogs/brands/{brand_name}"
+        )
+
+    async def search_makers(self, maker_name: str) -> dict[str, Any]:
+        """제조사 코드 조회 — GET /item/v1/catalogs/makers/{makerName}."""
+        return await self._call_api(
+            "GET", f"/item/v1/catalogs/makers/{maker_name}"
+        )
+
+    async def get_mainshop_categories(
+        self, shop_cat_code: str = ""
+    ) -> dict[str, Any]:
+        """마니샵 카테고리 조회 — GET /item/v1/catalogs/shop/{shopCatCode}.
+
+        자체 쇼핑몰 매핑용. movestory1 권한 401 — 운영자 신청 후 사용.
+        """
+        path = "/item/v1/catalogs/shop"
+        if shop_cat_code:
+            path = f"{path}/{shop_cat_code}"
+        return await self._call_api("GET", path)
+
+    # ------------------------------------------------------------------
+    # 안전인증 / 검색태그 (movestory1 권한 401 — 운영자 신청 후 사용)
+    # ------------------------------------------------------------------
+
+    async def get_safety_certs(self) -> dict[str, Any]:
+        """안전인증 코드 조회 — GET /item/v1/catalogs/safety-certs.
+
+        어린이/전기/생활/식품 등 인증 종류. 상품 등록 시 itemAddtionalInfo.safetyCerts 매핑.
+        권한 별도 신청 필요.
+        """
+        return await self._call_api("GET", "/item/v1/catalogs/safety-certs")
+
+    async def set_safety_certs(
+        self, goods_no: str, data: dict[str, Any]
+    ) -> dict[str, Any]:
+        """안전인증 등록/수정 — POST /item/v1/goods/{goodsNo}/safety-certs.
+
+        data: { safetyCerts: { child: "...", electric: "...", life: "...", food: "..." } }
+        """
+        return await self._call_api(
+            "POST", f"/item/v1/goods/{goods_no}/safety-certs", data=data
+        )
+
+    async def set_search_tags(
+        self, goods_no: str, tags: list[str]
+    ) -> dict[str, Any]:
+        """검색태그 등록/수정 — POST /item/v1/goods/{goodsNo}/search-tags.
+
+        상품 검색 노출 키워드. 권한 별도 신청 필요.
+        """
+        return await self._call_api(
+            "POST",
+            f"/item/v1/goods/{goods_no}/search-tags",
+            data={"tags": tags},
+        )
+
+    # ------------------------------------------------------------------
     # 이벤트 홍보 (event-promotions)
     # ------------------------------------------------------------------
 
