@@ -932,40 +932,32 @@ async def dashboard_stats(
         else:
             reg_count_map[d_str] = max(running, 0)
 
-    # 일별 누적 수집상품수
-    #   - 오늘: 현재 시점 전체 수집상품수
-    #   - 과거 6일: 해당일 24시(KST) 기준 누적 카운트 = count(*) WHERE created_at < (해당일+1일 00시 KST)
-    collected_total_q = select(func.count(SambaCollectedProduct.id))
+    # 일별 신규 수집상품수 (그 날 created_at 으로 들어온 행의 개수, 누적 아님)
+    # 기존 누적 카운트(매일 거의 동일한 값)를 GROUP BY 1쿼리 일별 신규로 교체.
+    # 7번 풀스캔 → 1번 범위 스캔으로 응답시간 단축.
+    created_kst = SambaCollectedProduct.created_at + text("INTERVAL '9 hours'")
+    collected_daily_q = (
+        select(
+            func.date(created_kst).label("day"),
+            func.count().label("cnt"),
+        )
+        .where(
+            SambaCollectedProduct.created_at != None,  # noqa: E711
+            created_kst >= week_ago,
+        )
+        .group_by(func.date(created_kst))
+    )
     if tenant_id is not None:
-        collected_total_q = collected_total_q.where(
+        collected_daily_q = collected_daily_q.where(
             or_(
                 SambaCollectedProduct.tenant_id == tenant_id,
                 SambaCollectedProduct.tenant_id == None,  # noqa: E711
             )
         )
-    collected_total = int((await session.execute(collected_total_q)).scalar() or 0)
-
-    collected_count_map: dict[str, int] = {today_str: collected_total}
-
-    # 해당일 24시(KST) = created_at(KST) < 다음날 00시(KST) = created_at + 9h < 다음날 00시
-    created_kst = SambaCollectedProduct.created_at + text("INTERVAL '9 hours'")
-    for i in range(6):
-        d_str = past_dates[i]
-        next_day_str = (week_ago + timedelta(days=i + 1)).strftime("%Y-%m-%d")
-        cutoff_q = select(func.count(SambaCollectedProduct.id)).where(
-            SambaCollectedProduct.created_at != None,  # noqa: E711
-            created_kst < text(f"TIMESTAMP '{next_day_str} 00:00:00'"),
-        )
-        if tenant_id is not None:
-            cutoff_q = cutoff_q.where(
-                or_(
-                    SambaCollectedProduct.tenant_id == tenant_id,
-                    SambaCollectedProduct.tenant_id == None,  # noqa: E711
-                )
-            )
-        collected_count_map[d_str] = int(
-            (await session.execute(cutoff_q)).scalar() or 0
-        )
+    collected_rows = (await session.execute(collected_daily_q)).all()
+    collected_count_map: dict[str, int] = {
+        str(r.day): int(r.cnt) for r in collected_rows
+    }
 
     for w in weekly:
         w["newRegistered"] = int(new_reg_map.get(w["date"], 0))
