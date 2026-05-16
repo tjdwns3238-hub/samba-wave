@@ -6620,14 +6620,14 @@ def _parse_playauto_order(
 
     # 주소 분리 — 플레이오토는 RecipientAddress 한 필드에 도로명+상세를 통째로 내려줌
     # (openapi.json 확인: 별도 상세주소 필드 없음). 휴리스틱으로 기본/상세 분리.
-    # 우선순위:
-    #  패턴0: 끝 메타괄호 `(법정동/건물명)` + 그 앞 `동/호/층/호실` 패턴
+    # 우선순위 (프론트 splitCustomerAddress 와 동일 — 괄호 안 콤마로 잘리지 않도록):
+    #  패턴A: 끝 메타괄호 `(법정동/건물명)` + 그 앞 `동/호/층/호실` 패턴
     #         → base = 도로주소 + 메타괄호, detail = 동/호 토큰
-    #         (예) "서울 노원구 마들로 111 월계미륭아파트,월계삼호아파트 30동 304호 (월계동 13 / ...)"
-    #             → base="서울 노원구 마들로 111 (월계동 13 / ...)", detail="월계미륭아파트,월계삼호아파트 30동 304호"
-    #  패턴1: ", "로 명시 구분 ("디지털로26길 123, 14층 플레이오토")
-    #  패턴2: 도로명(...대로/로/길) + 본번(숫자 또는 숫자-숫자) 뒤 공백 기준 분리
-    #         ("대구 동구 아양로 218 113동 201호(효목1동 45-1)")
+    #  패턴B: 마지막 `)` 뒤에 내용이 있으면 그 지점으로 split (괄호 안 콤마 무시)
+    #         (예) "...압구정로 403(압구정동, 한양아파트) 81동 1207호"
+    #             → base="...압구정로 403(압구정동, 한양아파트)", detail="81동 1207호"
+    #  패턴C: 괄호가 없으면 ", " 명시 구분 ("디지털로26길 123, 14층 플레이오토")
+    #  패턴D: 도로명(...대로/로/길) + 본번 뒤 공백 기준 분리
     import re as _re_addr
 
     _addr_full = str(ro.get("RecipientAddress", "") or "").strip()
@@ -6635,7 +6635,7 @@ def _parse_playauto_order(
     _addr_detail = ""
     if _addr_full:
         _matched = False
-        # 패턴0: 끝 메타괄호 + 동/호 패턴
+        # 패턴A: 끝 메타괄호 + 동/호 패턴 (전체가 `(...)$` 로 끝나는 경우)
         _meta_m = _re_addr.match(r"^(.*?)\s*(\([^)]*\))\s*$", _addr_full)
         if _meta_m:
             _before_meta = _meta_m.group(1).strip()
@@ -6650,11 +6650,23 @@ def _parse_playauto_order(
                 _addr_base = f"{_dongho_m.group(1).strip()} {_meta}".strip()
                 _addr_detail = _dongho_m.group(2).strip()
                 _matched = True
+        # 패턴B: 마지막 `)` 기준 분리 — `, ` 보다 우선.
+        # 괄호 안 콤마("(압구정동, 한양아파트)")로 base/detail 가 잘못 잘리지 않도록.
         if not _matched:
-            if ", " in _addr_full:
+            _last_paren = _addr_full.rfind(")")
+            if 0 < _last_paren < len(_addr_full) - 1:
+                _after = _addr_full[_last_paren + 1 :].strip()
+                if _after:
+                    _addr_base = _addr_full[: _last_paren + 1].strip()
+                    _addr_detail = _after
+                    _matched = True
+        if not _matched:
+            # 패턴C: 괄호 없는 도로명주소 — ", " 단순 분리
+            if "(" not in _addr_full and ", " in _addr_full:
                 _b, _, _d = _addr_full.partition(", ")
                 _addr_base, _addr_detail = _b.strip(), _d.strip()
             else:
+                # 패턴D: 도로명 + 본번 뒤 공백 기준
                 _m = _re_addr.match(
                     r"^(.+?(?:대로|로|길)\s+\d+(?:-\d+)?)\s+(.+)$", _addr_full
                 )

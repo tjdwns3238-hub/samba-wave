@@ -59,7 +59,7 @@ export const renderCopyableText = (
 export const splitCustomerAddress = (
   address: string | null | undefined,
   detailColumn?: string | null,
-) => {
+): { base: string; detail: string } => {
   const normalized = (address || '').trim().replace(/\s+/g, ' ')
   const detailFromDb = (detailColumn || '').trim().replace(/\s+/g, ' ')
 
@@ -67,7 +67,20 @@ export const splitCustomerAddress = (
 
   // 1) 백엔드 분리 저장 컬럼 우선
   if (detailFromDb) {
-    return { base: normalized, detail: detailFromDb }
+    // 안전망 — 과거 파서가 `(법정동, 건물명)` 안 콤마로 잘라 저장한 케이스 자동 복구.
+    // base에 `(` 만 남고 detail이 `)` 로 시작하면 재조립 후 마지막 `)` 기준 재분리.
+    const baseOpens = (normalized.match(/\(/g) || []).length
+    const baseCloses = (normalized.match(/\)/g) || []).length
+    const detailOpens = (detailFromDb.match(/\(/g) || []).length
+    const detailCloses = (detailFromDb.match(/\)/g) || []).length
+    const mismatch =
+      baseOpens > baseCloses && detailCloses > detailOpens
+    if (!mismatch) {
+      return { base: normalized, detail: detailFromDb }
+    }
+    // 재조립: 콤마로 잘렸으니 콤마+공백으로 복원해 fallback split 으로 흘려보냄
+    const rejoined = `${normalized}, ${detailFromDb}`.replace(/\s+/g, ' ').trim()
+    return splitCustomerAddress(rejoined, null)
   }
 
   if (!normalized) return { base: '', detail: '' }

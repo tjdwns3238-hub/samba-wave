@@ -417,7 +417,7 @@ async def enqueue_for_order(order_id: str, *, force: bool = False) -> dict[str, 
         except ValueError as exc:
             return {"success": False, "error": str(exc)}
 
-        request_id, _future = SourcingQueue.add_tracking_job(
+        request_id, _future = await SourcingQueue.add_tracking_job(
             site=actual_site,
             url=url,
             order_id=order.id,

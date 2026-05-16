@@ -248,7 +248,7 @@ class SourcingQueue:
         return request_id, future
 
     @classmethod
-    def add_tracking_job(
+    async def add_tracking_job(
         cls,
         site: str,
         url: str,
@@ -262,6 +262,10 @@ class SourcingQueue:
 
         결과는 별도 라우터 `/proxy/sourcing/tracking-result` 로 수신되어
         tracking_sync_service.apply_tracking_result()로 라우팅됨.
+
+        [통일 2026-05-16] async + await — 이전 asyncio.create_task background 로
+        N건 적재 시 INSERT 순서가 호출 순서와 달라져 created_at 뒤섞임 → ORDER BY
+        그룹화 깨지던 회귀 차단. 단건씩 sequential 적재로 같은 계정 잡 연속 보장.
         """
         cls._ensure_accepting_jobs()
         request_id = str(uuid.uuid4())[:8]
@@ -281,7 +285,7 @@ class SourcingQueue:
             "sourcingAccountId": sourcing_account_id or "",
         }
         cls.resolvers[request_id] = future
-        asyncio.create_task(_db_insert_job(job, "tracking"))
+        await _db_insert_job(job, "tracking")
         _owner_tag = f" owner={owner_device_id[:8]}" if owner_device_id else ""
         logger.info(
             f"[소싱큐] 송장조회 추가: {site} ord={sourcing_order_number} "
