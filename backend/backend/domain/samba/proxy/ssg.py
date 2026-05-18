@@ -1659,8 +1659,8 @@ class SSGClient:
             )
         return {
             "order_number": ord_no,
-            # 형식: "|ordItemSeq|orordNo" (shppNo 없음, 취소신청에는 배송번호 불필요)
-            "shipment_id": f"|{ord_item_seq}|{or_ord_no}",
+            # 형식: "|ordItemSeq" (shppNo 없음, 취소신청에는 배송번호 불필요; orordNo는 order_number에 존재)
+            "shipment_id": f"|{ord_item_seq}",
             "channel_id": account_id,
             "channel_name": label,
             "product_id": item_id_str,
@@ -1800,11 +1800,23 @@ class SSGClient:
             f"product_id={item_id_str}, status={status}, shppProgStatDtlCd={shpp_prog}"
         )
 
-        # shipment_id에 shppNo|ordItemSeq|orordNo 형식으로 저장
+        # shipment_id에 shppNo|ordItemSeq 형식으로 저장
         # - shppNo: 배송번호 (발주확인 시 필요)
         # - ordItemSeq: 주문상품순번 (취소승인 시 필요)
-        # - orordNo: 원주문번호 (프론트 '상품주문번호' 란 표시용)
-        shipment_id = f"{shpp_no}|{ord_item_seq}|{or_ord_no}"
+        # orordNo는 order_number에 이미 저장되므로 중복 제외
+        shipment_id = f"{shpp_no}|{ord_item_seq}"
+
+        # ordCmplDts(주문완료일시) → paid_at, KST → UTC 변환
+        KST = timezone(timedelta(hours=9))
+        paid_at = None
+        _ord_dt_str = str(raw.get("ordCmplDts", "") or raw.get("ordRcpDts", "") or "")
+        if _ord_dt_str:
+            try:
+                paid_at = datetime.strptime(_ord_dt_str, "%Y-%m-%d %H:%M:%S").replace(
+                    tzinfo=KST
+                )
+            except ValueError:
+                pass
 
         return {
             "order_number": ord_no,
@@ -1826,6 +1838,7 @@ class SSGClient:
             "source": "ssg",
             "status": status,
             "shipping_status": shipping_status,
+            "paid_at": paid_at,
         }
 
     async def confirm_rcov(
