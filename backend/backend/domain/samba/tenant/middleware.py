@@ -65,10 +65,11 @@ async def get_optional_tenant_id(
     request: Request,
     session: AsyncSession = Depends(get_read_session_dependency),
 ) -> Optional[str]:
-    """테넌트 ID 선택적 추출 — 인증은 필수, tenant_id만 없을 수 있음 (SaaS 과도기).
+    """테넌트 ID 추출 — SaaS 전환 완료 후 사실상 필수.
 
-    신규 토큰: JWT tid 클레임 직접 사용 (DB 조회 없음).
-    구 토큰: DB 폴백으로 처리.
+    [2026-05-18] NULL 차단 강화: tenant_id 없으면 403 반환.
+    backfill 완료로 모든 사용자는 tenant_id를 가져야 하므로 NULL은 오류 상태.
+    라우터 시그니처는 Optional[str] 유지(코드 변경 최소화), 실제로는 None 안 들어옴.
     """
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
@@ -106,7 +107,13 @@ async def get_optional_tenant_id(
 
     tenant_id = getattr(user, "tenant_id", None)
     if not tenant_id:
-        logger.warning(f"사용자 {user_id}에 tenant_id가 없습니다 (SaaS 전환 과도기)")
+        logger.warning(
+            f"사용자 {user_id}에 tenant_id 없음 — 가입 직후이거나 backfill 누락"
+        )
+        raise HTTPException(
+            403,
+            "테넌트가 설정되지 않았습니다. 다시 로그인하거나 관리자에게 문의하세요.",
+        )
     return tenant_id
 
 
