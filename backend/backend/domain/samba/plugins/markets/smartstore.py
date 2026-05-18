@@ -567,6 +567,27 @@ class SmartStorePlugin(MarketPlugin):
             detail_attr.pop("productCertificationInfos", None)
             return payload
 
+        # 상품속성(productAttributes) 입력 오류 감지 (속성실제값/단위 누락)
+        def _is_product_attr_error(err: Exception) -> bool:
+            s = str(err)
+            return (
+                "속성실제값" in s
+                or "attributeRealValue" in s
+                or "상품속성 단위" in s
+                or "단위코드" in s
+            )
+
+        # payload에서 productAttributes 제거 (오매칭된 속성 통째로 제거)
+        def _strip_product_attributes_inplace(
+            payload: dict[str, Any],
+        ) -> dict[str, Any]:
+            op = payload.get("originProduct")
+            if isinstance(op, dict):
+                da = op.get("detailAttribute")
+                if isinstance(da, dict):
+                    da.pop("productAttributes", None)
+            return payload
+
         # 반품안심케어 비허용 카테고리 에러 감지
         # 메시지 예: "반품안심케어를 설정할 수 없는 카테고리입니다."
         def _is_return_safeguard_error(err: Exception) -> bool:
@@ -633,6 +654,13 @@ class SmartStorePlugin(MarketPlugin):
                     )
                     return await client.register_product(retry_payload)
 
+                if _is_product_attr_error(reg_e):
+                    logger.warning(
+                        f"[스마트스토어] 상품속성 오류 감지 → productAttributes 제거 후 재시도: {reg_e}"
+                    )
+                    _strip_product_attributes_inplace(payload)
+                    return await client.register_product(payload)
+
                 if _is_return_safeguard_error(reg_e):
                     logger.warning(
                         f"[스마트스토어] 반품안심케어 비허용 카테고리 감지 → freeReturnInsuranceYn 제거 후 재시도: {reg_e}"
@@ -672,6 +700,24 @@ class SmartStorePlugin(MarketPlugin):
                         except Exception as _cert_retry_e:
                             logger.error(
                                 f"[스마트스토어] PUT 인증면제 재시도도 실패: {_cert_retry_e}"
+                            )
+                            raise
+
+                    if _is_product_attr_error(e):
+                        logger.warning(
+                            f"[스마트스토어] PUT 상품속성 오류 감지 → productAttributes 제거 후 재시도: {e}"
+                        )
+                        try:
+                            _strip_product_attributes_inplace(d)
+                            r = await client.update_product(existing_no, d)
+                            return {
+                                "success": True,
+                                "message": "스마트스토어 수정 성공 (productAttributes 제거 fallback)",
+                                "data": r,
+                            }
+                        except Exception as _pa_retry_e:
+                            logger.error(
+                                f"[스마트스토어] PUT productAttributes 제거 재시도도 실패: {_pa_retry_e}"
                             )
                             raise
 
