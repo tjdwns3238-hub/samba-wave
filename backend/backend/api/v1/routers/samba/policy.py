@@ -15,7 +15,10 @@ from backend.domain.samba.policy.model import (
     SambaPolicy,
 )
 from backend.domain.samba.policy.repository import SambaPolicyRepository
-from backend.domain.samba.policy.service import SambaPolicyService
+from backend.domain.samba.policy.service import (
+    PolicyNameDuplicateError,
+    SambaPolicyService,
+)
 from backend.domain.samba.tenant.middleware import get_optional_tenant_id
 from backend.dtos.samba.policy import PolicyCreate, PolicyUpdate, PriceCalculateRequest
 
@@ -365,7 +368,10 @@ async def create_policy(
     # 테넌트 ID가 있으면 새 정책에 설정
     if tenant_id:
         data["tenant_id"] = tenant_id
-    return await svc.create_policy(data)
+    try:
+        return await svc.create_policy(data)
+    except PolicyNameDuplicateError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.put("/{policy_id}", response_model=SambaPolicy)
@@ -385,7 +391,12 @@ async def update_policy(
             raise HTTPException(
                 status_code=403, detail="해당 정책에 접근 권한이 없습니다"
             )
-    policy = await svc.update_policy(policy_id, body.model_dump(exclude_unset=True))
+    try:
+        policy = await svc.update_policy(
+            policy_id, body.model_dump(exclude_unset=True)
+        )
+    except PolicyNameDuplicateError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if not policy:
         raise HTTPException(status_code=404, detail="정책을 찾을 수 없습니다")
     return policy

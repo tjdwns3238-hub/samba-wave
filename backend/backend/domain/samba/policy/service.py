@@ -3,9 +3,15 @@
 import math
 from typing import Any, Dict, List, Optional
 
+from sqlmodel import select
+
 from backend.domain.samba.exchange_rate_service import convert_cost_by_source_site
 from backend.domain.samba.policy.model import SambaPolicy
 from backend.domain.samba.policy.repository import SambaPolicyRepository
+
+
+class PolicyNameDuplicateError(ValueError):
+    """동일 tenant 내 정책 이름 중복."""
 
 
 class SambaPolicyService:
@@ -20,7 +26,30 @@ class SambaPolicyService:
     async def get_policy(self, policy_id: str) -> Optional[SambaPolicy]:
         return await self.repo.get_async(policy_id)
 
+    async def _assert_name_unique(
+        self,
+        name: str,
+        tenant_id: Optional[str],
+        exclude_id: Optional[str] = None,
+    ) -> None:
+        # 동일 tenant 내 같은 이름의 정책이 이미 있으면 차단
+        stmt = select(SambaPolicy).where(
+            SambaPolicy.name == name,
+            SambaPolicy.tenant_id == tenant_id,
+        )
+        existing = (await self.repo.session.execute(stmt)).scalars().all()
+        for p in existing:
+            if exclude_id and p.id == exclude_id:
+                continue
+            raise PolicyNameDuplicateError(
+                f"동일 이름의 정책이 이미 존재합니다: {name!r}"
+            )
+
     async def create_policy(self, data: Dict[str, Any]) -> SambaPolicy:
+        # 이름 중복 차단 — 드롭다운에서 같은 이름 두 개가 보여 혼란 일으키는 사고 방지
+        _name = (data.get("name") or "").strip()
+        if _name:
+            await self._assert_name_unique(_name, data.get("tenant_id"))
         if "pricing" not in data or data["pricing"] is None:
             data["pricing"] = {
                 "shippingCost": 0,
@@ -42,6 +71,19 @@ class SambaPolicyService:
     async def update_policy(
         self, policy_id: str, data: Dict[str, Any]
     ) -> Optional[SambaPolicy]:
+        # 이름 변경 시 중복 차단 (자기 자신 제외)
+        if "name" in data:
+            _name = (data.get("name") or "").strip()
+            if _name:
+                existing = await self.repo.get_async(policy_id)
+                _tenant_id = (
+                    data.get("tenant_id")
+                    if "tenant_id" in data
+                    else (existing.tenant_id if existing else None)
+                )
+                await self._assert_name_unique(
+                    _name, _tenant_id, exclude_id=policy_id
+                )
         return await self.repo.update_async(policy_id, **data)
 
     async def delete_policy(self, policy_id: str) -> bool:
