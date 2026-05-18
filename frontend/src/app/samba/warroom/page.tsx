@@ -386,7 +386,9 @@ export default function WarroomPage() {
   // 판매처 체크박스는 기존 백엔드 글로벌 enabled_markets 그대로.
   // sessionStorage에서 동기 복원 — 새로고침 시 chrome.storage 메시지 도착 전 1프레임 leak 방지.
   // 같은 탭이 살아있는 동안 유지되며 탭 닫으면 자동 비움(다른 PC 설정 누수 방지).
-  const [filterSources, setFilterSources] = useState<string[] | null>(loadInitialFilterSources)
+  // SSR(window undefined) 시점에는 null이 박혀 클라이언트에도 그대로 hydrate됨 → 모든 체크박스가 켜진 상태로 표시.
+  // 그래서 초기값은 null로 두고, 마운트 직후 useEffect에서 sessionStorage를 읽어 복원한다.
+  const [filterSources, setFilterSources] = useState<string[] | null>(null)
   const [filterMarkets, setFilterMarkets] = useState<string[] | null>(null) // null=전체
   const [availSources, setAvailSources] = useState<string[]>([])
   const [availMarkets, setAvailMarkets] = useState<string[]>([])
@@ -395,6 +397,13 @@ export default function WarroomPage() {
   // load() 폴링 closure stale 방지 — 최신값 ref 동기화
   useEffect(() => { filterSourcesOuterRef.current = filterSources }, [filterSources])
   useEffect(() => { availSourcesOuterRef.current = availSources }, [availSources])
+
+  // 마운트 즉시 sessionStorage에서 filterSources 복원 (SSR hydration이 null로 덮어쓰는 문제 보정)
+  // 같은 탭에서 페이지 이탈 후 돌아왔을 때 부분선택이 전체체크로 되돌아가지 않도록.
+  useEffect(() => {
+    const restored = loadInitialFilterSources()
+    if (Array.isArray(restored)) setFilterSources(restored)
+  }, [])
 
   useEffect(() => {
     // 1) 사용 가능 사이트/마켓 목록은 백엔드에서, 소싱처 체크 상태는 chrome.storage 우선
@@ -454,6 +463,11 @@ export default function WarroomPage() {
       }
     }
     window.addEventListener('message', onMessage)
+    // SPA 라우팅으로 페이지에 재진입한 경우 content_script가 다시 실행되지 않으므로
+    // 확장앱에 명시적으로 현재 allowedSites를 다시 보내달라고 요청한다.
+    try {
+      window.postMessage({ source: 'samba-page', type: 'GET_ALLOWED_SITES' }, window.location.origin)
+    } catch { /* ignore */ }
     return () => window.removeEventListener('message', onMessage)
   }, [])
 

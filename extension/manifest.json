@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SAMBA-WAVE",
-  "version": "2.13.30",
+  "version": "2.13.32",
   "description": "무재고 위탁판매 솔루션 - 무신사/KREAM/소싱처 수집 + 송장 자동전송 + 적립금 + 리뷰 자동작성",
   "permissions": [
     "cookies",

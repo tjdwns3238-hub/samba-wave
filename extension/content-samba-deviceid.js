@@ -15,6 +15,12 @@
     if (protocol === 'http:' && hostname === 'localhost') {
       return 'http://localhost:28080'
     }
+    // 프로덕션 페이지 열리면 백엔드 URL을 production으로 자동 복원.
+    // 옛날에 로컬 페이지 한 번 열어서 storage가 localhost로 굳어진 케이스를 자동 복구.
+    // vercel.app(프리뷰 포함) / samba-wave.co.kr 둘 다 production 백엔드로 매핑.
+    if (hostname.endsWith('.vercel.app') || hostname === 'samba-wave.co.kr' || hostname.endsWith('.samba-wave.co.kr')) {
+      return 'https://api.samba-wave.co.kr'
+    }
     return ''
   }
 
@@ -85,6 +91,15 @@
       // null=전체처리(헤더 미부착), []=전체해제, [...]=부분선택 — 구분 그대로 저장
       const sites = msg.sites === null ? null : Array.isArray(msg.sites) ? msg.sites : null
       chrome.storage.local.set({ allowedSites: sites })
+      return
+    }
+    // SPA 라우팅으로 페이지에 재진입한 경우 페이지가 현재 allowedSites를 다시 요청
+    // (content_script는 페이지 최초 로드 때만 실행되므로 재진입 시 자동 전달이 안 됨)
+    if (msg.type === 'GET_ALLOWED_SITES') {
+      chrome.storage.local.get(['allowedSites'], (data) => {
+        const sites = data && Array.isArray(data.allowedSites) ? data.allowedSites : null
+        sendAllowedSites(sites)
+      })
       return
     }
     // 오토튠 시작/중지 시 이 PC의 폴링 참여 여부 설정
