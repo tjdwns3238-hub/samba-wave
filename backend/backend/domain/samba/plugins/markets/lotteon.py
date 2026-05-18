@@ -1378,15 +1378,35 @@ class LotteonPlugin(MarketPlugin):
 
                     _updated = []
                     # 가격 + 재고 병렬 업데이트
+                    # 회귀 방지(2026-04-30 092af2ead): return_exceptions=True 결과를
+                    # 받지 않고 폐기하면 API 실패가 무음 성공으로 둔갑한다. 반드시
+                    # 결과를 받아 예외 발생 시 위 try/except 폴백으로 전파해야 한다.
                     import asyncio as _asyncio
 
-                    _tasks = []
+                    _tasks: list = []
+                    _task_kinds: list[str] = []  # 결과 인덱싱용 ("price"/"stock")
                     if itm_prc_lst:
                         _tasks.append(client.update_price(itm_prc_lst))
+                        _task_kinds.append("price")
                     if itm_stk_lst:
                         _tasks.append(client.update_stock(itm_stk_lst))
+                        _task_kinds.append("stock")
                     if _tasks:
-                        await _asyncio.gather(*_tasks, return_exceptions=True)
+                        _results = await _asyncio.gather(
+                            *_tasks, return_exceptions=True
+                        )
+                        _errs: list[tuple[str, Exception]] = [
+                            (_task_kinds[i], r)
+                            for i, r in enumerate(_results)
+                            if isinstance(r, Exception)
+                        ]
+                        if _errs:
+                            # 첫 예외를 위 try/except로 전파 → 전체 수정 폴백 진입
+                            _kind, _exc = _errs[0]
+                            logger.warning(
+                                f"[롯데ON] 경량 업데이트 {_kind} API 실패: {_exc}"
+                            )
+                            raise _exc
                     if itm_prc_lst:
                         _updated.append(f"가격({new_price:,}원)")
                     if itm_stk_lst:
