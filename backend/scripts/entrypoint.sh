@@ -175,7 +175,7 @@ asyncio.run(fix())
     # 활성 트랜잭션과 데드락 일으키는 문제 방지. 누락 컬럼이 진짜 있다면
     # alembic upgrade heads 가 IF NOT EXISTS로 추가하므로 안전.
     echo "Stamping alembic to current head..."
-    uv run alembic stamp --purge zzzzzzzzzzzzzzzzzzzzzzzzz_ssg_policy_key 2>/dev/null || true
+    uv run alembic stamp --purge zzzzzzzzzzzzzzzzzzzzzzzzzz_scp_created_at_index 2>/dev/null || true
     _MIGRATION_OK=0
     for i in 1 2 3; do
       if uv run alembic upgrade heads; then

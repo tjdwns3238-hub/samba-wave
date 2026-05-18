@@ -4919,21 +4919,9 @@ async def sync_orders_from_markets(
             # (dead code 제거: 두 번째 롯데ON 블록 → 첫 번째에 병합 완료)
             elif market_type == "ssg":
                 from backend.domain.samba.proxy.ssg import SSGClient
-                from backend.domain.samba.policy.repository import SambaPolicyRepository as _SsgPolRepo
 
-                # 정책에서 SSG 수수료율 조회 (신세계몰(전시) 키)
-                _ssg_fee_rate = 0.0
-                try:
-                    _ssg_pol_repo = _SsgPolRepo(session)
-                    _ssg_policies = await _ssg_pol_repo.filter_by_async()
-                    for _ssg_pol in _ssg_policies:
-                        _ssg_mp = (_ssg_pol.market_policies or {}).get("신세계몰(전시)", {})
-                        _ssg_fr = float(_ssg_mp.get("feeRate", 0) or 0)
-                        if _ssg_fr > 0:
-                            _ssg_fee_rate = _ssg_fr
-                            break
-                except Exception as _ssg_pe:
-                    logger.warning(f"[주문동기화] SSG 수수료율 조회 실패 (0% 사용): {_ssg_pe}")
+                # 계정 설정(additional_fields.feeRate)에서 수수료율 조회
+                _ssg_fee_rate = float(extras.get("feeRate", 0) or 0)
 
                 _ssg_api_key = extras.get("apiKey", "") or account["api_key"] or ""
                 if not _ssg_api_key:
@@ -4953,23 +4941,6 @@ async def sync_orders_from_markets(
 
                 _ssg_client = SSGClient(_ssg_api_key)
                 _clients_to_close.append(_ssg_client)
-                # 정산 API 호출: (ordNo, ordItemSeq) → settIAmt(정산금액), sellFeeRt(수수료율)
-                _ssg_settle_map: dict[str, dict] = {}
-                try:
-                    _ssg_settle_items = await _ssg_client.get_settlement_items(
-                        days=body.days
-                    )
-                    for _si in _ssg_settle_items:
-                        _key = f"{_si.get('ordNo', '')}|{_si.get('ordItemSeq', '')}"
-                        if _key and _key != "|":
-                            _ssg_settle_map[_key] = _si
-                    logger.info(
-                        f"[주문동기화] {label}: SSG 정산 {len(_ssg_settle_map)}건 조회"
-                    )
-                except Exception as _ssg_se:
-                    logger.warning(
-                        f"[주문동기화] {label}: SSG 정산 조회 실패 (무시) — {_ssg_se}"
-                    )
                 try:
                     _ssg_raw_orders = _raw_cache.get(account["id"])
                     if _ssg_raw_orders is None:
@@ -4981,15 +4952,6 @@ async def sync_orders_from_markets(
                         _ord = _ssg_client.parse_order(
                             _ssg_ro, account["id"], label, fee_rate=_ssg_fee_rate
                         )
-                        # 정산 API 매칭: settIAmt(정산금액), sellFeeRt(판매수수료율)로 revenue/fee_rate 확정
-                        _ssg_key = f"{_ssg_ro.get('ordNo', '')}|{_ssg_ro.get('ordItemSeq', '')}"
-                        _ssg_si = _ssg_settle_map.get(_ssg_key)
-                        if _ssg_si:
-                            _settl_amt = float(_ssg_si.get("settIAmt", 0) or 0)
-                            _fee_rt = float(_ssg_si.get("sellFeeRt", 0) or 0)
-                            if _settl_amt > 0:
-                                _ord["revenue"] = _settl_amt
-                                _ord["fee_rate"] = _fee_rt
                         orders_data.append(_ord)
                 except Exception as _ssg_e:
                     logger.warning(
@@ -5555,6 +5517,10 @@ async def sync_orders_from_markets(
                         and order_data["sale_price"] != existing.sale_price
                     ):
                         update_fields["sale_price"] = order_data["sale_price"]
+                        if order_data.get("revenue") is not None:
+                            update_fields["revenue"] = order_data["revenue"]
+                        if order_data.get("fee_rate") is not None:
+                            update_fields["fee_rate"] = order_data["fee_rate"]
                     # 고객결제금액 갱신: 변경됐거나 기존 NULL이면 채움
                     new_total_paid = order_data.get("total_payment_amount")
                     if new_total_paid is not None:
