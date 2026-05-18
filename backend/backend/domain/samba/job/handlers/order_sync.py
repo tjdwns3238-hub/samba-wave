@@ -22,11 +22,10 @@ logger = logging.getLogger(__name__)
 
 
 def _per_account_timeout_seconds(days: int) -> int:
-    # 120~300초 (1차 단축 60~180초는 너무 짧아 정상 응답도 timeout, 이전 180~900초는 너무 김).
-    # 롯데ON 한 계정 정상 처리에 주문조회+정산+교환/취소/반품+배송진행 등 5~7개 API 호출이
-    # 누적돼 60~90초까지 걸림. hang 좀비는 명시적 rollback + 클라이언트 aclose 로 차단되므로
-    # timeout 을 적당히 늘려도 도미노는 안 남.
-    return max(120, min(300, days * 60))
+    # 180~300초. 11번가/롯데ON 정상 처리에 주문/배송준비/발주확인 N건/취소/반품/교환 등
+    # 5~7개 API가 누적돼 60~90초가 보통이고 살짝 느려지면 120초로는 자주 끊김.
+    # hang 좀비는 명시적 rollback + 클라이언트 aclose 로 차단되므로 늘려도 도미노는 안 남.
+    return max(180, min(300, days * 60))
 
 
 async def run(
@@ -87,9 +86,10 @@ async def run(
     all_results: list[dict[str, Any]] = []
     per_account_timeout = _per_account_timeout_seconds(days)
 
-    # 동시 실행 한도 — 풀(write max 50) 안에서 오토튠 ~10 + 마진 고려해 5로 제한.
-    # 21계정 sequential → 5개씩 병렬로 약 4배 빠름. isolation 은 계정별 독립 세션으로 유지.
-    _CONCURRENCY = 5
+    # 동시 실행 한도 — 풀(write max 50) 안에서 오토튠 ~10 + 마진 고려.
+    # 5병렬 시 11번가 IP rate-limit/DB 풀 경합으로 다수 timeout 관측되어 3으로 하향.
+    # 24계정 기준 sequential 대비 약 3배 빠름. isolation 은 계정별 독립 세션 유지.
+    _CONCURRENCY = 3
     _sem = asyncio.Semaphore(_CONCURRENCY)
     _done_counter = {"n": 0}
     _cancel_flag = {"cancelled": False}

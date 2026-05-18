@@ -32,19 +32,40 @@ class ElevenstRateLimitError(Exception):
 
 
 _elevenst_clients: dict[str, httpx.AsyncClient] = {}
+_elevenst_clients_created_at: dict[str, float] = {}
+# 클라이언트 TTL — 장기 가동 워커에서 stale keepalive 커넥션이 30s read_timeout을
+# 여러 번 누적시키는 사례 차단. 10분 경과 시 새 클라이언트로 교체.
+_ELEVENST_CLIENT_TTL_SEC = 600
 
 
 def _get_elevenst_http_client(api_key: str) -> httpx.AsyncClient:
     """api_key별 httpx 클라이언트 재사용 — 연결 풀 유지로 SSL 핸드셰이크 반복 방지.
 
-    닫힌 클라이언트가 캐시에 남아 있으면 새로 생성한다.
+    닫힌 클라이언트 또는 TTL 경과 시 새로 생성한다.
     """
+    import time as _time
+
     existing = _elevenst_clients.get(api_key)
-    if existing is None or existing.is_closed:
+    created_at = _elevenst_clients_created_at.get(api_key, 0.0)
+    now = _time.monotonic()
+    if (
+        existing is None
+        or existing.is_closed
+        or (now - created_at) > _ELEVENST_CLIENT_TTL_SEC
+    ):
+        # TTL 만료된 기존 클라이언트는 백그라운드로 정리(in-flight 요청 보호)
+        if existing is not None and not existing.is_closed:
+            import asyncio as _asyncio
+
+            try:
+                _asyncio.create_task(existing.aclose())
+            except RuntimeError:
+                pass
         _elevenst_clients[api_key] = httpx.AsyncClient(
             timeout=settings.http_timeout_default,
             limits=httpx.Limits(max_keepalive_connections=20, max_connections=40),
         )
+        _elevenst_clients_created_at[api_key] = now
     return _elevenst_clients[api_key]
 
 
@@ -796,7 +817,14 @@ class ElevenstClient:
         headers = self._headers()
 
         client = _get_elevenst_http_client(self.api_key)
-        resp = await client.get(url, headers=headers)
+        try:
+            resp = await client.get(url, headers=headers)
+        except (httpx.ConnectError, httpx.RemoteProtocolError) as conn_err:
+            # stale keepalive 커넥션 → 풀 폐기 후 1회 재시도
+            logger.warning(f"[11번가] 발주확인 연결 오류, 재시도: {conn_err}")
+            _elevenst_clients.pop(self.api_key, None)
+            client = _get_elevenst_http_client(self.api_key)
+            resp = await client.get(url, headers=headers)
         logger.info(
             "[11번가] 발주확인 ordNo=%s ordPrdSeq=%s → %s",
             ord_no,
@@ -1760,7 +1788,16 @@ class ElevenstClient:
         headers = self._headers()
 
         client = _get_elevenst_http_client(self.api_key)
-        resp = await client.get(url, headers=headers)
+        try:
+            resp = await client.get(url, headers=headers)
+        except (httpx.ConnectError, httpx.RemoteProtocolError) as conn_err:
+            # stale keepalive 커넥션 → 풀 폐기 후 1회 재시도
+            logger.warning(
+                f"[11번가] claim 조회({claim_type}) 연결 오류, 재시도: {conn_err}"
+            )
+            _elevenst_clients.pop(self.api_key, None)
+            client = _get_elevenst_http_client(self.api_key)
+            resp = await client.get(url, headers=headers)
         logger.info(
             "[11번가] GET /claimservice/%s/%s/%s → %s",
             claim_type,
