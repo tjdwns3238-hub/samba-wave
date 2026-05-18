@@ -17,12 +17,19 @@ from starlette.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
-# 키 검증을 건너뛸 경로 (health check, 루트)
+# 키 검증을 건너뛸 경로 (health check, 루트, 인증 진입점)
+# 회원가입·로그인 엔드포인트는 X-Api-Key 없이도 호출 가능해야 함
+# (invite_code + rate_limit + role-based 가드로 보호)
 _EXEMPT_PATHS = {
     "/",
     "/api/v1/health",
     "/api/v1/samba/sourcing-accounts/extension-key",
     "/api/v1/license/verify",
+    "/api/v1/samba/users",  # 회원가입 POST (목록조회 GET은 라우터에서 require_admin)
+    "/api/v1/samba/users/login",  # 로그인
+    "/api/v1/auth/email/sign-up",
+    "/api/v1/auth/email/login",
+    "/api/v1/auth/refresh",
 }
 
 # 키 검증을 건너뛸 prefix (정적 자산 — 모델 프리셋 PNG 등)
