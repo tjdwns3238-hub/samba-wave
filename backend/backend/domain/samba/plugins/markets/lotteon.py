@@ -2726,6 +2726,8 @@ class LotteonPlugin(MarketPlugin):
                         raise
                 if _reg_exception is not None:
                     raise _reg_exception
+                if api_result is None:
+                    raise LotteonApiError("등록 결과 없음 (api_result=None)")
                 # proxy.register_product 가 spdNo를 최상위로 반환 (service.py가 api_result.get("spdNo")로 읽음)
                 spd_no = api_result.get("spdNo", "") or api_result.get("epdNo", "")
                 logger.info(f"[롯데ON] 등록 완료 — spdNo={spd_no!r}")
