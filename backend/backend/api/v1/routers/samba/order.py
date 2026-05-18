@@ -212,6 +212,32 @@ PENDING_ORDER_STATUSES = (
     "undeliverable",
 )
 
+# 프론트 STATUS_MAP 라벨 → 내부 enum 키 역매핑.
+# 플레이오토 미등록 주문에서 status를 shipping_status(한글 라벨)와 의미적으로 맞출 때 사용.
+SHIPPING_LABEL_TO_STATUS_KEY = {
+    "주문접수": "pending",
+    "상품준비중": "pending",  # preparing 제거 — 미등록 주문엔 준비중 의미 없음
+    "배송대기중": "wait_ship",
+    "송장전송완료": "wait_ship",
+    "상품도착": "arrived",
+    "사무실도착": "arrived",
+    "송장전송실패": "ship_failed",
+    "국내배송중": "shipping",
+    "출고완료": "shipping",
+    "배송완료": "delivered",
+    "구매확정": "delivered",
+    "취소중": "cancelling",
+    "취소요청": "cancel_requested",
+    "취소완료": "cancelled",
+    "반품중": "returning",
+    "반품요청": "return_requested",
+    "반품완료": "returned",
+    "교환중": "exchanging",
+    "교환완료": "exchanged",
+    "회수확정": "return_completed",
+    "발송불가": "undeliverable",
+}
+
 # 취소요청 알람 — 마켓에서 취소 신호(shipping_status='취소요청'/'취소완료')가 들어왔지만
 # 우리 내부 status는 아직 처리/배송 단계라 발주·송장 등록 사고 위험이 있는 케이스.
 # UI 라벨 기준: 주문접수/상품준비중/배송대기중/사무실도착/국내배송중/송장전송실패/배송완료
@@ -5416,6 +5442,19 @@ async def sync_orders_from_markets(
                             order_data["product_image"] = _unreg_matched[
                                 "product_image"
                             ]
+                # 플레이오토 미등록 주문 status를 shipping_status에 맞춰 동기화.
+                # 미등록 = collected_product_id 없음 + source_url/product_image 모두 비어있음.
+                # 매칭/미등록캐시 적용 이후 시점에 판정해야 정확함.
+                if (
+                    order_data.get("source") == "playauto"
+                    and not order_data.get("collected_product_id")
+                    and not order_data.get("source_url")
+                    and not order_data.get("product_image")
+                ):
+                    _ss = str(order_data.get("shipping_status") or "").strip()
+                    _mapped_status = SHIPPING_LABEL_TO_STATUS_KEY.get(_ss)
+                    if _mapped_status:
+                        order_data["status"] = _mapped_status
                 # 상품명에서 소싱처 상품번호 추출 → source_site/source_url 보충
                 # 플레이오토는 1 channel에 5 별칭이 묶인 구조라 product_name 끝 공통 무신사
                 # goods_no가 별칭 무관하게 cross-매칭됨 (예: 캐논 주문이 고경 등록 cp에 매칭).
