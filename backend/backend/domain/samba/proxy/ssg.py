@@ -260,14 +260,130 @@ class SSGClient:
 
         SSG Open API v0.4: POST /item/0.4/updateItem.ssg (XStream XML)
         v0.5 updateItem.ssg는 SSG 미지원 (resultCode=99 "Latest Ver. 0.4").
+
+        tempUitemId는 insertItem 전용 임시 ID로, updateItem에서는 SSG가 무시한다.
+        sales-status API로 실제 uitemId를 조회한 뒤 교체해야 옵션 가격이 반영됨.
+
+        가격 인상 시 SSG 검증 순서: 새 대표가 vs 기존 옵션최저가
+        → 1단계로 대표가만 기존 옵션가로 맞춘 뒤, 2단계에서 전체 업데이트.
         """
+        import asyncio as _asyncio
+        import copy as _copy
+        import re as _re
+
         item_id = product_data.pop("itemId", "") or ""
         product_data["itemId"] = item_id
+
+        # updateItem에서는 tempUitemId 대신 실제 uitemId를 사용해야 SSG가 옵션 가격을 인식.
+        # sales-status API로 현재 uitemId 목록 조회 → 등록 순서(tempUitemId 1,2,3...)와 매핑.
+        uitem_id_map: dict[str, str] = {}
+        try:
+            status_resp = await self.get_item_sales_status(item_id)
+            option_invs = (
+                status_resp.get("result", {})
+                .get("salesStatus", {})
+                .get("optionInventories", [])
+            )
+            if isinstance(option_invs, dict):
+                option_invs = [option_invs]
+            for idx, inv in enumerate(option_invs, start=1):
+                uid = str(inv.get("uitemId", "")).strip()
+                if uid:
+                    uitem_id_map[str(idx)] = uid
+            if uitem_id_map:
+                logger.info(f"[SSG] uitemId 매핑 완료 ({len(uitem_id_map)}개): {uitem_id_map}")
+        except Exception as _e:
+            logger.warning(f"[SSG] uitemId 조회 실패 — tempUitemId로 전송 (옵션가 미반영 위험): {_e}")
+
+        def _replace_temp_ids_in_prices(data: dict) -> dict:
+            """tempUitemId를 실제 uitemId로 교체 (uitemPluralPrcs + uitems 모두).
+
+            uitemPluralPrcs 구조: {"uitemPrc": [...]}  (_wrap_list_always_array(..., "uitemPrc"))
+            uitems 구조: {"uitem": [...]}               (_wrap_list_always_array(..., "uitem"))
+
+            uitems 업데이트 시 uitemOptnNm1 등 옵션명 필드를 제거해야 SSG '중복 에러' 방지.
+            uitemAttr는 등록 시 전용이므로 수정 모드에서는 제거.
+            """
+            if not uitem_id_map:
+                return data
+            data = _copy.deepcopy(data)
+
+            # uitemPluralPrcs: tempUitemId → uitemId
+            prcs_wrap = data.get("uitemPluralPrcs")
+            if isinstance(prcs_wrap, dict):
+                items = prcs_wrap.get("uitemPrc") or prcs_wrap.get("item") or []
+                if isinstance(items, dict):
+                    items = [items]
+                for entry in items:
+                    t = str(entry.get("tempUitemId", "")).strip()
+                    if t in uitem_id_map:
+                        entry.pop("tempUitemId", None)
+                        entry["uitemId"] = uitem_id_map[t]
+
+            # uitems: tempUitemId → uitemId, 옵션명 관련 필드 제거 (재등록 방지)
+            uitems_wrap = data.get("uitems")
+            if isinstance(uitems_wrap, dict):
+                items = uitems_wrap.get("uitem") or uitems_wrap.get("item") or []
+                if isinstance(items, dict):
+                    items = [items]
+                for entry in items:
+                    t = str(entry.get("tempUitemId", "")).strip()
+                    if t in uitem_id_map:
+                        entry.pop("tempUitemId", None)
+                        entry["uitemId"] = uitem_id_map[t]
+                        entry.pop("uitemOptnTypeNm1", None)
+                        entry.pop("uitemOptnNm1", None)
+
+            # uitemAttr는 옵션 신규 등록 전용 — 수정 모드에서는 제거
+            data.pop("uitemAttr", None)
+
+            return data
+
+        product_data = _replace_temp_ids_in_prices(product_data)
+
         xml_body = '<?xml version="1.0" encoding="UTF-8"?>' + self._to_xml(
             product_data, "updateItem"
         )
         logger.debug(f"[SSG] updateItem XML (itemId={item_id}):\n{xml_body[:2000]}")
         result = await self._call_api_xml("POST", "/item/0.4/updateItem.ssg", xml_body)
+
+        # 가격 인상 감지: SSG가 '새 대표가 vs 기존 옵션최저가'를 먼저 검증하므로
+        # 대표가 인상 시 오류 → 1단계로 대표가만 기존 옵션가로 낮춰 검증 통과 후 옵션가 올리기
+        # → 2단계에서 새 대표가 + 새 옵션가로 전체 업데이트
+        desc = result.get("result", {}).get("resultDesc", "") or ""
+        m = _re.search(r'옵션최저가격\s*([\d,]+)원', desc)
+        if not m:
+            m = _re.search(r'옵션판매가[는은]\s*([\d,]+)원', desc)
+        if m and product_data.get("salesPrcInfos"):
+            cur_min = int(m.group(1).replace(",", ""))
+            logger.info(f"[SSG] 가격 인상 감지 → 1단계: 대표가={cur_min}원으로 맞추기")
+
+            def _patch_sell(prc_wrap, new_sell):
+                w = _copy.deepcopy(prc_wrap)
+                items = w.get("uitemPrc") or w.get("list", [])
+                if isinstance(items, dict):
+                    items = [items]
+                for p in items:
+                    p["sellprc"] = new_sell
+                return w
+
+            # 1단계: 대표가만 기존 옵션가로 맞추기 (uitems 제외 — 가격 조정만 목적)
+            step1_data = {
+                "itemId": item_id,
+                "salesPrcInfos": _patch_sell(product_data["salesPrcInfos"], cur_min),
+            }
+            if product_data.get("uitemPluralPrcs"):
+                step1_data["uitemPluralPrcs"] = product_data["uitemPluralPrcs"]
+            xml_step1 = '<?xml version="1.0" encoding="UTF-8"?>' + self._to_xml(
+                step1_data, "updateItem"
+            )
+            r1 = await self._call_api_xml("POST", "/item/0.4/updateItem.ssg", xml_step1)
+            r1_code = r1.get("result", {}).get("resultCode")
+            logger.info(f"[SSG] updateItem 1단계(대표가={cur_min}) resultCode={r1_code}")
+            await _asyncio.sleep(1.5)
+            # 2단계: 원래 데이터(새 대표가)로 재시도 — 이제 옵션가도 올라갔으므로 통과
+            result = await self._call_api_xml("POST", "/item/0.4/updateItem.ssg", xml_body)
+
         return {"success": True, "data": result}
 
     async def delete_product(self, item_id: str) -> dict[str, Any]:

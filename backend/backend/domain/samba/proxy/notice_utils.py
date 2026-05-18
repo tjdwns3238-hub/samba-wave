@@ -1159,6 +1159,7 @@ def build_ssg_notice(
                 "itemMngPropId": "0000000006",
                 "itemMngCntt": "관련 법 및 소비자 분쟁해결 규정에 따름",
             },
+            {"itemMngPropId": "0000000011", "itemMngCntt": product.get("_ssg_origin_code") or fallback},
             {"itemMngPropId": "0000000012", "itemMngCntt": as_info},
         ]
     elif group == "shoes":

@@ -63,7 +63,6 @@ class SSGPlugin(MarketPlugin):
         # 경량 모드: 설정에 인프라 ID가 모두 있으면 fetch_infra() API 호출 스킵
         skip_image = product.get("_skip_image_upload", False) and bool(existing_no)
         if skip_image:
-            infra: dict[str, Any] = {}
             _infra_keys = (
                 "whoutAddrId",
                 "snbkAddrId",
@@ -72,7 +71,10 @@ class SSGPlugin(MarketPlugin):
             )
             _all_present = all(creds.get(k) for k in _infra_keys)
             if _all_present:
-                logger.info("[SSG] 경량 가격/재고 모드 → fetch_infra 스킵, 설정값 사용")
+                # 배송 ID는 설정값 사용, 원산지 코드는 fetch_infra 캐시에서 취득
+                _full_infra = await client.fetch_infra()
+                infra: dict[str, Any] = {"origin_code_map": _full_infra.get("origin_code_map", {})}
+                logger.info("[SSG] 경량 가격/재고 모드 → 배송 ID 설정값 사용, 원산지 코드만 별도 조회")
             else:
                 infra = await client.fetch_infra()
                 logger.info(
