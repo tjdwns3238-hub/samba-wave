@@ -1192,7 +1192,9 @@ class SambaShipmentService:
                     policy_acc_ids = [mp["accountId"]]
                 # 정책에 계정 목록이 있으면 해당 계정만, 없으면 모두 허용
                 if policy_acc_ids and aid not in policy_acc_ids:
-                    logger.warning(f"[전송] 계정 {aid} 정책 필터링됨 — policy_acc_ids={policy_acc_ids}, market_type={acc.market_type}")
+                    logger.warning(
+                        f"[전송] 계정 {aid} 정책 필터링됨 — policy_acc_ids={policy_acc_ids}, market_type={acc.market_type}"
+                    )
                     continue
                 filtered_ids.append(aid)
             target_account_ids = filtered_ids

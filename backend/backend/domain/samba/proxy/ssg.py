@@ -291,9 +291,13 @@ class SSGClient:
                 if uid:
                     uitem_id_map[str(idx)] = uid
             if uitem_id_map:
-                logger.info(f"[SSG] uitemId 매핑 완료 ({len(uitem_id_map)}개): {uitem_id_map}")
+                logger.info(
+                    f"[SSG] uitemId 매핑 완료 ({len(uitem_id_map)}개): {uitem_id_map}"
+                )
         except Exception as _e:
-            logger.warning(f"[SSG] uitemId 조회 실패 — tempUitemId로 전송 (옵션가 미반영 위험): {_e}")
+            logger.warning(
+                f"[SSG] uitemId 조회 실패 — tempUitemId로 전송 (옵션가 미반영 위험): {_e}"
+            )
 
         def _replace_temp_ids_in_prices(data: dict) -> dict:
             """tempUitemId를 실제 uitemId로 교체 (uitemPluralPrcs + uitems 모두).
@@ -351,9 +355,9 @@ class SSGClient:
         # 대표가 인상 시 오류 → 1단계로 대표가만 기존 옵션가로 낮춰 검증 통과 후 옵션가 올리기
         # → 2단계에서 새 대표가 + 새 옵션가로 전체 업데이트
         desc = result.get("result", {}).get("resultDesc", "") or ""
-        m = _re.search(r'옵션최저가격\s*([\d,]+)원', desc)
+        m = _re.search(r"옵션최저가격\s*([\d,]+)원", desc)
         if not m:
-            m = _re.search(r'옵션판매가[는은]\s*([\d,]+)원', desc)
+            m = _re.search(r"옵션판매가[는은]\s*([\d,]+)원", desc)
         if m and product_data.get("salesPrcInfos"):
             cur_min = int(m.group(1).replace(",", ""))
             logger.info(f"[SSG] 가격 인상 감지 → 1단계: 대표가={cur_min}원으로 맞추기")
@@ -379,10 +383,14 @@ class SSGClient:
             )
             r1 = await self._call_api_xml("POST", "/item/0.4/updateItem.ssg", xml_step1)
             r1_code = r1.get("result", {}).get("resultCode")
-            logger.info(f"[SSG] updateItem 1단계(대표가={cur_min}) resultCode={r1_code}")
+            logger.info(
+                f"[SSG] updateItem 1단계(대표가={cur_min}) resultCode={r1_code}"
+            )
             await _asyncio.sleep(1.5)
             # 2단계: 원래 데이터(새 대표가)로 재시도 — 이제 옵션가도 올라갔으므로 통과
-            result = await self._call_api_xml("POST", "/item/0.4/updateItem.ssg", xml_body)
+            result = await self._call_api_xml(
+                "POST", "/item/0.4/updateItem.ssg", xml_body
+            )
 
         return {"success": True, "data": result}
 

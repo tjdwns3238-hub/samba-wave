@@ -73,8 +73,12 @@ class SSGPlugin(MarketPlugin):
             if _all_present:
                 # 배송 ID는 설정값 사용, 원산지 코드는 fetch_infra 캐시에서 취득
                 _full_infra = await client.fetch_infra()
-                infra: dict[str, Any] = {"origin_code_map": _full_infra.get("origin_code_map", {})}
-                logger.info("[SSG] 경량 가격/재고 모드 → 배송 ID 설정값 사용, 원산지 코드만 별도 조회")
+                infra: dict[str, Any] = {
+                    "origin_code_map": _full_infra.get("origin_code_map", {})
+                }
+                logger.info(
+                    "[SSG] 경량 가격/재고 모드 → 배송 ID 설정값 사용, 원산지 코드만 별도 조회"
+                )
             else:
                 infra = await client.fetch_infra()
                 logger.info(
