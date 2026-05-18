@@ -320,10 +320,10 @@ export function ExternalIntegrationsPanel(props: Props) {
               <div style={{ position: 'relative', paddingTop: '120%', background: '#1A1A1A' }}>
                 {p.image ? (
                   <img
-                    src={`${API_BASE}${p.image}?t=${Date.now()}`}
+                    src={`${API_BASE}${p.image}`}
                     alt={p.label}
                     style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', objectFit: 'cover', cursor: 'pointer' }}
-                    onClick={() => setPresetZoom(`${API_BASE}${p.image}?t=${Date.now()}`)}
+                    onClick={() => setPresetZoom(`${API_BASE}${p.image}`)}
                   />
                 ) : (
                   <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', color: '#555', fontSize: '0.7rem', textAlign: 'center' }}>이미지 없음</div>

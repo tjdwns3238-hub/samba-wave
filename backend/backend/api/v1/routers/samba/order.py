@@ -611,7 +611,7 @@ async def dashboard_stats(
 ):
     """대시보드 집계 — DB에서 SUM/COUNT 후 결과만 반환 (빠름)."""
     # 캐시 조회 (TTL 60초, tenant별 키)
-    _cache_key = f"order:dashboard-stats:{tenant_id or '_global'}"
+    _cache_key = f"order:dashboard-stats-v3:{tenant_id or '_global'}"
     _cached = await cache.get(_cache_key)
     if _cached:
         return _cached
@@ -882,7 +882,9 @@ async def dashboard_stats(
     # 일별 누적 등록상품수: "지금 마켓에 1개 이상 등록된 상품수" 정의로 통일
     #   - 오늘(today_str): 실시간 build_market_registered_conditions 계산값
     #   - 과거 6일: samba_daily_registered_snapshot 테이블의 그날 0시 스냅샷
-    #   - 스냅샷이 없는 과거일은 오늘값에서 역산: count(d) = count(d+1) - newReg(d+1) + delete(d+1)
+    #   - 스냅샷이 없는 과거일은 오늘값으로 평탄 채움
+    #     (역산은 first_market_registered_at의 0→≥1 사이클 재진입 때문에
+    #      오토튠 재등록 시 신규등록이 과대 집계돼 과거값이 비정상적으로 작아짐 — 사용 금지)
     from backend.domain.samba.collector.model import SambaDailyRegisteredSnapshot
 
     today_str = (week_ago + timedelta(days=6)).strftime("%Y-%m-%d")
@@ -911,32 +913,26 @@ async def dashboard_stats(
     snap_rows = (await session.execute(snap_q)).all()
     snap_map = {r.snapshot_date: int(r.registered_count) for r in snap_rows}
 
-    # 스냅샷 없는 과거일은 역산으로 채움 (최신일부터 역순)
-    #   d+1일의 등록상품수 = d일의 등록상품수 + (d+1일 신규등록) - (d+1일 마켓삭제)
-    #   => d일의 등록상품수 = d+1일의 등록상품수 - (d+1일 신규등록) + (d+1일 마켓삭제)
-    running = int(market_registered_count)
-    for i in range(5, -1, -1):
-        d_str = past_dates[i]
-        next_d_str = past_dates[i + 1] if i + 1 < 6 else today_str
-        # 다음날의 신규등록/마켓삭제 빼서 어제값 역산
-        running = (
-            running
-            - int(new_reg_map.get(next_d_str, 0))
-            + int(del_map.get(next_d_str, 0))
-        )
-        # 스냅샷이 있으면 그것을 우선 사용, 없으면 역산값 사용
-        if d_str in snap_map:
-            reg_count_map[d_str] = snap_map[d_str]
-            # 다음 역산 기준도 스냅샷값으로 동기화 (역산 오차 누적 방지)
-            running = snap_map[d_str]
-        else:
-            reg_count_map[d_str] = max(running, 0)
+    # 스냅샷이 있으면 사용, 없으면 오늘값으로 평탄 채움
+    # — 매일 0시 TASK 6 누적되면 자연스럽게 진짜 스냅샷으로 대체됨
+    today_count = int(market_registered_count)
+    for d_str in past_dates:
+        reg_count_map[d_str] = snap_map.get(d_str, today_count)
 
-    # 일별 신규 수집상품수 (그 날 created_at 으로 들어온 행의 개수, 누적 아님)
-    # 기존 누적 카운트(매일 거의 동일한 값)를 GROUP BY 1쿼리 일별 신규로 교체.
-    # 7번 풀스캔 → 1번 범위 스캔으로 응답시간 단축.
+    # 일별 누적 수집상품수 = "그 날(말) 시점 삼바에 저장되어있는 전체 상품수"
+    # 구현: 현재 total 에서 그 다음날 이후 created 된 행수를 빼서 역산 (1풀스캔 + 1범위스캔)
+    total_collected_q = select(func.count(SambaCollectedProduct.id))
+    if tenant_id is not None:
+        total_collected_q = total_collected_q.where(
+            or_(
+                SambaCollectedProduct.tenant_id == tenant_id,
+                SambaCollectedProduct.tenant_id == None,  # noqa: E711
+            )
+        )
+    total_collected = int((await session.execute(total_collected_q)).scalar() or 0)
+
     created_kst = SambaCollectedProduct.created_at + text("INTERVAL '9 hours'")
-    collected_daily_q = (
+    daily_new_q = (
         select(
             func.date(created_kst).label("day"),
             func.count().label("cnt"),
@@ -948,16 +944,23 @@ async def dashboard_stats(
         .group_by(func.date(created_kst))
     )
     if tenant_id is not None:
-        collected_daily_q = collected_daily_q.where(
+        daily_new_q = daily_new_q.where(
             or_(
                 SambaCollectedProduct.tenant_id == tenant_id,
                 SambaCollectedProduct.tenant_id == None,  # noqa: E711
             )
         )
-    collected_rows = (await session.execute(collected_daily_q)).all()
-    collected_count_map: dict[str, int] = {
-        str(r.day): int(r.cnt) for r in collected_rows
-    }
+    daily_new_rows = (await session.execute(daily_new_q)).all()
+    daily_new_map = {str(r.day): int(r.cnt) for r in daily_new_rows}
+
+    # 7일 누적 카운트: 오늘=total, 어제=total-(오늘신규), 그저께=어제-(어제신규) ...
+    collected_count_map: dict[str, int] = {today_str: total_collected}
+    running_total = total_collected
+    for i in range(5, -1, -1):
+        d_str = past_dates[i]
+        next_d_str = past_dates[i + 1] if i + 1 < 6 else today_str
+        running_total -= daily_new_map.get(next_d_str, 0)
+        collected_count_map[d_str] = max(running_total, 0)
 
     for w in weekly:
         w["newRegistered"] = int(new_reg_map.get(w["date"], 0))
@@ -1688,6 +1691,75 @@ async def set_auto_sync_interval(
         minutes = 0
     await _set_setting(session, "order_auto_sync_interval_minutes", minutes)
     return {"interval_minutes": minutes}
+
+
+@router.get("/auto-sync-history")
+async def get_auto_sync_history(
+    limit: int = 2,
+    session: AsyncSession = Depends(get_read_session_dependency),
+) -> dict:
+    """주문 자동실행(order_sync 잡) 최근 이력 N건 요약.
+
+    프론트 '주문 자동실행' 섹션에서 최근 수집 결과를 표시하기 위함.
+    """
+    from sqlalchemy import text as _t
+
+    limit = max(1, min(int(limit or 2), 10))
+    rows = await session.execute(
+        _t(
+            "SELECT id, status, created_at, started_at, completed_at, result, error "
+            "FROM samba_jobs WHERE job_type = 'order_sync' "
+            "ORDER BY created_at DESC LIMIT :lim"
+        ),
+        {"lim": limit},
+    )
+    items: list[dict] = []
+    for r in rows.fetchall():
+        job_id, status, created_at, started_at, completed_at, result, error = r
+        result_dict = result if isinstance(result, dict) else {}
+        results_list = result_dict.get("results") or []
+        per_market: list[dict] = []
+        for it in results_list:
+            if not isinstance(it, dict):
+                continue
+            per_market.append(
+                {
+                    "account": it.get("account", ""),
+                    "status": it.get("status", ""),
+                    "synced": int(it.get("synced") or 0),
+                    "fetched": int(it.get("fetched") or 0),
+                    "message": (it.get("message") or "")[:200],
+                }
+            )
+        duration_sec: int | None = None
+        if started_at and completed_at:
+            duration_sec = int((completed_at - started_at).total_seconds())
+        ts = result_dict.get("tracking_sync") or {}
+        tracking_summary: dict | None = None
+        if isinstance(ts, dict) and ts:
+            tracking_summary = {
+                "success": bool(ts.get("success")),
+                "queued": int(ts.get("queued") or 0),
+                "skipped": int(ts.get("skipped") or 0),
+                "jobs": int(ts.get("job_ids_count") or 0),
+                "errors": [str(e)[:200] for e in (ts.get("errors") or [])][:3],
+                "ran_at": ts.get("ran_at"),
+            }
+        items.append(
+            {
+                "job_id": job_id,
+                "status": status,
+                "created_at": created_at.isoformat() if created_at else None,
+                "started_at": started_at.isoformat() if started_at else None,
+                "completed_at": completed_at.isoformat() if completed_at else None,
+                "duration_sec": duration_sec,
+                "total_synced": int(result_dict.get("total_synced") or 0),
+                "per_market": per_market,
+                "tracking_sync": tracking_summary,
+                "error": (error or "")[:300] if error else None,
+            }
+        )
+    return {"items": items}
 
 
 @router.get("/{order_id}", response_model=SambaOrder)

@@ -1326,14 +1326,29 @@ class LotteonPlugin(MarketPlugin):
                         s = re.sub(r"\s+", " ", s)
                         return s
 
-                    # 옵션명 → (stock, isSoldOut) 매핑 — isSoldOut 반영 위해 튜플로
-                    opt_info_map = {
-                        _norm_opt(o.get("name") or ""): (
+                    def _make_match_keys(name: str) -> set[str]:
+                        """매칭 키 양방향 생성 — 전체 라벨 + 마지막 '/' 뒤 토큰.
+
+                        회귀 배경(2026-05-11 939b89ed): _pick_lotteon_itm_label이
+                        2단 옵션에서 ' / ' 결합 라벨('D/NAVY / 085')을 우선 후보로
+                        쓰면서, 소싱처(무신사 등) new_options의 name='085'(사이즈만)와
+                        매칭이 깨졌다. 양방향 키 등록·조회로 단일/결합 라벨 둘 다 흡수.
+                        """
+                        s = _norm_opt(name)
+                        keys = {s}
+                        if "/" in s:
+                            keys.add(s.rsplit("/", 1)[-1].strip())
+                        return keys
+
+                    # 옵션명 → (stock, isSoldOut) 매핑 — 양방향 키 등록
+                    opt_info_map: dict[str, tuple[int, bool]] = {}
+                    for o in new_options:
+                        info = (
                             o.get("stock", 0) or 0,
                             bool(o.get("isSoldOut", False)),
                         )
-                        for o in new_options
-                    }
+                        for k in _make_match_keys(o.get("name") or ""):
+                            opt_info_map[k] = info
 
                     # 가격 변경 요청
                     # LOTTEON update_price 스펙: sitmNo + spdNo + slPrc 필수
@@ -1353,17 +1368,21 @@ class LotteonPlugin(MarketPlugin):
                                     "slPrc": new_price,
                                 }
                             )
-                        # 재고 업데이트 (옵션명 정규화 매칭) — 라벨 후보 선택은 헬퍼 참조
-                        itm_name = _norm_opt(_pick_lotteon_itm_label(itm))
-                        if itm_name in opt_info_map:
-                            raw_s, sold = opt_info_map[itm_name]
+                        # 재고 업데이트 (양방향 키 매칭) — 라벨 후보 선택은 헬퍼 참조
+                        itm_label = _pick_lotteon_itm_label(itm)
+                        _itm_keys = _make_match_keys(itm_label)
+                        _matched_key = next(
+                            (k for k in _itm_keys if k in opt_info_map), None
+                        )
+                        if _matched_key:
+                            raw_s, sold = opt_info_map[_matched_key]
                             stk = _apply_stock_cap(raw_s, sold)
                         else:
                             # 매칭 실패 시: 기존 min() 폴백은 품절 옵션이 섞이면 0이 되는
                             # 위험한 로직이었음. 이제는 명시적 0 + 경고 로그 (임의 재고 주입 금지).
                             logger.warning(
                                 f"[롯데ON] 경량 업데이트 — 옵션명 매칭 실패: "
-                                f"'{itm_name}', stkQty=0 강제"
+                                f"라벨='{itm_label}' keys={_itm_keys}, stkQty=0 강제"
                             )
                             stk = 0
                         itm_stk_lst.append(

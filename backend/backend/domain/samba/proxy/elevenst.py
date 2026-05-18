@@ -33,6 +33,10 @@ class ElevenstRateLimitError(Exception):
 
 _elevenst_clients: dict[str, httpx.AsyncClient] = {}
 
+# 카테고리 키속성 메타 캐시 — 카테고리 변경 빈도 낮아 프로세스 수명 동안 보존
+# (재시작 시 자동 비워짐 → 11번가 메타 변경 자동 반영)
+_ctgr_attr_cache: dict[str, list[dict[str, Any]]] = {}
+
 
 def _get_elevenst_http_client(api_key: str) -> httpx.AsyncClient:
     """api_key별 httpx 클라이언트 재사용 — 연결 풀 유지로 SSL 핸드셰이크 반복 방지.
@@ -195,6 +199,81 @@ class ElevenstClient:
             msg = data.get("message", "") or data.get("raw", "") or resp.text[:300]
             raise ElevenstApiError(f"HTTP {resp.status_code}: {msg}")
         return data
+
+    async def get_category_attributes(
+        self, category_id: str
+    ) -> list[dict[str, str]]:
+        """카테고리별 키속성(필수/선택) 메타 조회.
+
+        엔드포인트: GET /rest/cateservice/categoryAttributes/{category_id}
+        응답 XML 예시:
+            <ns2:productCtgrAttributes xmlns:ns2="...">
+              <ns2:productCtgrAttribute>
+                <prdAttrCd>2000005</prdAttrCd>
+                <prdAttrNm>치수</prdAttrNm>
+                <prdAttrNo>178026</prdAttrNo>
+                <required>Y</required>     ← 일부 카테고리만 제공
+              </ns2:productCtgrAttribute>
+              ...
+            </ns2:productCtgrAttributes>
+
+        반환: [{"cd": ..., "nm": ..., "no": ..., "required": bool}, ...]
+        실패 시 빈 리스트(폴백) — 호출부가 키속성 XML 생략하도록.
+        """
+        if not category_id:
+            return []
+        cached = _ctgr_attr_cache.get(category_id)
+        if cached is not None:
+            return cached
+
+        url = (
+            f"https://api.11st.co.kr/rest/cateservice/categoryAttributes/{category_id}"
+        )
+        headers = self._headers()
+        client = _get_elevenst_http_client(self.api_key)
+        try:
+            resp = await client.get(url, headers=headers)
+        except Exception as e:
+            logger.warning(f"[11번가] categoryAttributes HTTP 실패 cat={category_id} — {e}")
+            return []
+        logger.info(
+            f"[11번가] GET /cateservice/categoryAttributes/{category_id} → {resp.status_code}"
+        )
+        if not resp.is_success:
+            logger.warning(
+                f"[11번가] categoryAttributes 비정상 응답 cat={category_id} status={resp.status_code} body={resp.text[:200]}"
+            )
+            return []
+        attrs: list[dict[str, str]] = []
+        try:
+            root = ET.fromstring(resp.text)
+            # 네임스페이스(ns2) 무시하고 로컬명으로 매칭
+            for node in root.iter():
+                local = node.tag.split("}", 1)[-1]
+                if local != "productCtgrAttribute":
+                    continue
+                rec: dict[str, str] = {}
+                for sub in node:
+                    sub_local = sub.tag.split("}", 1)[-1]
+                    rec[sub_local] = (sub.text or "").strip()
+                if not rec.get("prdAttrCd"):
+                    continue
+                attrs.append(
+                    {
+                        "cd": rec.get("prdAttrCd", ""),
+                        "nm": rec.get("prdAttrNm", ""),
+                        "no": rec.get("prdAttrNo", ""),
+                        "required": (rec.get("required", "") or "").upper() == "Y",
+                    }
+                )
+        except ET.ParseError as e:
+            logger.warning(
+                f"[11번가] categoryAttributes XML 파싱 실패 cat={category_id} — {e}"
+            )
+            return []
+
+        _ctgr_attr_cache[category_id] = attrs
+        return attrs
 
     # ------------------------------------------------------------------
     # 상품 등록/수정
@@ -1822,10 +1901,13 @@ class ElevenstClient:
         product: dict[str, Any],
         category_code: str = "",
         settings: Optional[dict[str, Any]] = None,
+        ctgr_attributes: Optional[list[dict[str, Any]]] = None,
     ) -> str:
         """SambaCollectedProduct → 11번가 상품 등록 XML 변환.
 
         settings: 계정의 additional_fields (배송비, 출고지, 반품지 등)
+        ctgr_attributes: 카테고리별 키속성 메타 (선글라스 치수 등 필수속성).
+            ElevenstClient.get_category_attributes() 결과를 그대로 전달.
         """
         cfg = settings or {}
         name = _clean_product_name(product.get("name", ""))
@@ -2093,6 +2175,11 @@ class ElevenstClient:
         # 상품정보 제공고시 XML (카테고리별 동적 생성)
         notice_xml = _build_elevenst_notice_xml(product)
 
+        # 카테고리 키속성 XML — 선글라스/시계 등 필수속성 누락 시 등록 500 발생
+        ctgr_attr_xml = _build_elevenst_ctgr_attribute_xml(
+            product, ctgr_attributes or []
+        )
+
         # 판매자상품코드 — 삼바 내부 product.id로 통일 (주문 역매칭 키)
         seller_prd_cd = str(product.get("id") or "").strip()
 
@@ -2154,6 +2241,7 @@ class ElevenstClient:
     <certKey></certKey>
   </ProductCert>
   {image_xml}
+  {ctgr_attr_xml}
   <htmlDetail><![CDATA[{detail_html.replace("]]>", "]]]]><![CDATA[>")}]]></htmlDetail>
   {option_xml}
   {notice_xml}
@@ -3016,6 +3104,107 @@ def _build_elevenst_notice_xml(product: dict[str, Any]) -> str:
   <company>{_escape_xml(company)}</company>
   <modelNm>{_escape_xml(_resolve_model_nm(product) or "없음")}</modelNm>
 </ProductNotification>"""
+
+
+# ──────────────────────────────────────────────────────────────
+# 키속성(ProductCtgrAttribute) — 카테고리별 필수속성
+# ──────────────────────────────────────────────────────────────
+# 11번가 응답: GET /rest/cateservice/categoryAttributes/{cat}
+# 등록 XML:    <ProductCtgrAttribute>
+#                <prdAttrCd>속성코드</prdAttrCd>
+#                <prdAttrNm>속성명</prdAttrNm>
+#                <prdAttrNo>속성ID</prdAttrNo>
+#                <prdAttrVal>속성값</prdAttrVal>
+#              </ProductCtgrAttribute>
+# 휠라 선글라스(GSSHOP) 등 일부 카테고리는 "치수" 필수 — 누락 시 500.
+
+# 속성명 → 상품 데이터 매핑 키워드 우선순위
+# (옵션값/제품속성에 키워드가 포함되면 해당 값을 사용)
+_CTGR_ATTR_FALLBACK = "상세페이지 참조"
+
+
+def _resolve_ctgr_attr_value(attr_name: str, product: dict[str, Any]) -> str:
+    """키속성명에 대응하는 상품 값을 결정.
+
+    - 상품 attributes(dict/list) 중 키속성명에 매칭되는 값 우선
+    - 색상/소재/제조국 등 표준 필드 매핑
+    - 매칭 실패 시 fallback("상세페이지 참조") — 11번가는 자유 텍스트 허용
+    """
+    if not attr_name:
+        return _CTGR_ATTR_FALLBACK
+    nm = attr_name.strip()
+
+    # 1) 상품 attributes에서 키속성명 매칭 (수집기 형식: list[{name,value}] or dict)
+    raw_attrs = product.get("attributes") or product.get("product_attributes") or []
+    if isinstance(raw_attrs, dict):
+        for k, v in raw_attrs.items():
+            if k and nm in str(k):
+                val = str(v).strip()
+                if val:
+                    return val
+    elif isinstance(raw_attrs, list):
+        for item in raw_attrs:
+            if not isinstance(item, dict):
+                continue
+            k = str(item.get("name") or item.get("key") or "")
+            v = str(item.get("value") or "")
+            if k and nm in k and v.strip():
+                return v.strip()
+
+    # 2) 표준 필드 매핑
+    if "색상" in nm or "컬러" in nm.lower() or "color" in nm.lower():
+        return (product.get("color") or "").strip() or _CTGR_ATTR_FALLBACK
+    if "소재" in nm or "재질" in nm:
+        return (product.get("material") or "").strip() or _CTGR_ATTR_FALLBACK
+    if "제조" in nm and "국" in nm:
+        return (product.get("origin") or "").strip() or _CTGR_ATTR_FALLBACK
+    if "브랜드" in nm or "brand" in nm.lower():
+        return (product.get("brand") or "").strip() or _CTGR_ATTR_FALLBACK
+    if "모델" in nm or "model" in nm.lower():
+        return (_resolve_model_nm(product) or "").strip() or _CTGR_ATTR_FALLBACK
+    if "치수" in nm or "사이즈" in nm or "size" in nm.lower():
+        options = product.get("options") or []
+        sizes = [
+            (o.get("name") or o.get("size") or "").strip()
+            for o in options
+            if isinstance(o, dict)
+        ]
+        sizes = [s for s in sizes if s]
+        if sizes:
+            return ", ".join(sizes)[:100]
+        return _CTGR_ATTR_FALLBACK
+
+    return _CTGR_ATTR_FALLBACK
+
+
+def _build_elevenst_ctgr_attribute_xml(
+    product: dict[str, Any], attributes: list[dict[str, Any]]
+) -> str:
+    """카테고리 키속성 XML 블록 생성.
+
+    11번가 응답에 required 플래그가 없는 카테고리도 있으므로,
+    응답에 들어있는 모든 속성을 안전한 값으로 채워서 전송한다.
+    (불필요한 속성을 채워도 11번가는 무시하나, 필수속성 누락 시 500 발생)
+    """
+    if not attributes:
+        return ""
+    blocks: list[str] = []
+    for a in attributes:
+        cd = (a.get("cd") or "").strip()
+        nm = (a.get("nm") or "").strip()
+        no = (a.get("no") or "").strip()
+        if not cd:
+            continue
+        val = _resolve_ctgr_attr_value(nm, product) or _CTGR_ATTR_FALLBACK
+        blocks.append(
+            "<ProductCtgrAttribute>"
+            f"<prdAttrCd>{_escape_xml(cd)}</prdAttrCd>"
+            f"<prdAttrNm>{_escape_xml(nm)}</prdAttrNm>"
+            f"<prdAttrNo>{_escape_xml(no)}</prdAttrNo>"
+            f"<prdAttrVal>{_escape_xml(val)}</prdAttrVal>"
+            "</ProductCtgrAttribute>"
+        )
+    return "\n".join(blocks)
 
 
 class ElevenstApiError(Exception):

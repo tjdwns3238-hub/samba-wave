@@ -346,6 +346,34 @@ export const orderApi = {
         body: JSON.stringify({ interval_minutes }),
       },
     ),
+  getAutoSyncHistory: (limit = 2) =>
+    request<{
+      items: Array<{
+        job_id: string
+        status: string
+        created_at: string | null
+        started_at: string | null
+        completed_at: string | null
+        duration_sec: number | null
+        total_synced: number
+        per_market: Array<{
+          account: string
+          status: string
+          synced: number
+          fetched: number
+          message: string
+        }>
+        tracking_sync: {
+          success: boolean
+          queued: number
+          skipped: number
+          jobs: number
+          errors: string[]
+          ran_at: string | null
+        } | null
+        error: string | null
+      }>
+    }>(`${SAMBA_PREFIX}/orders/auto-sync-history?limit=${limit}`),
   dispatchTrackingToMarket: (jobId: string, dryRun = false) =>
     request<{ success: boolean; dryRun?: boolean; channel?: string; courier?: string; tracking?: string; error?: string }>(
       `${SAMBA_PREFIX}/orders/tracking-sync/${jobId}/dispatch?dry_run=${dryRun}`,

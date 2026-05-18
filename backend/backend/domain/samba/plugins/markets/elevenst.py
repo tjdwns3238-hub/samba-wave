@@ -80,7 +80,12 @@ class ElevenstPlugin(MarketPlugin):
     required_fields = ["name", "sale_price"]
 
     def transform(self, product: dict, category_id: str, **kwargs) -> dict:
-        """상품 데이터 → 11번가 XML 포맷 변환."""
+        """상품 데이터 → 11번가 XML 포맷 변환.
+
+        주의: 키속성(ProductCtgrAttribute) 메타는 API 호출이 필요하므로
+        본 동기 transform()에서는 누락된다. 실제 등록 시에는 execute() 에서
+        get_category_attributes()를 호출하여 키속성을 포함한 XML을 생성한다.
+        """
         from backend.domain.samba.proxy.elevenst import ElevenstClient
 
         settings = kwargs.get("settings", {})
@@ -240,8 +245,21 @@ class ElevenstPlugin(MarketPlugin):
         except Exception as e:
             logger.warning(f"[11번가] 이미지 미러링 단계 오류 — 원본 URL 유지: {e}")
 
+        # 카테고리 키속성 메타 조회 (TTL 캐시 — 재호출 시 즉시 반환)
+        # 선글라스/시계 등은 치수 키속성이 필수이며, 누락 시 11번가가 500 반환
+        try:
+            ctgr_attributes = await client.get_category_attributes(cat_code)
+        except Exception as e:
+            logger.warning(
+                f"[11번가] 키속성 메타 조회 실패 cat={cat_code} — 키속성 없이 진행: {e}"
+            )
+            ctgr_attributes = []
+
         xml_data = ElevenstClient.transform_product(
-            product, cat_code, settings=account_settings
+            product,
+            cat_code,
+            settings=account_settings,
+            ctgr_attributes=ctgr_attributes,
         )
 
         if existing_no:

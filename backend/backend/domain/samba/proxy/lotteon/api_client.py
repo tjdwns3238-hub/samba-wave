@@ -882,14 +882,22 @@ class LotteonClient:
                 logger.warning(f"[롯데ON] getSROrderList 실패: {e}")
             return []
 
-        sr_orders, delivery_orders = await asyncio.gather(
+        sr_orders, delivery_orders, progress_orders = await asyncio.gather(
             _get_sr_orders(),
             self.get_delivery_orders(days=days),
+            self.get_delivery_progress_states(days=days),
         )
 
         # 중복 제거: (odNo, odSeq) 기준 — procSeq는 API/상태에 따라 달라지므로 제외
+        # progress_orders 우선: 같은 주문이 delivery에서 구 상태(11)로, progress에서 현재 상태(12)로 올 때
+        # progress를 먼저 처리해야 최신 상태가 보존됨
         seen: set[tuple] = set()
         merged: list[dict] = []
+        for item in progress_orders:
+            key = (item.get("odNo"), item.get("odSeq"))
+            if key not in seen:
+                seen.add(key)
+                merged.append(item)
         for item in sr_orders:
             key = (item.get("odNo"), item.get("odSeq"))
             if key not in seen:
@@ -902,7 +910,7 @@ class LotteonClient:
                 merged.append(item)
 
         logger.info(
-            f"[롯데ON] 병행 조회 완료: getSROrderList={len(sr_orders)}건, delivery={len(delivery_orders)}건, 최종={len(merged)}건"
+            f"[롯데ON] 병행 조회 완료: getSROrderList={len(sr_orders)}건, delivery={len(delivery_orders)}건, progress={len(progress_orders)}건, 최종={len(merged)}건"
         )
         return merged
 
@@ -1593,10 +1601,11 @@ class LotteonClient:
         return result
 
     async def get_delivery_progress_states(self, days: int = 7) -> list[dict]:
-        """이미 수집된 주문의 실시간 진행 상태 조회 (SellerDeliveryProgressStateSearch).
+        """배송 진행 상태 조회 (SellerDeliveryProgressStateSearch).
 
         API 제약: 조회 기간 1일 초과 불가 → 하루씩 병렬 조회 (동시 5건 제한).
-        주문수집 용도가 아닌 기존 주문 상태 갱신(발송완료→배송완료→구매확정)에 사용.
+        get_orders() 병합 + 기존 주문 상태 갱신 두 용도로 사용.
+        getSROrderList가 제외하는 상품준비(12) 이후 주문을 여기서 수집.
         """
         import asyncio
 

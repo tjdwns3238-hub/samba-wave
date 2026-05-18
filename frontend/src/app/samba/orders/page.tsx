@@ -385,6 +385,26 @@ export default function OrdersPage() {
   const [autoSyncIntervalInput, setAutoSyncIntervalInput] = useState<number>(60)
   const [autoSyncEnabled, setAutoSyncEnabled] = useState<boolean>(false)
   const [autoSyncSaving, setAutoSyncSaving] = useState<boolean>(false)
+  type AutoSyncHistoryItem = {
+    job_id: string
+    status: string
+    created_at: string | null
+    started_at: string | null
+    completed_at: string | null
+    duration_sec: number | null
+    total_synced: number
+    per_market: Array<{ account: string; status: string; synced: number; fetched: number; message: string }>
+    tracking_sync: {
+      success: boolean
+      queued: number
+      skipped: number
+      jobs: number
+      errors: string[]
+      ran_at: string | null
+    } | null
+    error: string | null
+  }
+  const [autoSyncHistory, setAutoSyncHistory] = useState<AutoSyncHistoryItem[]>([])
   useEffect(() => {
     orderApi.getAutoSyncInterval()
       .then(res => {
@@ -394,6 +414,18 @@ export default function OrdersPage() {
         }
       })
       .catch(() => {})
+  }, [])
+  // 최근 자동실행 이력 2건 — 30초마다 폴링 (러닝 상태도 추적)
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      orderApi.getAutoSyncHistory(2)
+        .then(res => { if (!cancelled) setAutoSyncHistory(res.items || []) })
+        .catch(() => {})
+    }
+    load()
+    const t = setInterval(load, 30_000)
+    return () => { cancelled = true; clearInterval(t) }
   }, [])
   const handleToggleAutoSync = async () => {
     if (autoSyncSaving) return
@@ -572,58 +604,131 @@ export default function OrdersPage() {
 
       {/* 주문 자동실행 토글바 — 주문가져오기 + 송장수집 인터벌 자동 실행 */}
       <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        gap: '1rem', padding: '0.75rem 1rem', margin: '6px 0',
+        padding: '0.75rem 1rem', margin: '6px 0',
         background: autoSyncEnabled ? 'rgba(34,197,94,0.08)' : 'rgba(255,140,0,0.08)',
         border: autoSyncEnabled ? '1px solid rgba(34,197,94,0.25)' : '1px solid rgba(255,140,0,0.25)',
         borderRadius: 10,
       }}>
-        <div>
-          <div style={{ fontSize: '0.9375rem', fontWeight: 700, color: '#E5E5E5', marginBottom: '0.2rem' }}>
-            🔄 주문 자동실행
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          gap: '1rem',
+        }}>
+          <div>
+            <div style={{ fontSize: '0.9375rem', fontWeight: 700, color: '#E5E5E5', marginBottom: '0.2rem' }}>
+              🔄 주문 자동실행
+            </div>
+            <div style={{ fontSize: '0.75rem', color: '#888' }}>
+              ON이면 설정한 분 간격마다 서버에서 전체 주문가져오기 → 송장수집을 자동 실행합니다.
+            </div>
           </div>
-          <div style={{ fontSize: '0.75rem', color: '#888' }}>
-            ON이면 설정한 분 간격마다 서버에서 전체 주문가져오기 → 송장수집을 자동 실행합니다.
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            <input
+              type="number"
+              value={autoSyncIntervalInput}
+              onChange={e => setAutoSyncIntervalInput(Math.max(5, Number(e.target.value)))}
+              min={5}
+              max={1440}
+              style={{
+                width: 56,
+                background: '#2A2A2A',
+                border: '1px solid #444',
+                color: '#ccc',
+                borderRadius: 6,
+                padding: '4px 6px',
+                fontSize: '0.8125rem',
+                textAlign: 'center',
+              }}
+            />
+            <span style={{ color: '#888', fontSize: '0.8125rem' }}>분</span>
+            <button
+              onClick={handleToggleAutoSync}
+              disabled={autoSyncSaving}
+              style={{
+                minWidth: '92px',
+                padding: '0.5rem 0.875rem',
+                borderRadius: '999px',
+                border: autoSyncEnabled ? '1px solid rgba(34,197,94,0.35)' : '1px solid rgba(255,140,0,0.35)',
+                background: autoSyncEnabled ? '#22C55E' : '#2A2A2A',
+                color: autoSyncEnabled ? '#06130A' : '#FFB84D',
+                fontSize: '0.8125rem',
+                fontWeight: 700,
+                cursor: autoSyncSaving ? 'not-allowed' : 'pointer',
+                opacity: autoSyncSaving ? 0.7 : 1,
+              }}
+            >
+              {autoSyncSaving ? '저장 중...' : autoSyncEnabled ? 'ON' : 'OFF'}
+            </button>
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-          <input
-            type="number"
-            value={autoSyncIntervalInput}
-            onChange={e => setAutoSyncIntervalInput(Math.max(5, Number(e.target.value)))}
-            min={5}
-            max={1440}
-            style={{
-              width: 56,
-              background: '#2A2A2A',
-              border: '1px solid #444',
-              color: '#ccc',
-              borderRadius: 6,
-              padding: '4px 6px',
-              fontSize: '0.8125rem',
-              textAlign: 'center',
-            }}
-          />
-          <span style={{ color: '#888', fontSize: '0.8125rem' }}>분</span>
-          <button
-            onClick={handleToggleAutoSync}
-            disabled={autoSyncSaving}
-            style={{
-              minWidth: '92px',
-              padding: '0.5rem 0.875rem',
-              borderRadius: '999px',
-              border: autoSyncEnabled ? '1px solid rgba(34,197,94,0.35)' : '1px solid rgba(255,140,0,0.35)',
-              background: autoSyncEnabled ? '#22C55E' : '#2A2A2A',
-              color: autoSyncEnabled ? '#06130A' : '#FFB84D',
-              fontSize: '0.8125rem',
-              fontWeight: 700,
-              cursor: autoSyncSaving ? 'not-allowed' : 'pointer',
-              opacity: autoSyncSaving ? 0.7 : 1,
-            }}
-          >
-            {autoSyncSaving ? '저장 중...' : autoSyncEnabled ? 'ON' : 'OFF'}
-          </button>
-        </div>
+
+        {/* 최근 자동실행 이력 2건 요약 — 작동 여부 확인용 */}
+        {autoSyncHistory.length > 0 && (
+          <div style={{
+            marginTop: 10, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.06)',
+            display: 'flex', flexDirection: 'column', gap: 6,
+          }}>
+            <div style={{ fontSize: '0.7rem', color: '#888', fontWeight: 600 }}>최근 자동실행 이력</div>
+            {autoSyncHistory.map(item => {
+              const ts = item.created_at ? new Date(item.created_at) : null
+              const tsLabel = ts ? ts.toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }) : '-'
+              const statusColor = item.status === 'completed' ? '#22C55E'
+                : item.status === 'running' ? '#FFB84D'
+                : item.status === 'pending' ? '#888'
+                : '#FF6B6B'
+              const statusLabel = item.status === 'completed' ? '완료'
+                : item.status === 'running' ? '실행중'
+                : item.status === 'pending' ? '대기'
+                : item.status === 'failed' ? '실패'
+                : item.status === 'cancelled' ? '취소' : item.status
+              const okMarkets = item.per_market.filter(m => m.status === 'success').length
+              const errMarkets = item.per_market.filter(m => m.status !== 'success' && m.status !== 'skip').length
+              const tsync = item.tracking_sync
+              return (
+                <div key={item.job_id} style={{
+                  display: 'flex', flexDirection: 'column', gap: 4,
+                  padding: '6px 8px', background: 'rgba(0,0,0,0.2)', borderRadius: 6,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: '0.75rem', color: '#CCC' }}>
+                    <span style={{ color: '#888', fontFamily: 'monospace' }}>{tsLabel}</span>
+                    <span style={{
+                      color: statusColor, fontWeight: 700,
+                      padding: '1px 6px', borderRadius: 4,
+                      background: `${statusColor}15`, border: `1px solid ${statusColor}30`,
+                    }}>{statusLabel}</span>
+                    <span style={{ color: '#4C9AFF', fontWeight: 600 }}>① 주문가져오기</span>
+                    <span>신규 <span style={{ color: '#fff', fontWeight: 700 }}>{fmtNum(item.total_synced)}</span>건</span>
+                    <span style={{ color: '#888' }}>마켓 성공 {okMarkets} / 실패 {errMarkets}</span>
+                    {item.duration_sec !== null && (
+                      <span style={{ color: '#888' }}>소요 {item.duration_sec}s</span>
+                    )}
+                    {item.error && (
+                      <span style={{ color: '#FF6B6B' }} title={item.error}>오류: {item.error.slice(0, 80)}</span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: '0.75rem', color: '#CCC', paddingLeft: 2 }}>
+                    <span style={{ color: tsync ? '#22C55E' : '#666', fontWeight: 600 }}>② 송장수집</span>
+                    {tsync ? (
+                      <>
+                        <span>큐 <span style={{ color: '#fff', fontWeight: 700 }}>{fmtNum(tsync.queued)}</span>건</span>
+                        <span style={{ color: '#888' }}>스킵 {fmtNum(tsync.skipped)}</span>
+                        <span style={{ color: '#888' }}>잡 {fmtNum(tsync.jobs)}개</span>
+                        {tsync.errors.length > 0 && (
+                          <span style={{ color: '#FF6B6B' }} title={tsync.errors.join(' / ')}>
+                            오류 {tsync.errors.length}건
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <span style={{ color: '#666' }}>
+                        {item.status === 'running' || item.status === 'pending' ? '주문가져오기 종료 후 실행' : '결과 없음'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
       </div>
 
       {/* 송장 자동전송 미니바 — 일괄 트리거 + 안내 */}

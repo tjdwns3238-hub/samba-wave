@@ -1,12 +1,16 @@
 """Application lifecycle hooks for SambaWave backend."""
 
 import asyncio
+import json
 import logging
 import os
 import sys
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Optional
+
+UTC = timezone.utc
 
 from fastapi import FastAPI
 
@@ -677,18 +681,55 @@ async def _order_auto_sync_loop() -> None:
                     _log.info(f"[주문 auto sync] order_sync 잡 종료: {status}")
                     break
 
-            # 3) 송장수집 큐 적재
+            # 3) 송장수집 큐 적재 + 결과를 order_sync 잡 result에 머지
+            tracking_summary: dict = {}
             try:
                 from backend.domain.samba.tracking_sync.service import (
                     enqueue_pending_orders,
                 )
 
-                result = await enqueue_pending_orders(
+                ts_result = await enqueue_pending_orders(
                     tenant_id=None, limit=500, days=7, force=True
                 )
-                _log.info(f"[주문 auto sync] 송장수집 큐 적재 완료: {result}")
+                _log.info(f"[주문 auto sync] 송장수집 큐 적재 완료: {ts_result}")
+                tracking_summary = {
+                    "success": bool(ts_result.get("success")),
+                    "queued": int(ts_result.get("queued") or 0),
+                    "skipped": int(ts_result.get("skipped") or 0),
+                    "errors": (ts_result.get("errors") or [])[:5],
+                    "job_ids_count": len(ts_result.get("job_ids") or []),
+                    "ran_at": datetime.now(UTC).isoformat(),
+                }
             except Exception as e:
                 _log.error(f"[주문 auto sync] 송장수집 큐 적재 오류: {e}")
+                tracking_summary = {
+                    "success": False,
+                    "queued": 0,
+                    "skipped": 0,
+                    "errors": [str(e)[:300]],
+                    "job_ids_count": 0,
+                    "ran_at": datetime.now(UTC).isoformat(),
+                }
+
+            # order_sync 잡의 result.tracking_sync 에 송장수집 요약 머지
+            try:
+                from sqlalchemy import text as _sa_text2
+
+                async with get_write_session() as ms:
+                    # result 컬럼은 JSON 타입 — jsonb로 캐스팅 후 머지하고 다시 json으로 캐스팅해 저장
+                    # (COALESCE에서 json/jsonb 혼합 불가, json || jsonb 연산자도 없음)
+                    await ms.execute(
+                        _sa_text2(
+                            "UPDATE samba_jobs "
+                            "SET result = (COALESCE(result::jsonb, '{}'::jsonb) || "
+                            "jsonb_build_object('tracking_sync', CAST(:ts AS jsonb)))::json "
+                            "WHERE id = :jid"
+                        ),
+                        {"ts": json.dumps(tracking_summary), "jid": job_id},
+                    )
+                    await ms.commit()
+            except Exception as me:
+                _log.warning(f"[주문 auto sync] tracking_sync 결과 머지 실패: {me}")
 
             _order_auto_sync_last_run = now
 

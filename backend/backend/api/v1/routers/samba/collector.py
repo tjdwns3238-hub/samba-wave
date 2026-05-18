@@ -571,7 +571,7 @@ async def delete_brand_scope(
     )
     await cache.clear_pattern("products:*")
     await cache.delete("products:counts")
-    await cache.delete("products:dashboard-stats-v3")
+    await cache.delete("products:dashboard-stats-v4")
     await cache.delete("products:category-tree")
     return {"ok": True, **result}
 
@@ -1373,18 +1373,28 @@ async def product_dashboard_stats(
     from backend.domain.samba.account.model import SambaMarketAccount as _MA
     from sqlalchemy import text
 
-    cached = await cache.get("products:dashboard-stats-v3")
+    cached = await cache.get("products:dashboard-stats-v4")
     if cached:
         return cached
 
     # 별도 세션 병렬 실행 헬퍼 — asyncpg 동일 세션 gather 금지 (CLAUDE.md).
     async def _run_brand_site():
         async with get_read_session() as s:
+            # 등록 판정은 build_market_registered_conditions와 동일 조건:
+            #   registered_accounts != '[]'::jsonb (array) AND market_product_nos NOT NULL/null/{}
+            # registered_accounts만 검사하면 옛 데이터(빈 객체/스칼라)가 통과해 과대 집계됨.
             stmt = text("""
                 SELECT source_site,
                        COALESCE(NULLIF(TRIM(brand), ''), '기타') AS brand_name,
                        COUNT(*) AS total,
-                       COUNT(*) FILTER (WHERE registered_accounts IS NOT NULL AND registered_accounts != '[]'::jsonb) AS registered,
+                       COUNT(*) FILTER (
+                         WHERE registered_accounts IS NOT NULL
+                           AND jsonb_typeof(registered_accounts) = 'array'
+                           AND registered_accounts != '[]'::jsonb
+                           AND market_product_nos IS NOT NULL
+                           AND market_product_nos::text != 'null'
+                           AND market_product_nos::text != '{}'
+                       ) AS registered,
                        COUNT(*) FILTER (WHERE sale_status = 'sold_out') AS sold_out
                 FROM samba_collected_product
                 WHERE source_site IS NOT NULL AND source_site != ''
@@ -1527,7 +1537,7 @@ async def product_dashboard_stats(
     )
 
     result = {"by_source": by_source, "by_account": by_account}
-    await cache.set("products:dashboard-stats-v3", result, ttl=600)
+    await cache.set("products:dashboard-stats-v4", result, ttl=600)
     return result
 
 
