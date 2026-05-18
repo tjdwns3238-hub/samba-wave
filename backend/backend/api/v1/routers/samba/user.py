@@ -314,11 +314,11 @@ async def login_user(
             status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다"
         )
 
-    # JWT 토큰 발급
+    # JWT 토큰 발급 — tenant_id를 tid 클레임에 포함 (자동 격리 활성화)
     from backend.domain.user.auth_service import AuthService
 
     auth_svc = AuthService(session)
-    access_token = auth_svc._create_access_token(user.id)
+    access_token = auth_svc._create_access_token(user.id, tenant_id=user.tenant_id)
 
     # 로그인 이력 저장 (실패해도 로그인은 정상 진행)
     ip = _get_client_ip(request)
