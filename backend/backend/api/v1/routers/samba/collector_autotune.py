@@ -3349,12 +3349,30 @@ async def autotune_pc_allowed_sites_get():
 
 @router.get("/autotune/status")
 async def autotune_status(device_id: str = ""):
-    """오토튠 상태 조회 — device_id 미지정 시 글로벌 합계(any_pc_running) 반환.
+    """오토튠 상태 조회 — 본인 테넌트의 device만 필터. device_id 미지정 시 본인 tenant 합계.
 
     device_id 지정 시 그 PC 인스턴스 기준 cycle/last_tick/site_loops 반환.
     """
     from backend.db.orm import get_read_session
     from backend.domain.samba.collector.model import SambaCollectedProduct as _CP2
+    from backend.core.tenant_context import current_tenant_id as _ctv
+
+    # 본인 테넌트의 device_id 목록 조회 → module-global 상태를 본인 것만 필터링
+    _my_tid = _ctv.get()
+    _my_devices: set[str] = set()
+    if _my_tid:
+        try:
+            from backend.domain.samba.extension_key.model import SambaExtensionKey
+
+            async with get_read_session() as _rs_dev:
+                _dev_stmt = select(SambaExtensionKey.device_id).where(
+                    SambaExtensionKey.tenant_id == _my_tid,
+                    SambaExtensionKey.device_id.isnot(None),
+                )
+                _dev_result = await _rs_dev.execute(_dev_stmt)
+                _my_devices = {d for (d,) in _dev_result.all() if d}
+        except Exception:
+            _my_devices = set()
 
     tripped = {
         site: count
@@ -3395,27 +3413,45 @@ async def autotune_status(device_id: str = ""):
 
     dev = (device_id or "").strip()
     _now_hb = time.time()
+
+    # 본인 테넌트의 device만 통계 대상 — device_id가 본인 것이 아니면 빈 응답
+    def _is_mine(d: str) -> bool:
+        if not _my_tid:
+            return True  # tenant context 없음(워커/관리자) → 전체 표시
+        return d in _my_devices
+
     if dev:
-        _site_tasks = _pc_site_tasks.get(dev) or {}
-        _scc = _pc_site_cycle_counts.get(dev) or {}
-        _shb = _pc_site_heartbeats.get(dev) or {}
-        _active_site_loops = {
-            s: {
-                "running": not t.done(),
-                "cycles": _scc.get(s, 0),
-                "heartbeat_ago": round(_now_hb - _shb.get(s, _now_hb)),
+        if not _is_mine(dev):
+            _active_site_loops = {}
+            running = False
+            last_tick = None
+            cycle_count = 0
+            restart_count = 0
+        else:
+            _site_tasks = _pc_site_tasks.get(dev) or {}
+            _scc = _pc_site_cycle_counts.get(dev) or {}
+            _shb = _pc_site_heartbeats.get(dev) or {}
+            _active_site_loops = {
+                s: {
+                    "running": not t.done(),
+                    "cycles": _scc.get(s, 0),
+                    "heartbeat_ago": round(_now_hb - _shb.get(s, _now_hb)),
+                }
+                for s, t in _site_tasks.items()
             }
-            for s, t in _site_tasks.items()
-        }
-        main_task = _pc_main_task.get(dev)
-        running = _is_pc_running(dev) and main_task is not None and not main_task.done()
-        last_tick = _pc_last_tick.get(dev)
-        cycle_count = _pc_cycle_count.get(dev, 0)
-        restart_count = _pc_restart_count.get(dev, 0)
+            main_task = _pc_main_task.get(dev)
+            running = (
+                _is_pc_running(dev) and main_task is not None and not main_task.done()
+            )
+            last_tick = _pc_last_tick.get(dev)
+            cycle_count = _pc_cycle_count.get(dev, 0)
+            restart_count = _pc_restart_count.get(dev, 0)
     else:
-        # 글로벌 뷰: 어떤 PC라도 실행 중이면 running=True. 사이트 루프는 모든 PC 합산
+        # 본인 테넌트의 PC만 합산
         _active_site_loops = {}
         for _d, _stasks in _pc_site_tasks.items():
+            if not _is_mine(_d):
+                continue
             _scc = _pc_site_cycle_counts.get(_d) or {}
             _shb = _pc_site_heartbeats.get(_d) or {}
             for s, t in _stasks.items():
@@ -3432,11 +3468,11 @@ async def autotune_status(device_id: str = ""):
                     prev["running"] = prev["running"] or not t.done()
                     prev["cycles"] = prev["cycles"] + cycles
                     prev["heartbeat_ago"] = min(prev["heartbeat_ago"], hb_ago)
-        running = any_pc_running()
-        last_tick_vals = [v for v in _pc_last_tick.values() if v]
+        running = any(ev.is_set() for d, ev in _pc_running.items() if _is_mine(d))
+        last_tick_vals = [v for d, v in _pc_last_tick.items() if v and _is_mine(d)]
         last_tick = max(last_tick_vals) if last_tick_vals else None
-        cycle_count = sum(_pc_cycle_count.values())
-        restart_count = sum(_pc_restart_count.values())
+        cycle_count = sum(v for d, v in _pc_cycle_count.items() if _is_mine(d))
+        restart_count = sum(v for d, v in _pc_restart_count.items() if _is_mine(d))
 
     return {
         "running": running,
@@ -3452,12 +3488,16 @@ async def autotune_status(device_id: str = ""):
         "priority_enabled": priority_enabled,
         "site_loops": _active_site_loops,
         "stuck_timeout": STUCK_TIMEOUT_SECONDS,
-        # PC별 분담 현황 (UI 표시용)
+        # PC별 분담 현황 (UI 표시용) — 본인 테넌트 device만
         "pc_assignments": {
-            dev: sorted(sites) for dev, sites in get_active_pcs().items() if sites
+            d: sorted(sites)
+            for d, sites in get_active_pcs().items()
+            if sites and _is_mine(d)
         },
         # 현재 오토튠 실행 중인 PC 목록 (UI에서 본인이 그 중에 있는지 판단)
-        "running_pcs": sorted(d for d, ev in _pc_running.items() if ev.is_set()),
+        "running_pcs": sorted(
+            d for d, ev in _pc_running.items() if ev.is_set() and _is_mine(d)
+        ),
     }
 
 
