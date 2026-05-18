@@ -2131,7 +2131,8 @@ class LotteonPlugin(MarketPlugin):
                                             _ntc3["pdItmsArtlLst"] = [
                                                 a
                                                 for a in _al3
-                                                if str(a.get("pdArtlCd", "")).zfill(4) != _bad
+                                                if str(a.get("pdArtlCd", "")).zfill(4)
+                                                != _bad
                                             ]
                                         try:
                                             api_result = await client.update_product(
@@ -2218,7 +2219,11 @@ class LotteonPlugin(MarketPlugin):
                                                             _artl_lst[:] = [
                                                                 a
                                                                 for a in _artl_lst
-                                                                if str(a.get("pdArtlCd", "")).zfill(4)
+                                                                if str(
+                                                                    a.get(
+                                                                        "pdArtlCd", ""
+                                                                    )
+                                                                ).zfill(4)
                                                                 != _bad38
                                                             ]
                                                             logger.info(
@@ -2601,7 +2606,11 @@ class LotteonPlugin(MarketPlugin):
                                                             _artl_lst[:] = [
                                                                 a
                                                                 for a in _artl_lst
-                                                                if str(a.get("pdArtlCd", "")).zfill(4)
+                                                                if str(
+                                                                    a.get(
+                                                                        "pdArtlCd", ""
+                                                                    )
+                                                                ).zfill(4)
                                                                 != _bad38
                                                             ]
                                                             logger.info(
@@ -2689,7 +2698,9 @@ class LotteonPlugin(MarketPlugin):
                             api_result = await client.register_product(data)
                             _reg_exception = None
                         except Exception as _es:
-                            logger.warning(f"[롯데ON] scatAttrLst 제거 재시도 실패: {_es}")
+                            logger.warning(
+                                f"[롯데ON] scatAttrLst 제거 재시도 실패: {_es}"
+                            )
                             _reg_exception = _es
                     elif "등록이 불가한 브랜드" in str(_e):
                         # 거래처-브랜드-전시카테고리 계약 누락: brdNo 공란으로 1회 재시도
