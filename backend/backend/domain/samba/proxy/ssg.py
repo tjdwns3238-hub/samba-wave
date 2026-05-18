@@ -1749,6 +1749,8 @@ class SSGClient:
             status, shipping_status = "pending", "상품준비중"
 
         rl_ord_amt = float(raw.get("rlordAmt", 0) or 0)
+        dc_amt = float(raw.get("dcAmt", 0) or 0)
+        sell_price = rl_ord_amt + dc_amt  # 판매가 = 결제금액 + 할인금액
         # 수령인 우선, 없으면 주문자 fallback (str 정규화)
         customer_name = str(raw.get("rcptpeNm", "") or raw.get("ordpeNm", "") or "")
         # 수령인 연락처 우선 (휴대폰 → 집전화 → 주문자 휴대폰)
@@ -1834,7 +1836,7 @@ class SSGClient:
             "sale_price": rl_ord_amt,
             "cost": 0,
             "fee_rate": fee_rate,
-            "revenue": rl_ord_amt * (1 - fee_rate / 100),
+            "revenue": round(sell_price / 1.1 * (1 - fee_rate / 100)),
             "source": "ssg",
             "status": status,
             "shipping_status": shipping_status,

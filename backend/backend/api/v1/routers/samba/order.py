@@ -4917,6 +4917,21 @@ async def sync_orders_from_markets(
             # (dead code 제거: 두 번째 롯데ON 블록 → 첫 번째에 병합 완료)
             elif market_type == "ssg":
                 from backend.domain.samba.proxy.ssg import SSGClient
+                from backend.domain.samba.policy.repository import SambaPolicyRepository as _SsgPolRepo
+
+                # 정책에서 SSG 수수료율 조회 (신세계몰(전시) 키)
+                _ssg_fee_rate = 0.0
+                try:
+                    _ssg_pol_repo = _SsgPolRepo(session)
+                    _ssg_policies = await _ssg_pol_repo.filter_by_async()
+                    for _ssg_pol in _ssg_policies:
+                        _ssg_mp = (_ssg_pol.market_policies or {}).get("신세계몰(전시)", {})
+                        _ssg_fr = float(_ssg_mp.get("feeRate", 0) or 0)
+                        if _ssg_fr > 0:
+                            _ssg_fee_rate = _ssg_fr
+                            break
+                except Exception as _ssg_pe:
+                    logger.warning(f"[주문동기화] SSG 수수료율 조회 실패 (0% 사용): {_ssg_pe}")
 
                 _ssg_api_key = extras.get("apiKey", "") or account["api_key"] or ""
                 if not _ssg_api_key:
@@ -4962,7 +4977,7 @@ async def sync_orders_from_markets(
                     )
                     for _ssg_ro in _ssg_raw_orders:
                         _ord = _ssg_client.parse_order(
-                            _ssg_ro, account["id"], label, fee_rate=0
+                            _ssg_ro, account["id"], label, fee_rate=_ssg_fee_rate
                         )
                         # 정산 API 매칭: settIAmt(정산금액), sellFeeRt(판매수수료율)로 revenue/fee_rate 확정
                         _ssg_key = f"{_ssg_ro.get('ordNo', '')}|{_ssg_ro.get('ordItemSeq', '')}"
