@@ -3,9 +3,9 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-import ulid
 from sqlalchemy import Column, String, Boolean, JSON, DateTime, text
 from sqlmodel import SQLModel, Field
+from ulid import ULID
 
 
 UTC = timezone.utc
@@ -17,7 +17,7 @@ class SambaTenant(SQLModel, table=True):
     __tablename__ = "samba_tenants"
 
     id: str = Field(
-        default_factory=lambda: f"tn_{ulid.new().str}",
+        default_factory=lambda: f"tn_{ULID()}",
         sa_column=Column(String, primary_key=True),
     )
     name: str = Field(sa_column=Column(String, nullable=False))  # 사업자명
