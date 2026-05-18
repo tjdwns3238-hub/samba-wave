@@ -1530,8 +1530,21 @@ async function pollSourcingOnce() {
   if (jobs.length === 1) {
     await _processJobWithCap(jobs[0])
   } else {
-    console.log(`[소싱] 병렬 처리: ${jobs.length}개 (사이트별 동시실행 캡 적용)`)
-    await Promise.all(jobs.map(job => _processJobWithCap(job)))
+    // tracking 잡은 직렬 처리 — 같은 batch에 여러 계정 잡 섞이면 병렬 ensureLoggedIn으로
+    // 계정 swap 충돌 발생 (병기 진행 중인데 성희 잡이 swap 트리거 → 병기 wrong session → DISPATCHED stuck).
+    // tracking 외(detail/search 가격수집)는 계정 무관해서 병렬 유지.
+    const trackingJobs = jobs.filter(j => j.type === 'tracking')
+    const otherJobs = jobs.filter(j => j.type !== 'tracking')
+    if (trackingJobs.length > 0) {
+      console.log(`[소싱] tracking 직렬 처리: ${trackingJobs.length}개 (계정 swap 충돌 방지)`)
+      for (const job of trackingJobs) {
+        await _processJobWithCap(job)
+      }
+    }
+    if (otherJobs.length > 0) {
+      console.log(`[소싱] 병렬 처리: ${otherJobs.length}개 (사이트별 동시실행 캡 적용)`)
+      await Promise.all(otherJobs.map(job => _processJobWithCap(job)))
+    }
   }
   return true
 }
