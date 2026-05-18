@@ -62,6 +62,15 @@ export default function OrdersTopBar(props: Props) {
     logMessages, setLogMessages,
   } = props
 
+  // 알림 메시지 안의 "N건"을 합산. notifications.length(알림 항목 수)는 항상 1이라
+  // 9건이 1건으로 표시되던 버그(모달과 실제 필터 결과 불일치) 원인.
+  const cancelAlertCount = notifications.reduce((sum, n) => {
+    const m = n.message.match(/(\d[\d,]*)건/)
+    if (!m) return sum
+    const parsed = parseInt(m[1].replace(/,/g, ''), 10)
+    return sum + (Number.isNaN(parsed) ? 0 : parsed)
+  }, 0) || notifications.length
+
   return (
     <>
       {notifications.length > 0 && (
@@ -82,7 +91,7 @@ export default function OrdersTopBar(props: Props) {
               <div style={{ fontSize: '3rem', marginBottom: '0.75rem' }}>&#9888;</div>
               <h3 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#FF6B6B', marginBottom: '0.5rem' }}>주문 취소요청 감지</h3>
               <p style={{ fontSize: '0.875rem', color: '#AAA', lineHeight: 1.5 }}>
-                고객이 취소요청한 주문이 <b style={{ color: '#FF6B6B' }}>{fmtNum(notifications.length)}건</b> 있습니다. 발주·송장 등록 전에 확인해 주세요.
+                고객이 취소요청한 주문이 <b style={{ color: '#FF6B6B' }}>{fmtNum(cancelAlertCount)}건</b> 있습니다. 발주·송장 등록 전에 확인해 주세요.
               </p>
             </div>
             <div style={{ display: 'flex', gap: '0.5rem' }}>
