@@ -215,7 +215,7 @@ AUTOTUNE_PRIORITY_ENABLED_KEY = "autotune_priority_enabled"
 # OOM 일으키지 않도록 상한. 너무 낮으면 backlog, 너무 높으면 메모리 폭주.
 # 정책 변경 직후 폭주 시 backlog는 이벤트 루프가 자연스럽게 흡수 (백프레셔).
 _AUTOTUNE_TRANSMIT_MAX_CONCURRENCY = int(
-    os.environ.get("AUTOTUNE_TRANSMIT_MAX_CONCURRENCY", "10")
+    os.environ.get("AUTOTUNE_TRANSMIT_MAX_CONCURRENCY", "5")
 )
 _autotune_transmit_sem: Optional[asyncio.Semaphore] = None
 
