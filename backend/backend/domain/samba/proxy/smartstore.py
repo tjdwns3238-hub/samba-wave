@@ -1950,15 +1950,28 @@ class SmartStoreClient:
         product_attributes: list[dict[str, Any]] = []
         cat_attrs = product.get("_category_attributes") or []
 
+        # INPUT/RANGE 타입(단위 있는 측정값) 식별 — attributeRealValue 필요한 속성은 매칭 제외
+        def _is_input_type(a: dict[str, Any]) -> bool:
+            atype = (a.get("attributeType") or a.get("type") or "").upper()
+            if atype in {"INPUT", "RANGE", "REAL", "TEXT", "NUMBER"}:
+                return True
+            # 단위(unitName/unitCode/usableUnitCodes) 보유 → 측정값 입력형
+            if a.get("unitName") or a.get("unitCode") or a.get("usableUnitCodes"):
+                return True
+            return False
+
         # 성별 속성 — API 속성에서 성별 seq 찾기, 기본값 남녀공용
         _GENDER_KEYWORDS = {"남성용", "여성용", "남녀공용", "공용", "유니섹스"}
         gender_seq = None
         gender_values: dict[str, int] = {}
         for a in cat_attrs:
-            val = a.get("minAttributeValue", "")
-            if val in _GENDER_KEYWORDS:
+            if _is_input_type(a):
+                continue
+            val = a.get("minAttributeValue", "") or a.get("attributeValueName", "")
+            vseq = a.get("attributeValueSeq", 0) or 0
+            if val in _GENDER_KEYWORDS and vseq > 0:
                 gender_seq = a["attributeSeq"]
-                gender_values[val] = a.get("attributeValueSeq", 0)
+                gender_values[val] = vseq
 
         if gender_seq:
             # 수집 데이터에서 성별 판단
@@ -2000,10 +2013,13 @@ class SmartStoreClient:
         season_seq = None
         season_values: dict[str, int] = {}
         for a in cat_attrs:
-            val = a.get("minAttributeValue", "")
-            if val in _SEASON_KEYWORDS:
+            if _is_input_type(a):
+                continue
+            val = a.get("minAttributeValue", "") or a.get("attributeValueName", "")
+            vseq = a.get("attributeValueSeq", 0) or 0
+            if val in _SEASON_KEYWORDS and vseq > 0:
                 season_seq = a["attributeSeq"]
-                season_values[val] = a.get("attributeValueSeq", 0)
+                season_values[val] = vseq
         if season_seq:
             for s in target_seasons:
                 if s in season_values:
@@ -2019,10 +2035,14 @@ class SmartStoreClient:
         type_values: dict[str, int] = {}
         _TYPE_SKIP = _GENDER_KEYWORDS | _SEASON_KEYWORDS | {"기타", "해당없음"}
         for a in cat_attrs:
-            val = a.get("minAttributeValue", "")
+            if _is_input_type(a):
+                continue
+            val = a.get("minAttributeValue", "") or a.get("attributeValueName", "")
             seq = a.get("attributeSeq", 0)
+            vseq = a.get("attributeValueSeq", 0) or 0
             if (
                 val
+                and vseq > 0
                 and val not in _TYPE_SKIP
                 and seq != gender_seq
                 and seq != season_seq
@@ -2030,7 +2050,7 @@ class SmartStoreClient:
                 if type_seq is None:
                     type_seq = seq
                 if seq == type_seq:
-                    type_values[val] = a.get("attributeValueSeq", 0)
+                    type_values[val] = vseq
 
         if type_seq and type_values:
             cat_keywords = [
@@ -2045,8 +2065,7 @@ class SmartStoreClient:
                 if type_name in cat_text:
                     matched_type = type_name
                     break
-            if not matched_type:
-                matched_type = next(iter(type_values))
+            # 카테고리 텍스트와 매칭 실패 시 종류 속성 미전송 (오매칭 방지)
             if matched_type:
                 product_attributes.append(
                     {
