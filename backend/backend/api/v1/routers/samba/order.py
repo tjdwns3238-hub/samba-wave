@@ -4142,6 +4142,16 @@ async def sync_orders_from_markets(
                         "취소처리중": 2,
                         "취소완료": 3,
                     }
+                    # 배송 진행 단계 보호 — 송장출력 이후로 진행한 주문은 좀비/지연
+                    # cancel claim 으로 '취소요청'으로 되돌리지 않음 ('취소처리중'/'취소완료'
+                    # 는 실제 종결 상태이므로 그대로 반영)
+                    _lo_shipped_guard = {
+                        "송장전송완료",
+                        "국내배송중",
+                        "배송완료",
+                        "구매확정",
+                        "발송완료",
+                    }
                     for claim in cancel_claims:
                         cn_od_no = claim.get("odNo", "")
                         step_cd_c = str(claim.get("odPrgsStepCd", "") or "")
@@ -4152,9 +4162,18 @@ async def sync_orders_from_markets(
                         found_in_data_c = False
                         for od in orders_data:
                             if od.get("od_no") == cn_od_no:
-                                cur_p = cancel_priority.get(
-                                    od.get("shipping_status", ""), 0
-                                )
+                                cur_ss = od.get("shipping_status", "")
+                                if (
+                                    cn_ship_status == "취소요청"
+                                    and cur_ss in _lo_shipped_guard
+                                ):
+                                    logger.info(
+                                        f"[롯데ON][취소클레임] 배송 진행 상태 보호: {cn_od_no} "
+                                        f"{cur_ss} → 취소요청 차단"
+                                    )
+                                    found_in_data_c = True
+                                    break
+                                cur_p = cancel_priority.get(cur_ss, 0)
                                 new_p = cancel_priority.get(cn_ship_status, 0)
                                 if cur_p == 0 or new_p >= cur_p:
                                     od["shipping_status"] = cn_ship_status
@@ -4176,6 +4195,15 @@ async def sync_orders_from_markets(
                                 await svc.repo.get_async(_cn_id) if _cn_id else None
                             )
                             if existing_c:
+                                if (
+                                    cn_ship_status == "취소요청"
+                                    and existing_c.shipping_status in _lo_shipped_guard
+                                ):
+                                    logger.info(
+                                        f"[롯데ON][취소클레임] 배송 진행 상태 보호(DB): {cn_od_no} "
+                                        f"{existing_c.shipping_status} → 취소요청 차단"
+                                    )
+                                    continue
                                 cur_p = cancel_priority.get(
                                     existing_c.shipping_status, 0
                                 )
@@ -4668,6 +4696,14 @@ async def sync_orders_from_markets(
                         f"교환 {len(_exchange_claims)}건"
                     )
 
+                    # 배송 진행 단계 보호 — 송장출력 이후로 마켓이 진행한 주문은
+                    # 좀비/지연 cancel claim 으로 '취소요청'으로 되돌리지 않음
+                    _shipped_guard = {
+                        "송장전송완료",
+                        "국내배송중",
+                        "배송완료",
+                        "구매확정",
+                    }
                     for _claim in _cancel_claims:
                         _c_ord_no = _claim.get("ordNo", "")
                         if not _c_ord_no:
@@ -4675,8 +4711,14 @@ async def sync_orders_from_markets(
                         _found = False
                         for _od in orders_data:
                             if _od.get("order_number") == _c_ord_no:
-                                _od["shipping_status"] = "취소요청"
-                                _od["status"] = "cancelled"
+                                if _od.get("shipping_status") in _shipped_guard:
+                                    logger.info(
+                                        f"[주문동기화][11번가] 배송 진행 상태 보호: {_c_ord_no} "
+                                        f"{_od.get('shipping_status')} → 취소요청 차단"
+                                    )
+                                else:
+                                    _od["shipping_status"] = "취소요청"
+                                    _od["status"] = "cancelled"
                                 _found = True
                                 break
                         # _found 여부와 관계없이 DB에 즉시 반영
@@ -4685,10 +4727,16 @@ async def sync_orders_from_markets(
                             order_number=_c_ord_no
                         )
                         if _ex_cancel:
-                            await svc.update_order(
-                                _ex_cancel.id,
-                                {"shipping_status": "취소요청"},
-                            )
+                            if _ex_cancel.shipping_status in _shipped_guard:
+                                logger.info(
+                                    f"[주문동기화][11번가] 배송 진행 상태 보호(DB): {_c_ord_no} "
+                                    f"{_ex_cancel.shipping_status} → 취소요청 차단"
+                                )
+                            else:
+                                await svc.update_order(
+                                    _ex_cancel.id,
+                                    {"shipping_status": "취소요청"},
+                                )
 
                     for _claim in _return_claims:
                         _r_ord_no = _claim.get("ordNo", "")
@@ -5704,8 +5752,15 @@ async def sync_orders_from_markets(
                         }
                         advanced = {"발송완료", "국내배송중", "배송완료", "구매확정"}
                         if new_ship_status in cancel_statuses:
-                            # 취소 상태는 항상 갱신 (송장전송완료 → 취소요청 등 역행 허용)
-                            # 단, 이미 반품 진행 중인 주문은 취소로 되돌리지 않음
+                            # 취소 상태 갱신 규칙:
+                            #  - 이미 반품 진행 중인 주문은 취소로 되돌리지 않음
+                            #  - 새로 들어오는 값이 '취소요청'인데 마켓이 송장출력 이상으로
+                            #    진행한 주문(송장전송완료/국내배송중/배송완료/구매확정)은
+                            #    덮어쓰지 않음 — 스마트스토어/쿠팡/롯데ON/11번가/eBay 공통,
+                            #    좀비 claim 으로 배송 진행 주문이 '취소요청'으로 표시되던
+                            #    사고 방지 (참조: 419d42d4 플레이오토 동일 버그)
+                            #  - 단, 마켓이 '취소처리중'/'취소완료'를 보낸 경우는 실제 종결
+                            #    상태이므로 그대로 반영
                             if existing.shipping_status in (
                                 "반품요청",
                                 "반품완료",
@@ -5714,6 +5769,20 @@ async def sync_orders_from_markets(
                                 logger.info(
                                     f"[주문동기화] 반품 상태 보호: {order_data.get('order_number')} "
                                     f"{existing.shipping_status} → {new_ship_status} 차단"
+                                )
+                            elif (
+                                new_ship_status == "취소요청"
+                                and existing.shipping_status
+                                in (
+                                    "송장전송완료",
+                                    "국내배송중",
+                                    "배송완료",
+                                    "구매확정",
+                                )
+                            ):
+                                logger.info(
+                                    f"[주문동기화] 배송 진행 상태 보호: {order_data.get('order_number')} "
+                                    f"{existing.shipping_status} → 취소요청 차단"
                                 )
                             else:
                                 update_fields["shipping_status"] = new_ship_status
@@ -7173,12 +7242,25 @@ def _apply_ebay_claims_to_orders(
         "CANCEL_CLOSED": "취소완료",
         "CANCEL_CLOSED_FOR_COMMITMENT": "취소요청",
     }
+    # 배송 진행 단계 보호 — '취소요청'은 송장출력 이후 상태를 덮어쓰지 않음
+    # ('취소완료'는 실제 종결 상태이므로 그대로 반영)
+    _ebay_shipped_guard = {
+        "송장전송완료",
+        "국내배송중",
+        "배송완료",
+        "구매확정",
+    }
     for c in cancellations_raw or []:
         legacy_order_id = c.get("legacyOrderId", "") or ""
         state = c.get("cancelState", "") or ""
         ss = cancel_state_map.get(state, "취소요청")
         for od in orders_data:
             if od.get("order_number") == legacy_order_id:
+                if (
+                    ss == "취소요청"
+                    and od.get("shipping_status") in _ebay_shipped_guard
+                ):
+                    break
                 od["shipping_status"] = ss
                 od["status"] = "cancelled" if ss == "취소완료" else "cancel_requested"
                 break
