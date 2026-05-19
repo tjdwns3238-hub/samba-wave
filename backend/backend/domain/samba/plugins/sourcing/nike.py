@@ -3,6 +3,8 @@
 import logging
 from typing import TYPE_CHECKING
 
+import httpx
+
 from backend.domain.samba.plugins.sourcing_base import SourcingPlugin
 
 if TYPE_CHECKING:
@@ -59,6 +61,18 @@ class NikePlugin(SourcingPlugin):
         try:
             client = NikeClient()
             fresh = await client.get_detail(site_product_id)
+        except httpx.HTTPStatusError as e:
+            # PDP 404 = Nike Korea에서 해당 컬러 단종/품절 (페이지는 SSR로 살아있지만 detail API는 404)
+            # changed=True는 abcmart/gsshop/lotteon/musinsa 동일 패턴 — sold_out 모니터 이벤트 발행 경로 진입용
+            if e.response.status_code == 404:
+                return RefreshResult(
+                    product_id=product_id,
+                    new_sale_status="sold_out",
+                    changed=True,
+                    deleted_from_source=True,
+                )
+            logger.warning(f"[Nike] 갱신 실패 {site_product_id}: {e}")
+            return RefreshResult(product_id=product_id, error=str(e))
         except Exception as e:
             logger.warning(f"[Nike] 갱신 실패 {site_product_id}: {e}")
             return RefreshResult(product_id=product_id, error=str(e))
