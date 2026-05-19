@@ -5839,6 +5839,18 @@ async def sync_orders_from_markets(
                         "shipped",
                     ):
                         update_fields["status"] = "shipping"
+                    # 플레이오토 미등록 주문의 취소요청/취소완료는 status 드롭다운도 동기화.
+                    # 신규 insert는 _normalize_synced_order_status 예외에서 처리되지만,
+                    # 이미 DB에 'pending'으로 들어가 있는 기존 주문은 여기서 갱신해야 함.
+                    if (
+                        order_data.get("source") == "playauto"
+                        and not existing.collected_product_id
+                        and not (existing.source_url or "")
+                        and not (existing.product_image or "")
+                    ):
+                        _mapped = SHIPPING_LABEL_TO_STATUS_KEY.get(_new_ss_final or "")
+                        if _mapped and _mapped != existing.status:
+                            update_fields["status"] = _mapped
                     # 정산금액(revenue) / 수수료율 갱신
                     new_revenue = order_data.get("revenue")
                     new_fee_rate = order_data.get("fee_rate")
@@ -6711,7 +6723,31 @@ def _normalize_playauto_alias_code(value: Any) -> str:
 
 
 def _normalize_synced_order_status(order_data: dict[str, Any]) -> None:
-    """Market sync must only drive shipping_status; status stays user-managed."""
+    """Market sync must only drive shipping_status; status stays user-managed.
+
+    예외: 플레이오토 미등록 주문의 취소요청/취소완료 상태는 status도 동기화해야
+    UI 드롭다운이 어긋나지 않음 (cancel_requested/cancelled 보존).
+    """
+    preserved = {
+        "cancel_requested",
+        "cancelled",
+        "cancelling",
+        "return_requested",
+        "returning",
+        "returned",
+        "exchanging",
+        "exchanged",
+        "return_completed",
+    }
+    cur_status = str(order_data.get("status") or "")
+    if (
+        order_data.get("source") == "playauto"
+        and not order_data.get("collected_product_id")
+        and not order_data.get("source_url")
+        and not order_data.get("product_image")
+        and cur_status in preserved
+    ):
+        return
     order_data["status"] = "pending"
 
 
