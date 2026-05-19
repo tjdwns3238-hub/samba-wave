@@ -1687,6 +1687,92 @@ class SSGClient:
             "shipping_status": "취소요청",
         }
 
+    _COURIER_CODE_MAP: dict[str, str] = {
+        "CJ대한통운": "0000033011",
+        "대한통운": "0000033032",
+        "한진택배": "0000033071",
+        "한진": "0000033071",
+        "롯데택배": "0000033073",
+        "롯데글로벌": "0010326677",
+        "롯데글로벌로지스": "0010326677",
+        "우체국택배": "0000033052",
+        "우체국": "0000033052",
+        "우체국EMS": "0000033050",
+        "로젠택배": "0000033036",
+        "로젠": "0000033036",
+        "경동택배": "0000033027",
+        "GS편의점택배": "0000033013",
+        "GSPostbox택배": "0000033013",
+        "CU편의점택배": "0008369131",
+        "합동택배": "0000038977",
+        "한국택배": "0000033069",
+        "일양로지스": "0000033057",
+        "천일택배": "0000033062",
+        "대신택배": "0000033030",
+        "KT로지스": "0000033021",
+        "동원로엑스": "0020089384",
+        "쿠팡로지스틱스": "0024803687",
+    }
+
+    def get_courier_code(self, courier_name: str) -> str:
+        """한글 택배사명 → SSG delicoVenId 변환. 매핑 없으면 빈 문자열 반환."""
+        return self._COURIER_CODE_MAP.get(courier_name.strip(), "")
+
+    async def send_invoice(
+        self,
+        shpp_no: str,
+        shpp_seq: str,
+        wbl_no: str,
+        delico_ven_id: str,
+        shpp_type_cd: str = "20",
+        shpp_type_dtl_cd: str = "22",
+    ) -> dict[str, Any]:
+        """운송장 등록 — /api/pd/1/saveWblNo.ssg."""
+        body = {
+            "requestWhOutCompleteProcess": {
+                "shppNo": shpp_no,
+                "shppSeq": shpp_seq,
+                "wblNo": wbl_no,
+                "delicoVenId": delico_ven_id,
+                "shppTypeCd": shpp_type_cd,
+                "shppTypeDtlCd": shpp_type_dtl_cd,
+            }
+        }
+        data = await self._call_api("POST", "/api/pd/1/saveWblNo.ssg", body=body)
+        result = data.get("result", {})
+        result_code = (result.get("resultCode") or "") if isinstance(result, dict) else ""
+        if result_code != "00":
+            desc = (result.get("resultDesc") or result.get("resultMessage") or str(data)) if isinstance(result, dict) else str(data)
+            raise RuntimeError(f"SSG 운송장 등록 실패 ({result_code}): {desc}")
+        return data
+
+    async def process_outbound(
+        self,
+        shpp_no: str,
+        shpp_seq: str,
+        qty: int = 1,
+    ) -> dict[str, Any]:
+        """출고처리 — /api/pd/1/saveWhOutCompleteProcess.ssg.
+
+        운송장 등록(saveWblNo) 후 반드시 호출해야 배송중으로 상태 변경됨.
+        """
+        body = {
+            "requestWhOutCompleteProcess": {
+                "shppNo": shpp_no,
+                "shppSeq": shpp_seq,
+                "procItemQty": qty,
+            }
+        }
+        data = await self._call_api(
+            "POST", "/api/pd/1/saveWhOutCompleteProcess.ssg", body=body
+        )
+        result = data.get("result", {})
+        result_code = (result.get("resultCode") or "") if isinstance(result, dict) else ""
+        if result_code != "00":
+            desc = (result.get("resultDesc") or result.get("resultMessage") or str(data)) if isinstance(result, dict) else str(data)
+            raise RuntimeError(f"SSG 출고처리 실패 ({result_code}): {desc}")
+        return data
+
     async def confirm_order(self, shpp_no: str, shpp_seq: str) -> dict[str, Any]:
         """발주확인 처리."""
         body = {
