@@ -552,9 +552,11 @@ async def enqueue_pending_orders(
             # 계정별 그룹화 적재 — 확장앱이 같은 계정 잡을 연속으로 받게 해서
             # ensureLoggedIn 자동 스왑 횟수를 "계정 수"만큼만 발생시킨다.
             # NULLS LAST 로 계정 미지정 잡은 뒤로 밀어둠.
+            # 모달 리스트 정렬(paid_at ASC)과 dispatch 순서 일치시키기 위해 ASC 통일.
+            # DESC면 모달 1번(가장 오래된)이 실제로는 마지막에 dispatch → 사용자 혼란.
             .order_by(
                 SambaOrder.sourcing_account_id.asc().nulls_last(),
-                date_col.desc(),
+                date_col.asc(),
             )
             .limit(limit)
         )
