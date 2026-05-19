@@ -1689,6 +1689,53 @@ class SSGClient:
             "shipping_status": "취소요청",
         }
 
+    async def get_return_requests(self, days: int = 7) -> list[dict[str, Any]]:
+        """반품/교환 회수 대상 조회 — 최근 days일 이내 (최대 7일).
+
+        API: POST /api/pd/1/listExchangeTarget.ssg
+        shppDivDtlCds=21(반품), 22(교환) 모두 조회.
+        """
+        KST = timezone(timedelta(hours=9))
+        now = datetime.now(KST)
+        days = min(days, 7)
+        start_dt = (now - timedelta(days=days)).strftime("%Y%m%d")
+        end_dt = now.strftime("%Y%m%d")
+        body = {
+            "requestExchangeTarget": {
+                "perdType": "01",
+                "perdStrDts": start_dt,
+                "perdEndDts": end_dt,
+            }
+        }
+        data = await self._call_api("POST", "/api/pd/1/listExchangeTarget.ssg", body=body)
+        logger.info(f"[SSG 반품조회] 응답 최상위 키: {list(data.keys())[:10]}")
+        # 응답 구조가 다른 API와 다를 수 있음 — result 래퍼 있는 경우와 없는 경우 모두 처리
+        result = data.get("result") or data
+        if not isinstance(result, dict):
+            return []
+        raw_targets = result.get("exchangeTargets") or data.get("exchangeTargets") or []
+        # XStream 래핑: exchangeTargets가 dict이면 exchangeTarget 꺼내기
+        if isinstance(raw_targets, dict):
+            raw_targets = raw_targets.get("exchangeTarget", [])
+        if isinstance(raw_targets, dict):
+            raw_targets = [raw_targets]
+        elif not isinstance(raw_targets, list):
+            logger.warning(f"[SSG 반품조회] exchangeTargets 타입 이상: {type(raw_targets)} — {str(raw_targets)[:200]}")
+            return []
+        unwrapped = []
+        for t in raw_targets:
+            if not isinstance(t, dict):
+                continue
+            inner = t.get("exchangeTarget")
+            if inner is None:
+                unwrapped.append(t)
+            elif isinstance(inner, list):
+                unwrapped.extend([i for i in inner if isinstance(i, dict)])
+            elif isinstance(inner, dict):
+                unwrapped.append(inner)
+        logger.info(f"[SSG 반품조회] {len(unwrapped)}건 조회")
+        return unwrapped
+
     async def get_order_detail(self, or_ord_no: str) -> list[dict[str, Any]]:
         """원주문번호로 주문 상세 조회 — ordItemDiv(021=취소) 등 현재 상태 확인용.
 
