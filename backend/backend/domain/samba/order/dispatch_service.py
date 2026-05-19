@@ -57,6 +57,8 @@ async def send_invoice_to_market(
             return True, "플레이오토 주문 — 송장번호 저장만 완료 (마켓 전송 생략)"
         if market_type == "lottehome":
             return await _send_lottehome(order, account, courier, tracking, session)
+        if market_type == "ssg":
+            return await _send_ssg(order, account, courier, tracking, session)
         return False, f"미지원 마켓: {market_type}"
     except Exception as e:
         logger.warning(
@@ -332,3 +334,44 @@ async def _send_lottehome(order, account, courier, tracking, session):
     if api_resp.get("ok"):
         return True, "롯데홈쇼핑 송장 전송 완료"
     return False, f"롯데홈쇼핑 송장 전송 실패: {api_resp.get('result')}"
+
+
+async def _send_ssg(order, account, courier, tracking, session):
+    """SSG(신세계몰) — 운송장 등록 후 출고처리로 배송중 상태 전환."""
+    from backend.domain.samba.proxy.ssg import SSGClient
+
+    extras = account.additional_fields or {}
+    api_key = extras.get("apiKey", "") or account.api_key or ""
+    if not api_key:
+        return False, "SSG API Key 누락"
+
+    shipment_id = (order.shipment_id or "").strip()
+    if not shipment_id or "|" not in shipment_id:
+        return False, f"SSG shipment_id 형식 오류: {shipment_id!r} (shppNo|shppSeq 필요)"
+
+    parts = shipment_id.split("|")
+    shpp_no = parts[0].strip()
+    shpp_seq = parts[1].strip() if len(parts) > 1 else ""
+    if not shpp_no or not shpp_seq:
+        return False, f"SSG shppNo/shppSeq 누락: {shipment_id!r}"
+
+    if not tracking:
+        return False, "운송장 번호 누락"
+
+    client = SSGClient(api_key)
+    delico_ven_id = client.get_courier_code(courier)
+    if not delico_ven_id:
+        return False, f"SSG 미등록 택배사: {courier!r} — delicoVenId 매핑 없음"
+
+    qty = int(order.quantity or 1)
+    try:
+        await client.send_invoice(
+            shpp_no=shpp_no,
+            shpp_seq=shpp_seq,
+            wbl_no=tracking,
+            delico_ven_id=delico_ven_id,
+        )
+        await client.process_outbound(shpp_no=shpp_no, shpp_seq=shpp_seq, qty=qty)
+        return True, "SSG 운송장 등록 및 출고처리 완료"
+    except RuntimeError as e:
+        return False, str(e)
