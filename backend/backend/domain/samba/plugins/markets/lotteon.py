@@ -903,7 +903,10 @@ _BLOCKED_PATHS: dict[str, str] = {
 # 거래처 미허용 전시카테고리(FC) 코드 — disp_cat_id 해석 결과가 여기 들어가면 폴백 필요
 # FC08090202: (구) 다운/패딩 계열 미허용
 # FC08030602: 2026-05-16 moonol06 여성 점퍼 등록 시 9999 차단 확인
-_BLOCKED_DISP_CAT_IDS: frozenset[str] = frozenset({"FC08090202", "FC08030602"})
+# FC08030202: 2026-05-19 노스페이스 아우터(BC20020300) 등록 시 9999 차단 확인
+_BLOCKED_DISP_CAT_IDS: frozenset[str] = frozenset(
+    {"FC08090202", "FC08030602", "FC08030202"}
+)
 
 # 미허용 FC 발생 시 폴백할 표준 BC 코드 (집업) — 점퍼와 가까운 안전 카테고리
 _FALLBACK_BC_FOR_BLOCKED_DISP = {
@@ -2723,6 +2726,8 @@ class LotteonPlugin(MarketPlugin):
                         raise
                 if _reg_exception is not None:
                     raise _reg_exception
+                if api_result is None:
+                    raise RuntimeError("등록 결과 없음 (api_result=None)")
                 # proxy.register_product 가 spdNo를 최상위로 반환 (service.py가 api_result.get("spdNo")로 읽음)
                 spd_no = api_result.get("spdNo", "") or api_result.get("epdNo", "")
                 logger.info(f"[롯데ON] 등록 완료 — spdNo={spd_no!r}")
