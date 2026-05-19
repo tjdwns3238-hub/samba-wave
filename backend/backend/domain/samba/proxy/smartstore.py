@@ -1687,6 +1687,13 @@ class SmartStoreClient:
 
         if fail_infos:
             fail_msg = fail_infos[0].get("message", "알 수 없는 오류")
+            # 이미 발송처리된 주문은 마켓 입장에서 송장이 등록된 상태 → silent success
+            # (cafe24 422 silent 패턴과 동일, 재시도/재큐잉으로 인한 중복 호출 방어)
+            if any(k in fail_msg for k in ("이미 발송", "이미 처리")):
+                logger.info(
+                    f"[스마트스토어] 발송처리 {product_order_id} 이미 처리됨 → 성공 처리: {fail_msg}"
+                )
+                return result
             raise SmartStoreApiError(f"발송처리 실패: {fail_msg}")
 
         logger.info(
