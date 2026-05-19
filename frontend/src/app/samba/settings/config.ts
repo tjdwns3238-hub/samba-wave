@@ -355,6 +355,7 @@ export const STORE_MARKETS: MarketConfig[] = [
     { name: '_divider_margin', label: '가격 설정', type: 'divider' },
     { name: 'marginRate', label: '마진율(%)', type: 'number', placeholder: '15' },
     { name: 'feeRate', label: '수수료율(%)', type: 'number', placeholder: '20' },
+    { name: 'extraFeeRate', label: '추가수수료율(%)', type: 'number', placeholder: '0' },
     { name: '_divider_delivery_ssg', label: '배송 설정', type: 'divider' },
     { name: 'shippingCost', label: '배송비(원)', type: 'number', placeholder: '0' },
     { name: 'shppRqrmDcnt', label: '배송소요일', type: 'number', placeholder: '3' },

@@ -127,6 +127,19 @@ class SSGPlugin(MarketPlugin):
         once_min_qty = int(product.get("_once_min_qty") or creds.get("onceMinQty") or 1)
         once_max_qty = int(product.get("_once_max_qty") or creds.get("onceMaxQty") or 5)
 
+        # 추가수수료율 역산 + 100원 단위 올림
+        import math as _math
+        extra_fee_rate = float(creds.get("extraFeeRate") or 0)
+        _orig_price = int(product.get("sale_price", 0) or 0)
+        if _orig_price > 0:
+            _new_price = _orig_price
+            if extra_fee_rate > 0:
+                _new_price = _math.ceil(_new_price / (1 - extra_fee_rate / 100))
+            _new_price = _math.ceil(_new_price / 100) * 100
+            if _new_price != _orig_price:
+                product = dict(product)
+                product["sale_price"] = _new_price
+
         # 고시정보 정책값 주입
         notice_overrides: dict[str, str] = {}
         _notice_field_map = {

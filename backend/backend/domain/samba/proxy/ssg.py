@@ -140,6 +140,8 @@ class SSGClient:
         if method == "GET":
             resp = await client.get(url, headers=headers, params=params)
         elif method == "POST":
+            import json as _json
+            logger.info(f"[SSG REQ] POST {path} body={_json.dumps(body or {}, ensure_ascii=False)[:500]}")
             resp = await client.post(
                 url, headers=headers, json=body or {}, params=params
             )
@@ -1831,10 +1833,11 @@ class SSGClient:
         ord_no = str(raw.get("ordNo", "") or "")
         ord_item_seq = str(raw.get("ordItemSeq", "") or "")
         shpp_no = str(raw.get("shppNo", "") or "")
+        shpp_seq = str(raw.get("shppSeq", "") or ord_item_seq)  # 배송순번 (운송장등록/발주확인에 사용)
         # orordNo: 원주문번호 (신세계몰 주문관리 페이지의 '원주문번호' 항목)
         or_ord_no = str(raw.get("orordNo", "") or "")
 
-        # ordNo가 비어있으면 orordNo → shppNo|ordItemSeq 복합키 순으로 fallback
+        # ordNo가 비어있으면 orordNo → shppNo|shppSeq 복합키 순으로 fallback
         if not ord_no:
             if or_ord_no:
                 ord_no = or_ord_no
@@ -1843,21 +1846,21 @@ class SSGClient:
                     f"order_number={ord_no}, raw_keys={raw_keys}"
                 )
             else:
-                ord_no = f"{shpp_no}|{ord_item_seq}"
+                ord_no = f"{shpp_no}|{shpp_seq}"
                 logger.warning(
                     f"[SSG 주문] ordNo/orordNo 모두 누락으로 복합키 fallback 사용: "
                     f"order_number={ord_no}, raw_keys={raw_keys}"
                 )
         logger.info(
-            f"[SSG 주문 파싱] order_number={ord_no}, shipment_id_parts=({shpp_no}|{ord_item_seq}|{or_ord_no}), "
+            f"[SSG 주문 파싱] order_number={ord_no}, shppNo={shpp_no}, shppSeq={shpp_seq}, ordItemSeq={ord_item_seq}, "
             f"product_id={item_id_str}, status={status}, shppProgStatDtlCd={shpp_prog}"
         )
 
-        # shipment_id에 shppNo|ordItemSeq 형식으로 저장
-        # - shppNo: 배송번호 (발주확인 시 필요)
-        # - ordItemSeq: 주문상품순번 (취소승인 시 필요)
-        # orordNo는 order_number에 이미 저장되므로 중복 제외
-        shipment_id = f"{shpp_no}|{ord_item_seq}"
+        # shipment_id에 shppNo|shppSeq 형식으로 저장
+        # - shppNo: 배송번호
+        # - shppSeq: 배송순번 (발주확인·운송장등록 시 필요, ordItemSeq와 다를 수 있음)
+        # ordItemSeq는 ord_prd_seq에 별도 저장 (취소승인 시 필요)
+        shipment_id = f"{shpp_no}|{shpp_seq}"
 
         # 결제일(paid_at) — 주문 목록 화면이 paid_at IS NOT NULL 로 필터링하므로
         # 누락되면 SSG 주문이 목록에서 통째로 사라짐. 결제완료>주문일시 우선순위.
@@ -1896,6 +1899,7 @@ class SSGClient:
             "status": status,
             "shipping_status": shipping_status,
             "paid_at": paid_at,
+            "ord_prd_seq": ord_item_seq,  # 취소승인 API(approve_cancel)에서 ordItemSeq로 사용
         }
 
     async def confirm_rcov(

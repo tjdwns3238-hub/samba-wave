@@ -95,6 +95,7 @@ interface MarketPolicyForm {
   origin: string        // 원산지
   streetPriceRate: number // 시중가 비율 (%)
   ssgBrandMappings?: { brandId: string; brandNm: string }[]
+  ssgExtraFeeRate?: number
 }
 
 
