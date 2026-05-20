@@ -639,6 +639,19 @@ export default function PoliciesPage() {
       if (!nextValue && res?.cancelled && res.cancelled > 0) {
         showAlert(`테트리스 매칭 OFF — 진행중·대기 잡 ${fmtNum(res.cancelled)}건 취소됨`)
       }
+      // ON 시 즉시 기존 tetris 잡 클리어 후 현재 배치 기준으로 재생성
+      if (nextValue) {
+        const sync = await tetrisApi.runSync(true)
+        if (sync?.skipped || sync?.paused) {
+          showAlert('테트리스 매칭 ON — 동기화 인터벌이 꺼져 있거나 일시정지 상태입니다')
+        } else {
+          const cleared = sync?.cancelled_before_sync ?? 0
+          showAlert(
+            `테트리스 매칭 ON — 기존 잡 ${fmtNum(cleared)}건 정리, ` +
+            `신규 잡 ${fmtNum(sync?.jobs ?? 0)}건 생성 (상품 ${fmtNum(sync?.triggered ?? 0)}개)`,
+          )
+        }
+      }
     } catch (error) {
       setTetrisMatchingEnabled(!nextValue)
       showAlert('테트리스 매칭 사용 설정 저장에 실패했습니다: ' + String(error))

@@ -117,6 +117,8 @@ class TetrisSyncResponse(BaseModel):
     jobs: int
     triggered: int
     skipped: bool = False
+    paused: bool = False
+    cancelled_before_sync: int = 0
 
 
 class TetrisExcludeRequest(BaseModel):

@@ -83,6 +83,9 @@ export interface TetrisSyncResponse {
   assignments: number
   jobs: number
   triggered: number
+  skipped?: boolean
+  paused?: boolean
+  cancelled_before_sync?: number
 }
 
 export interface TetrisAssignmentEntry {
@@ -131,8 +134,11 @@ export const tetrisApi = {
       headers: { 'Content-Type': 'application/json' },
     }),
 
-  runSync: () =>
-    request<TetrisSyncResponse>(`${BASE}/sync`, { method: 'POST' }),
+  runSync: (clearPending = false) =>
+    request<TetrisSyncResponse>(
+      `${BASE}/sync${clearPending ? '?clear_pending=true' : ''}`,
+      { method: 'POST' },
+    ),
 
   removeByBrand: (sourceSite: string, brandName: string, marketAccountId: string) =>
     request<{ pending_cancelled: number; delete_job_products: number }>(`${BASE}/remove-by-brand`, {

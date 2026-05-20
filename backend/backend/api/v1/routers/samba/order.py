@@ -3912,6 +3912,9 @@ async def sync_orders_from_markets(
                 lotte_dc_map: dict[
                     tuple[str, str], int
                 ] = {}  # 당사부담할인 (prSfcoShrAmtSum)
+                slr_dc_map: dict[
+                    tuple[str, str], int
+                ] = {}  # 셀러부담할인 (sptDcPgmCmsnSum + 셀러즉시) — 2026-05-20 추가
                 ch_no_map: dict[
                     str, str
                 ] = {}  # 채널번호 (chNo) — 주문 단위라 odNo 키 유지
@@ -3936,6 +3939,11 @@ async def sync_orders_from_markets(
                     _fvr = _pick(ro, "fvrAmtSum")
                     _actual = _pick(ro, "actualAmt")
                     _lotte_dc = _pick(ro, "prSfcoShrAmtSum")
+                    # 셀러 부담 할인 — 정산 화면 "상품할인(셀러부담)" 5,922원이 누락되던 사고(2026-05-20)
+                    # sptDcPgmCmsnSum(지원할인 PGM 셀러부담) + 셀러즉시할인(slrDcAmt 계열)
+                    _slr_dc = _pick(ro, "sptDcPgmCmsnSum") + _pick(
+                        ro, "slrDcAmt", "slrDcSptAmt", "slrImdDcAmt"
+                    )
                     _ch_no = str(ro.get("chNo") or "")
                     # 라인(odSeq) 단위 저장 — 같은 odNo의 다른 옵션/수량이 서로 덮어쓰지 않도록.
                     if _slamt > sl_amt_map.get(_line_key, 0):
@@ -3946,6 +3954,8 @@ async def sync_orders_from_markets(
                         actual_amt_map[_line_key] = _actual
                     if _lotte_dc > lotte_dc_map.get(_line_key, 0):
                         lotte_dc_map[_line_key] = _lotte_dc
+                    if _slr_dc > slr_dc_map.get(_line_key, 0):
+                        slr_dc_map[_line_key] = _slr_dc
                     if _ch_no:
                         ch_no_map[_od_no] = _ch_no
                 logger.info(
@@ -5567,12 +5577,13 @@ async def sync_orders_from_markets(
                 # 매칭 검증용 임시 키 제거 (DB 저장 직전, 모델에 없는 필드)
                 order_data.pop("_pa_site_id", None)
                 order_data.pop("_pa_master_code", None)
-                # 롯데ON 예상 정산금액 계산 (롯데ON 공식 정산공식, 2026-04-30 재확인)
-                #   pymtAmt = actualAmt − (bseCmsn + pcsCmsn + dvCmsn − ajstDcAmt)
-                # raw 응답엔 수수료 필드가 없으므로:
-                #   기본수수료 = slAmt × 카테고리 fee_rate
-                #   PCS수수료  = slAmt × 2% (가격비교 채널 유입 주문만)
-                #   조정(환급) = prSfcoShrAmtSum (당사부담할인)
+                # 롯데ON 예상 정산금액 계산 (롯데ON 공식 정산공식, 2026-05-20 셀러부담 할인 반영)
+                # 공식(SettleItmdSales):
+                #   pymtAmt = slAmt - (셀러즉시 + 셀러부담 + 롯데부담)            # 고객결제 → actualAmt
+                #             + 배송비정산 - 배송비할인
+                #             - (기본수수료 + PCS수수료 + 배송비수수료 - 조정할인)   # 조정 = 롯데부담
+                # 정리하면(배송비 0 가정): pymtAmt = slAmt − 셀러부담할인 − 기본수수료 − PCS수수료
+                #   (당사부담할인은 고객결제 차감과 수수료 환급으로 상쇄됨)
                 # 정산 API(SettleItmdSales) 매칭으로 이미 revenue가 세팅됐으면 확정값이므로 건드리지 않음.
                 if order_data.get("source") == "lotteon":
                     _od_no = str(order_data.get("od_no") or "")
@@ -5581,6 +5592,7 @@ async def sync_orders_from_markets(
                     _slamt = int(sl_amt_map.get(_line_key, 0))
                     _actual = int(actual_amt_map.get(_line_key, 0))
                     _lotte_dc = int(lotte_dc_map.get(_line_key, 0))
+                    _slr_dc = int(slr_dc_map.get(_line_key, 0))
                     _ch_no = ch_no_map.get(_od_no, "")
 
                     # 가격비교 채널 = PCS 수수료 부과 대상
@@ -5589,12 +5601,17 @@ async def sync_orders_from_markets(
                     _pcs_rate = 2.0 if _ch_no in _PRICE_COMPARE_CHANNELS else 0.0
 
                     if _slamt > 0:
-                        # 고객결제금액 우선 actualAmt 사용, 없으면 slAmt − fvrAmtSum 폴백
-                        _customer_paid = (
-                            _actual
-                            if _actual > 0
-                            else max(0, _slamt - int(fvr_amt_map.get(_line_key, 0)))
-                        )
+                        # 고객결제금액 = actualAmt 우선, 없으면 slAmt − fvrAmtSum 폴백
+                        # actualAmt가 slAmt와 같게 들어오는 케이스(=할인 미반영) 방지 위해
+                        # slr_dc 있으면 fallback 강제: slAmt − fvr (할인 반영된 실결제)
+                        _fvr = int(fvr_amt_map.get(_line_key, 0))
+                        if _actual > 0 and _actual < _slamt:
+                            _customer_paid = _actual
+                        elif _fvr > 0:
+                            _customer_paid = max(0, _slamt - _fvr)
+                        else:
+                            # raw에 할인합도 없음 — 셀러부담+롯데부담만으로 계산
+                            _customer_paid = max(0, _slamt - _slr_dc - _lotte_dc)
                         order_data["total_payment_amount"] = _customer_paid
 
                         if not order_data.get("revenue"):
@@ -5608,11 +5625,16 @@ async def sync_orders_from_markets(
                             _fee = get_fee_rate_for_category(_cat_for_fee)
                             _bse_cmsn = int(_slamt * _fee / 100)
                             _pcs_cmsn = int(_slamt * _pcs_rate / 100)
-                            _net_cmsn = max(0, _bse_cmsn + _pcs_cmsn - _lotte_dc)
-                            _revenue = max(0, _customer_paid - _net_cmsn)
+                            # 셀러 정산공식: slAmt − 셀러부담할인 − 기본수수료 − PCS수수료
+                            # (당사부담할인은 수수료 환급으로 상쇄, 별도 차감 X)
+                            _revenue = max(0, _slamt - _slr_dc - _bse_cmsn - _pcs_cmsn)
                             order_data["revenue"] = _revenue
+                            # 화면 수수료율 — (총수수료 − 환급) / 실결제 기준 (롯데ON 화면 정의와 동일)
+                            _net_cmsn_display = max(
+                                0, _bse_cmsn + _pcs_cmsn - _lotte_dc
+                            )
                             order_data["fee_rate"] = (
-                                round(_net_cmsn / _customer_paid * 100, 2)
+                                round(_net_cmsn_display / _customer_paid * 100, 2)
                                 if _customer_paid > 0
                                 else 0
                             )

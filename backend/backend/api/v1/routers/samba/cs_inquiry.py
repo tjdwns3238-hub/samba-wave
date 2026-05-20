@@ -288,7 +288,23 @@ async def reply_cs_inquiry(
                         api_key = af.get("apiKey", "") or acc.api_key or ""
                         if api_key:
                             lo_client = LotteonClient(api_key=api_key)
-                # account_id 없거나 SambaMarketAccount 미등록 → SambaSettings 폴백
+                # account_id 없으면 account_name으로 SambaMarketAccount.account_label 매칭
+                # (2026-05-20: account_id 미저장 레거시 inquiry 대응. 미매칭 시에만 글로벌 폴백)
+                if lo_client is None and inquiry.account_name:
+                    acc_result = await session.execute(
+                        select(SambaMarketAccount).where(
+                            SambaMarketAccount.market_type == "lotteon",
+                            SambaMarketAccount.account_label == inquiry.account_name,
+                            SambaMarketAccount.is_active == True,  # noqa: E712
+                        )
+                    )
+                    acc = acc_result.scalar_one_or_none()
+                    if acc:
+                        af = acc.additional_fields or {}
+                        api_key = af.get("apiKey", "") or acc.api_key or ""
+                        if api_key:
+                            lo_client = LotteonClient(api_key=api_key)
+                # 그래도 매칭 실패 → SambaSettings 폴백 (잘못된 계정 키 사용 위험 — 마지막 수단)
                 if lo_client is None:
                     settings_result = await session.execute(
                         select(SambaSettings).where(
@@ -621,6 +637,7 @@ async def _sync_lotteon_qna(
     session: "AsyncSession",
     svc: "Any",
     account_name: str,
+    account_id: str | None = None,
 ) -> int:
     """롯데ON Q&A 동기화 내부 함수.
 
@@ -717,6 +734,7 @@ async def _sync_lotteon_qna(
             "market_order_id": str(item.get("odNo", "") or "") or None,
             "market_product_no": market_product_no or None,
             "account_name": account_name,
+            "account_id": account_id,
             "inquiry_type": inquiry_type,
             "questioner": str(
                 item.get("slrNo", "") or ""
@@ -747,6 +765,7 @@ async def _sync_lotteon_product_qna(
     session: "AsyncSession",
     svc: "Any",
     account_name: str,
+    account_id: str | None = None,
 ) -> int:
     """롯데ON 상품 Q&A 동기화.
 
@@ -824,6 +843,7 @@ async def _sync_lotteon_product_qna(
             "market_order_id": None,
             "market_product_no": market_product_no or None,
             "account_name": account_name,
+            "account_id": account_id,
             "inquiry_type": "product_question",  # 상품 Q&A는 항상 product_question
             "questioner": str(item.get("buyerId", "") or ""),
             "product_name": str(item.get("pdNm", "") or ""),
@@ -852,6 +872,7 @@ async def _sync_lotteon_contact(
     session: "AsyncSession",
     svc: "Any",
     account_name: str,
+    account_id: str | None = None,
 ) -> int:
     """롯데ON 판매자 연락(Contact) 동기화.
 
@@ -950,6 +971,7 @@ async def _sync_lotteon_contact(
             "market_order_id": od_no or None,
             "market_product_no": market_product_no or None,
             "account_name": account_name,
+            "account_id": account_id,
             "inquiry_type": inquiry_type,
             "questioner": str(item.get("mbId") or item.get("custId") or ""),
             "product_name": str(item.get("pdNm") or ""),
@@ -977,6 +999,7 @@ async def _sync_lotteon_compensate(
     session: "AsyncSession",
     svc: "Any",
     account_name: str,
+    account_id: str | None = None,
 ) -> int:
     """롯데ON 보상 요청(Compensate) 동기화.
 
@@ -1057,6 +1080,7 @@ async def _sync_lotteon_compensate(
             "market_order_id": od_no or None,
             "market_product_no": market_product_no or None,
             "account_name": account_name,
+            "account_id": account_id,
             "inquiry_type": "exchange_return",  # 보상은 교환/반품 유형으로 분류
             "questioner": str(item.get("mbId") or item.get("custId") or ""),
             "product_name": str(item.get("pdNm") or ""),
@@ -1734,6 +1758,9 @@ async def _do_sync_cs_from_markets(
         try:
             import json as _json
 
+            # SambaMarketAccount 경로면 account_id 보존, SambaSettings 폴백이면 None
+            # (2026-05-20: account_id 누락 시 답변 폴백이 잘못된 글로벌 계정 키 사용해 false success 사고)
+            account_id: str | None = None
             if hasattr(lo_setting, "additional_fields"):
                 lo_config = dict(lo_setting.additional_fields or {})
                 api_key = lo_config.get("apiKey", "") or lo_setting.api_key or ""
@@ -1743,6 +1770,7 @@ async def _do_sync_cs_from_markets(
                     or lo_setting.seller_id
                     or ""
                 )
+                account_id = lo_setting.id
             else:
                 lo_config = (
                     _json.loads(lo_setting.value)
@@ -1763,13 +1791,15 @@ async def _do_sync_cs_from_markets(
             lo_client = LotteonClient(api_key=api_key)
             await lo_client.test_auth()  # trGrpCd/trNo 획득 (필수)
 
-            lo_synced = await _sync_lotteon_qna(lo_client, session, svc, account_name)
+            lo_synced = await _sync_lotteon_qna(
+                lo_client, session, svc, account_name, account_id
+            )
             synced += lo_synced
 
             # 상품 Q&A 동기화
             try:
                 lo_pqna_synced = await _sync_lotteon_product_qna(
-                    lo_client, session, svc, account_name
+                    lo_client, session, svc, account_name, account_id
                 )
                 synced += lo_pqna_synced
             except Exception as pqe:
@@ -1778,7 +1808,7 @@ async def _do_sync_cs_from_markets(
             # 판매자 연락(Contact) 동기화
             try:
                 lo_contact_synced = await _sync_lotteon_contact(
-                    lo_client, session, svc, account_name
+                    lo_client, session, svc, account_name, account_id
                 )
                 synced += lo_contact_synced
             except Exception as ce:
@@ -1787,7 +1817,7 @@ async def _do_sync_cs_from_markets(
             # 보상 요청(Compensate) 동기화
             try:
                 lo_comp_synced = await _sync_lotteon_compensate(
-                    lo_client, session, svc, account_name
+                    lo_client, session, svc, account_name, account_id
                 )
                 synced += lo_comp_synced
             except Exception as compe:

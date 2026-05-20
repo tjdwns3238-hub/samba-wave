@@ -276,11 +276,13 @@ class LotteonClient:
 
         # HTTP 200이어도 응답 body에 에러 코드가 있을 수 있음
         # returnCode: 요청 레벨 에러 (카테고리 누락 등)
+        # rsltCd: CS 답변/문의 API 계열 — 누락 시 false success 사고 발생(2026-05-20)
         res_code = (
             data.get("returnCode")
             or data.get("code")
             or data.get("resultCode")
             or data.get("rspnCd")
+            or data.get("rsltCd")
             or ""
         )
         if res_code and res_code not in ("0000", "00", "SUCCESS"):
@@ -288,6 +290,7 @@ class LotteonClient:
                 data.get("message", "")
                 or data.get("msg", "")
                 or data.get("rspnMsgCntn", "")
+                or data.get("rsltMsg", "")
                 or str(data)
             )
             logger.warning(f"[롯데ON] 응답 에러 코드: {res_code} — {msg}")

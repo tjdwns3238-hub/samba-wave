@@ -175,12 +175,21 @@ async def set_sync_interval(
 
 @router.post("/sync", response_model=TetrisSyncResponse)
 async def run_sync(
+    clear_pending: bool = False,
     session: AsyncSession = Depends(get_write_session_dependency),
     tenant_id: Optional[str] = Depends(get_optional_tenant_id),
 ) -> TetrisSyncResponse:
-    """현재 배치 기준 미등록 상품 전송 잡 즉시 생성 (수동 실행)."""
+    """현재 배치 기준 미등록 상품 전송 잡 즉시 생성 (수동 실행).
+
+    clear_pending=true: sync_all 전에 origin='tetris_sync' pending 잡을 모두 취소한다.
+    테트리스 매칭 OFF→ON 토글 시 기존 잡을 비우고 현재 배치 기준으로 재생성하는 용도.
+    """
     svc = _get_service(session)
+    cancelled = 0
+    if clear_pending:
+        cancelled = await svc.cancel_pending_tetris_jobs(tenant_id)
     result = await svc.sync_all(tenant_id)
+    result["cancelled_before_sync"] = cancelled
     return TetrisSyncResponse(**result)
 
 
