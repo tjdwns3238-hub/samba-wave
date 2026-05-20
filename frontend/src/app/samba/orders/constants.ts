@@ -18,7 +18,7 @@ export const STATUS_MAP: Record<string, { label: string; bg: string; text: strin
   undeliverable: { label: '발송불가', bg: 'rgba(217,119,6,0.15)', text: '#F59E0B' },
 }
 
-export const SHIPPING_COMPANIES = ['CJ대한통운', '우진택배', '롯데택배', '로젠택배', '우체국택배', '경동택배', '한진택배', '일양로지스', '천일택배', '시리박스', 'DHL', '직접배송', '기타']
+export const SHIPPING_COMPANIES = ['CJ대한통운', '우진택배', '롯데택배', '로젠택배', '우체국택배', '경동택배', '한진택배', '일양로지스', '천일택배', '시리박스', '딜리박스', 'DHL', '직접배송', '기타']
 
 export const ACTION_BUTTONS = [
   { key: 'no_price', label: '가격X', activeColor: '#DC2626' },

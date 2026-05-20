@@ -1743,6 +1743,8 @@ async def lookup_by_market_product_no(
     # 강제하기 위해 escape 후 ESCAPE '\\' 절 명시. 단순 substring/JSON-quoted 두
     # 패턴 모두 적용.
     safe = escape_like(market_product_no)
+    # tid는 None 가능 → asyncpg 타입 추론 위해 .bindparams로 명시 (issue #202).
+    # 동일 파일 다른 함수(dashboard-stats 등)의 패턴과 통일.
     sql = sa_text(
         "SELECT id, source_site, site_product_id, name, images, source_url, market_product_nos "
         "FROM samba_collected_product "
@@ -1753,11 +1755,10 @@ async def lookup_by_market_product_no(
         " OR REPLACE(site_product_id, '-', '') = :spid_norm "
         ") "
         "LIMIT 1"
-    )
+    ).bindparams(tid=tenant_id)
     result = await session.execute(
         sql,
         {
-            "tid": tenant_id,
             "pattern": f'%"{safe}"%',
             "pattern_bare": f"%{safe}%",
             "spid": market_product_no,
