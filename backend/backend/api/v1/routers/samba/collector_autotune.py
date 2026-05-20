@@ -3033,42 +3033,7 @@ async def autotune_start(
     request: Request = None,
 ):
     """오토튠 무한 루프 시작 — 메인 이벤트 루프에서 실행."""
-    # 티어 제한 체크 — 오토튠 접근 권한
-    try:
-        from backend.db.orm import get_read_session
-        from backend.domain.samba.tenant.middleware import (
-            check_autotune_access,
-        )
-
-        if request:
-            async with get_read_session() as session:
-                # JWT에서 tenant_id 추출 시도
-                auth_header = request.headers.get("Authorization") or ""
-                if auth_header.startswith("Bearer "):
-                    token = auth_header.split(" ", 1)[1]
-                    try:
-                        from backend.core.config import settings
-                        import jwt as _jwt
-
-                        payload = _jwt.decode(
-                            token,
-                            settings.jwt_secret_key,
-                            algorithms=[settings.jwt_algorithm],
-                        )
-                        user_id = payload.get("sub", "")
-                        if user_id:
-                            from backend.domain.samba.user.model import SambaUser
-
-                            stmt = select(SambaUser).where(SambaUser.id == user_id)
-                            result = (await session.execute(stmt)).scalars().first()
-                            tid = getattr(result, "tenant_id", None) if result else None
-                            if tid:
-                                await check_autotune_access(tid, session)
-                    except Exception:
-                        pass  # 인증 실패 시 기존 동작 유지
-    except Exception:
-        pass  # 모듈 로드 실패 시 기존 동작 유지
-
+    # 플랜 제한(check_autotune_access) 영구 제거 (2026-05-20)
     from backend.domain.samba.collector.refresher import clear_bulk_cancel
 
     dev = (body.device_id or "").strip()

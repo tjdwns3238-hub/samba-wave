@@ -10,7 +10,6 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from backend.db.orm import get_read_session_dependency, get_write_session_dependency
 from backend.domain.samba.tenant.middleware import (
     get_optional_tenant_id,
-    check_market_limit,
 )
 from backend.utils.masking import mask_model_secrets
 
@@ -127,9 +126,7 @@ async def create_account(
     session: AsyncSession = Depends(get_write_session_dependency),
     tenant_id: Optional[str] = Depends(get_optional_tenant_id),
 ):
-    # 티어 제한 체크 — 마켓 계정 수
-    if tenant_id:
-        await check_market_limit(tenant_id, session)
+    # 플랜 제한 영구 제거 (2026-05-20) — 자기운영 환경, 한도 체크 불필요
     data = body.model_dump(exclude_unset=True)
     # tenant_id가 있으면 신규 계정에 테넌트 정보 설정
     if tenant_id is not None:

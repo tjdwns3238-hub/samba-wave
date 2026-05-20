@@ -12,7 +12,6 @@ from sqlmodel import select
 from backend.db.orm import get_read_session_dependency, get_write_session_dependency
 from backend.domain.samba.tenant.middleware import (
     get_optional_tenant_id,
-    check_sourcing_limit,
 )
 from backend.dtos.samba.sourcing_account import (
     SourcingAccountCreate,
@@ -291,9 +290,7 @@ async def create_sourcing_account(
     session: AsyncSession = Depends(get_write_session_dependency),
     tenant_id: Optional[str] = Depends(get_optional_tenant_id),
 ):
-    # 티어 제한 체크 — 소싱 계정 수
-    if tenant_id:
-        await check_sourcing_limit(tenant_id, session)
+    # 플랜 제한 영구 제거 (2026-05-20)
     data = body.model_dump(exclude_unset=True)
     # tenant_id가 있으면 신규 소싱처 계정에 테넌트 정보 설정
     if tenant_id is not None:
