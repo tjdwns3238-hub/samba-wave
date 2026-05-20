@@ -16,6 +16,59 @@ from backend.dtos.samba.cs_inquiry import (
 router = APIRouter(prefix="/cs-inquiries", tags=["samba-cs-inquiries"])
 
 
+async def _resolve_market_account(
+    session: AsyncSession,
+    market_type: str,
+    account_id: Optional[str],
+    account_name: Optional[str],
+):
+    """CS 답변용 마켓 계정 매칭 헬퍼 — 모든 판매처 답변 분기에서 공통 사용.
+
+    매칭 우선순위:
+      1) inquiry.account_id 로 SambaMarketAccount.id 정확 매칭
+      2) inquiry.account_name 으로 SambaMarketAccount.account_label 매칭
+         (레거시 inquiry — account_id NULL 케이스 대응)
+
+    market_type 예: 'smartstore', 'lotteon', '11st', 'coupang', 'lottehome',
+                    'ssg', 'gmarket', 'auction', 'ebay', 'gsshop' …
+
+    반환:
+        매칭된 SambaMarketAccount 또는 None.
+        None인 경우 호출 측이 SambaSettings 글로벌 폴백을 수행하거나
+        명시 에러 처리해야 한다(잘못된 글로벌 키 사용 사고 방지).
+
+    신규 판매처 답변 분기 추가 시 본 헬퍼만 호출하면 account_name 폴백이
+    자동 적용된다(2026-05-20).
+    """
+    from sqlmodel import select
+    from backend.domain.samba.account.model import SambaMarketAccount
+
+    if account_id:
+        result = await session.execute(
+            select(SambaMarketAccount).where(
+                SambaMarketAccount.id == account_id,
+                SambaMarketAccount.is_active == True,  # noqa: E712
+            )
+        )
+        acc = result.scalar_one_or_none()
+        if acc:
+            return acc
+
+    if account_name:
+        result = await session.execute(
+            select(SambaMarketAccount).where(
+                SambaMarketAccount.market_type == market_type,
+                SambaMarketAccount.account_label == account_name,
+                SambaMarketAccount.is_active == True,  # noqa: E712
+            )
+        )
+        acc = result.scalar_one_or_none()
+        if acc:
+            return acc
+
+    return None
+
+
 def _read_service(session: AsyncSession):
     from backend.domain.samba.cs_inquiry.repository import SambaCSInquiryRepository
     from backend.domain.samba.cs_inquiry.service import SambaCSInquiryService
@@ -210,42 +263,17 @@ async def reply_cs_inquiry(
     if inquiry.market_inquiry_no:
         try:
             if inquiry.market == "스마트스토어":
-                from backend.domain.samba.account.model import SambaMarketAccount
-
                 client = None
-                # inquiry.account_id → SambaMarketAccount 우선 조회
-                if inquiry.account_id:
-                    acc_result = await session.execute(
-                        select(SambaMarketAccount).where(
-                            SambaMarketAccount.id == inquiry.account_id,
-                            SambaMarketAccount.is_active == True,  # noqa: E712
-                        )
-                    )
-                    acc = acc_result.scalar_one_or_none()
-                    if acc:
-                        af = acc.additional_fields or {}
-                        cid = af.get("clientId", "") or acc.api_key or ""
-                        csec = af.get("clientSecret", "") or acc.api_secret or ""
-                        if cid and csec:
-                            client = SmartStoreClient(cid, csec)
-                # account_id 없으면 account_name으로 SambaMarketAccount.account_label 매칭
-                # (2026-05-20: 롯데ON과 동일 패턴 — 잘못된 글로벌 키 사용 차단)
-                if client is None and inquiry.account_name:
-                    acc_result = await session.execute(
-                        select(SambaMarketAccount).where(
-                            SambaMarketAccount.market_type == "smartstore",
-                            SambaMarketAccount.account_label == inquiry.account_name,
-                            SambaMarketAccount.is_active == True,  # noqa: E712
-                        )
-                    )
-                    acc = acc_result.scalar_one_or_none()
-                    if acc:
-                        af = acc.additional_fields or {}
-                        cid = af.get("clientId", "") or acc.api_key or ""
-                        csec = af.get("clientSecret", "") or acc.api_secret or ""
-                        if cid and csec:
-                            client = SmartStoreClient(cid, csec)
-                # 그래도 매칭 실패 → SambaSettings 폴백 (마지막 수단)
+                acc = await _resolve_market_account(
+                    session, "smartstore", inquiry.account_id, inquiry.account_name
+                )
+                if acc:
+                    af = acc.additional_fields or {}
+                    cid = af.get("clientId", "") or acc.api_key or ""
+                    csec = af.get("clientSecret", "") or acc.api_secret or ""
+                    if cid and csec:
+                        client = SmartStoreClient(cid, csec)
+                # 매칭 실패 → SambaSettings 폴백 (마지막 수단)
                 if client is None:
                     settings_result = await session.execute(
                         select(SambaSettings).where(
@@ -288,40 +316,17 @@ async def reply_cs_inquiry(
                         market_msg = "고객문의 답변 전송 완료"
             elif inquiry.market == "롯데ON":
                 from backend.domain.samba.proxy.lotteon import LotteonClient
-                from backend.domain.samba.account.model import SambaMarketAccount
 
                 lo_client = None
-                # inquiry.account_id → SambaMarketAccount 우선 조회
-                if inquiry.account_id:
-                    acc_result = await session.execute(
-                        select(SambaMarketAccount).where(
-                            SambaMarketAccount.id == inquiry.account_id,
-                            SambaMarketAccount.is_active == True,  # noqa: E712
-                        )
-                    )
-                    acc = acc_result.scalar_one_or_none()
-                    if acc:
-                        af = acc.additional_fields or {}
-                        api_key = af.get("apiKey", "") or acc.api_key or ""
-                        if api_key:
-                            lo_client = LotteonClient(api_key=api_key)
-                # account_id 없으면 account_name으로 SambaMarketAccount.account_label 매칭
-                # (2026-05-20: account_id 미저장 레거시 inquiry 대응. 미매칭 시에만 글로벌 폴백)
-                if lo_client is None and inquiry.account_name:
-                    acc_result = await session.execute(
-                        select(SambaMarketAccount).where(
-                            SambaMarketAccount.market_type == "lotteon",
-                            SambaMarketAccount.account_label == inquiry.account_name,
-                            SambaMarketAccount.is_active == True,  # noqa: E712
-                        )
-                    )
-                    acc = acc_result.scalar_one_or_none()
-                    if acc:
-                        af = acc.additional_fields or {}
-                        api_key = af.get("apiKey", "") or acc.api_key or ""
-                        if api_key:
-                            lo_client = LotteonClient(api_key=api_key)
-                # 그래도 매칭 실패 → SambaSettings 폴백 (잘못된 계정 키 사용 위험 — 마지막 수단)
+                acc = await _resolve_market_account(
+                    session, "lotteon", inquiry.account_id, inquiry.account_name
+                )
+                if acc:
+                    af = acc.additional_fields or {}
+                    api_key = af.get("apiKey", "") or acc.api_key or ""
+                    if api_key:
+                        lo_client = LotteonClient(api_key=api_key)
+                # 매칭 실패 → SambaSettings 폴백 (잘못된 계정 키 사용 위험 — 마지막 수단)
                 if lo_client is None:
                     settings_result = await session.execute(
                         select(SambaSettings).where(
@@ -378,32 +383,17 @@ async def reply_cs_inquiry(
                 from backend.domain.samba.account.model import SambaMarketAccount
                 from backend.domain.samba.proxy.elevenst import ElevenstClient
 
-                # account_id → account_name → 첫 계정 폴백 순으로 매칭
-                # (2026-05-20: 잘못된 계정 키로 다른 11번가 매장에 답변 송신 차단)
-                elevenst_acc = None
-                if inquiry.account_id:
-                    acc_result = await session.execute(
-                        select(SambaMarketAccount).where(
-                            SambaMarketAccount.id == inquiry.account_id,
-                            SambaMarketAccount.is_active == True,  # noqa: E712
-                        )
-                    )
-                    elevenst_acc = acc_result.scalar_one_or_none()
-                if elevenst_acc is None and inquiry.account_name:
+                elevenst_acc = await _resolve_market_account(
+                    session, "11st", inquiry.account_id, inquiry.account_name
+                )
+                # 매칭 실패 시 첫 11st 계정 폴백 (잘못된 매장 송신 위험 — 마지막 수단)
+                if elevenst_acc is None:
                     acc_result = await session.execute(
                         select(SambaMarketAccount).where(
                             SambaMarketAccount.market_type == "11st",
-                            SambaMarketAccount.account_label == inquiry.account_name,
                             SambaMarketAccount.is_active == True,  # noqa: E712
                         )
                     )
-                    elevenst_acc = acc_result.scalar_one_or_none()
-                if elevenst_acc is None:
-                    acc_stmt = select(SambaMarketAccount).where(
-                        SambaMarketAccount.market_type == "11st",
-                        SambaMarketAccount.is_active == True,  # noqa: E712
-                    )
-                    acc_result = await session.execute(acc_stmt)
                     elevenst_acc = acc_result.scalars().first()
                 if elevenst_acc:
                     elevenst_extras = elevenst_acc.additional_fields or {}
@@ -435,25 +425,10 @@ async def reply_cs_inquiry(
                 from backend.domain.samba.account.model import SambaMarketAccount
                 from backend.domain.samba.proxy.coupang import CoupangClient
 
-                cp_acc = None
-                if inquiry.account_id:
-                    acc_result = await session.execute(
-                        select(SambaMarketAccount).where(
-                            SambaMarketAccount.id == inquiry.account_id,
-                            SambaMarketAccount.is_active == True,  # noqa: E712
-                        )
-                    )
-                    cp_acc = acc_result.scalar_one_or_none()
-                # account_id 없으면 account_name으로 매칭(2026-05-20 추가)
-                if cp_acc is None and inquiry.account_name:
-                    acc_result = await session.execute(
-                        select(SambaMarketAccount).where(
-                            SambaMarketAccount.market_type == "coupang",
-                            SambaMarketAccount.account_label == inquiry.account_name,
-                            SambaMarketAccount.is_active == True,  # noqa: E712
-                        )
-                    )
-                    cp_acc = acc_result.scalar_one_or_none()
+                cp_acc = await _resolve_market_account(
+                    session, "coupang", inquiry.account_id, inquiry.account_name
+                )
+                # 매칭 실패 시 첫 coupang 계정 폴백 (마지막 수단)
                 if cp_acc is None:
                     acc_result = await session.execute(
                         select(SambaMarketAccount).where(
