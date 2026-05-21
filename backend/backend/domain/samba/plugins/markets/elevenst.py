@@ -141,6 +141,8 @@ class ElevenstPlugin(MarketPlugin):
             from backend.domain.samba.proxy.elevenst import (
                 ElevenstRateLimitError,
                 _build_elevenst_option_xml,
+                _escape_xml,
+                _resolve_origin,
             )
 
             try:
@@ -164,12 +166,29 @@ class ElevenstPlugin(MarketPlugin):
                     .replace(">", "&gt;")
                 )
                 _brand_xml = f"<brand>{_brand}</brand>" if _brand else ""
+
+                # 원산지 — 11번가는 PUT 시 저장된 값까지 조건부 재검증함
+                # orgnTypCd=02(해외)인데 저장된 상세지역이 빈 경우 가격만 보내도 검증 실패
+                # → 경량 XML에서도 원산지 필드를 함께 보내 검증 통과 보장
+                _cfg_origin = _acct_extras.get("origin") or ""
+                if _cfg_origin == "기타":
+                    _cfg_origin = ""
+                _origin_raw = _cfg_origin or product.get("origin") or ""
+                _otc, _otd, _onv = _resolve_origin(_origin_raw)
+                _origin_parts = [f"<orgnTypCd>{_otc}</orgnTypCd>"]
+                if _otd:
+                    _origin_parts.append(f"<orgnTypDtlsCd>{_otd}</orgnTypDtlsCd>")
+                if _onv:
+                    _origin_parts.append(f"<orgnNmVal>{_escape_xml(_onv)}</orgnNmVal>")
+                _origin_xml = "".join(_origin_parts)
+
                 xml_data = (
                     '<?xml version="1.0" encoding="UTF-8"?>'
                     "<Product>"
                     "<selMthdCd>01</selMthdCd>"
                     f"<selPrc>{new_price}</selPrc>"
                     f"{_brand_xml}"
+                    f"{_origin_xml}"
                     f"{option_xml}"
                     "</Product>"
                 )
