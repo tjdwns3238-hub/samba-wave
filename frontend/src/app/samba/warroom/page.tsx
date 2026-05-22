@@ -307,10 +307,11 @@ export default function WarroomPage() {
     let cancelled = false
     const did = getOrCreateLotteonDaemonDeviceId()
     if (!did) return
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || 'https://api.samba-wave.co.kr'
     const tick = async () => {
       try {
         const r = await fetch(
-          `/api/v1/samba/proxy/lotteon-daemon/health?device_id=${encodeURIComponent(did)}`
+          `${apiBase}/api/v1/samba/proxy/lotteon-daemon/health?device_id=${encodeURIComponent(did)}`
         )
         if (!r.ok) return
         const data = await r.json()
