@@ -1692,12 +1692,13 @@ class SSGClient:
         ord_item_seq = str(raw.get("ordItemSeq", "") or "")
         or_ord_no = str(raw.get("orordNo", "") or "")
         item_id_str = str(raw.get("itemId", "") or "")
-        product_image = ""
-        if len(item_id_str) >= 6:
-            d1, d2, d3 = item_id_str[-2:], item_id_str[-4:-2], item_id_str[-6:-4]
-            product_image = (
-                f"https://sitem.ssgcdn.com/{d1}/{d2}/{d3}/item/{item_id_str}_i1_250.jpg"
-            )
+        # 미등록 주문에 부정확한 사진이 매칭되던 문제로 product_image 자동 합성 제거.
+        # 판매링크(source_url)는 itemId만으로 SSG 상품 페이지 진입 가능하므로 채워줌.
+        source_url = (
+            f"https://www.ssg.com/item/itemView.ssg?itemId={item_id_str}"
+            if item_id_str
+            else ""
+        )
         return {
             "order_number": ord_no,
             # 형식: "|ordItemSeq" (shppNo 없음, 취소신청에는 배송번호 불필요; orordNo는 order_number에 존재)
@@ -1707,7 +1708,8 @@ class SSGClient:
             "product_id": item_id_str,
             "product_name": str(raw.get("itemNm", "") or ""),
             "product_option": str(raw.get("uitemNm", "") or ""),
-            "product_image": product_image,
+            "product_image": "",
+            "source_url": source_url,
             "customer_name": "",
             "customer_phone": "",
             "customer_address": "",
@@ -2001,14 +2003,14 @@ class SSGClient:
             (f"{bsc} {dtl}".strip() if bsc else "") or raw.get("shpplocAddr", "") or ""
         )
 
-        # SSG CDN 이미지 URL 생성 (itemId 끝 6자리 역순 2글자씩)
         item_id_str = str(raw.get("itemId", "") or "")
-        product_image = ""
-        if len(item_id_str) >= 6:
-            d1, d2, d3 = item_id_str[-2:], item_id_str[-4:-2], item_id_str[-6:-4]
-            product_image = (
-                f"https://sitem.ssgcdn.com/{d1}/{d2}/{d3}/item/{item_id_str}_i1_250.jpg"
-            )
+        # 미등록 주문에 부정확한 사진이 매칭되던 문제로 product_image 자동 합성 제거.
+        # 판매링크(source_url)만 itemId 기반으로 채워 SSG 상품 페이지로 이동 가능하게 함.
+        source_url = (
+            f"https://www.ssg.com/item/itemView.ssg?itemId={item_id_str}"
+            if item_id_str
+            else ""
+        )
 
         item_nm = str(raw.get("itemNm", "") or "")
         raw_keys = list(raw.keys())
@@ -2071,7 +2073,8 @@ class SSGClient:
             "product_id": item_id_str,
             "product_name": item_nm,
             "product_option": str(raw.get("uitemNm", "") or ""),
-            "product_image": product_image,
+            "product_image": "",
+            "source_url": source_url,
             "customer_name": customer_name,
             "customer_phone": customer_phone,
             "customer_address": customer_address,

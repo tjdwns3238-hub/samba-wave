@@ -976,9 +976,35 @@ export interface SambaMarketAccount {
   created_at: string;
 }
 
+const ACTIVE_ACCOUNTS_CACHE_KEY = 'samba_active_accounts_v1'
+
 export const accountApi = {
   list: () => request<SambaMarketAccount[]>(`${SAMBA_PREFIX}/accounts`),
   listActive: () => request<SambaMarketAccount[]>(`${SAMBA_PREFIX}/accounts/active`),
+  // SWR 패턴: localStorage 캐시 즉시 반영 후 백그라운드 갱신.
+  // 드롭다운/필터처럼 화면 진입 즉시 보여줘야 하는 곳에서 사용.
+  listActiveCached: (setter: (accounts: SambaMarketAccount[]) => void): Promise<SambaMarketAccount[] | undefined> => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = window.localStorage.getItem(ACTIVE_ACCOUNTS_CACHE_KEY)
+        if (cached) {
+          const parsed = JSON.parse(cached) as SambaMarketAccount[]
+          if (Array.isArray(parsed) && parsed.length > 0) setter(parsed)
+        }
+      } catch { /* ignore */ }
+    }
+    return request<SambaMarketAccount[]>(`${SAMBA_PREFIX}/accounts/active`)
+      .then(fresh => {
+        setter(fresh)
+        try {
+          if (typeof window !== 'undefined') {
+            window.localStorage.setItem(ACTIVE_ACCOUNTS_CACHE_KEY, JSON.stringify(fresh))
+          }
+        } catch { /* ignore */ }
+        return fresh
+      })
+      .catch(() => undefined)
+  },
   getMarkets: () => request<unknown[]>(`${SAMBA_PREFIX}/accounts/markets`),
   get: (id: string) => request<SambaMarketAccount>(`${SAMBA_PREFIX}/accounts/${id}`),
   create: (data: Partial<SambaMarketAccount>) =>

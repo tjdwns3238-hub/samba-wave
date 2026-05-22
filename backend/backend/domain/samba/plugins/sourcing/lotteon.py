@@ -546,11 +546,17 @@ class LotteonSourcingPlugin(SourcingPlugin):
         # pbf 옵션 리스트의 stock을 덮어쓴다. 미연결/타임아웃/파싱 실패 시 pbf 값 유지.
         # ── DOM 위임 필수 — 최대혜택가/실재고는 DOM에서만 수집 가능 ──
         dom_ext: dict | None = None
+        from backend.core.config import settings
         from backend.domain.samba.proxy.sourcing_queue import SourcingQueue
+
+        # 헤드리스 데몬 라우팅 (PoC 게이트) — 환경변수 설정 시 데몬으로만 라우팅,
+        # 비어있으면 기존 확장앱 흐름 유지. 환경변수만 비우면 즉시 롤백 가능.
+        _daemon_dev = (settings.lotteon_daemon_device_id or "").strip()
+        _route_owner: str | None = _daemon_dev or None
 
         try:
             _dom_req, _dom_fut = SourcingQueue.add_detail_job(
-                "LOTTEON", site_product_id
+                "LOTTEON", site_product_id, owner_device_id=_route_owner
             )
             dom_ext = await asyncio.wait_for(_dom_fut, timeout=60)
             if isinstance(dom_ext, dict) and dom_ext.get("login_required"):

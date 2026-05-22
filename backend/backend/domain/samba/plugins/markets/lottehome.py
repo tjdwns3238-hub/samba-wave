@@ -524,7 +524,14 @@ class LotteHomePlugin(MarketPlugin):
             # 가격 업데이트
             if sale_price > 0:
                 try:
-                    margin_rate = int(product.get("margin_rate", 0) or auth_creds.get("margin_rate", 0) or 0) or 20
+                    margin_rate = (
+                        int(
+                            product.get("margin_rate", 0)
+                            or auth_creds.get("margin_rate", 0)
+                            or 0
+                        )
+                        or 20
+                    )
                     price_result = await client.update_price(
                         existing_no, sale_price, margin_rate
                     )

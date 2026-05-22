@@ -41,7 +41,7 @@ export default function ReturnsPage() {
   const [dateLocked, setDateLocked] = useState(false)
   const [accounts, setAccounts] = useState<SambaMarketAccount[]>([])
 
-  useEffect(() => { accountApi.listActive().then(setAccounts).catch(() => {}) }, [])
+  useEffect(() => { accountApi.listActiveCached(setAccounts) }, [])
   useEffect(() => { logRef.current && (logRef.current.scrollTop = logRef.current.scrollHeight) }, [logMessages])
 
 

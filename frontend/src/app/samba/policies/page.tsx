@@ -334,7 +334,7 @@ export default function PoliciesPage() {
 
   useEffect(() => {
     loadPolicies(); loadStoreAccounts()
-    accountApi.listActive().then(setMarketAccounts).catch(() => {})
+    accountApi.listActiveCached(setMarketAccounts)
     detailTemplateApi.list().then(setDetailTemplates).catch(() => {})
     nameRuleApi.list().then(setNameRules).catch(() => {})
     // 미리보기용 최신 상품 1개 로드

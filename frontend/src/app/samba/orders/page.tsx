@@ -337,25 +337,27 @@ export default function OrdersPage() {
     window.addEventListener('reset-orders-filter', handler)
     return () => window.removeEventListener('reset-orders-filter', handler)
   }, [])
-  // 마운트 1회 — 5개 메타 API를 하나의 useEffect에서 동시 호출 (DB 커넥션 경합 최소화)
+  // 마운트 1회 — 드롭다운 우선 메타데이터 (localStorage 캐시 + 백그라운드 갱신).
   useEffect(() => {
-    Promise.all([
-      channelApi.list().then(setChannels).catch(() => {}),
-      accountApi.listActive().then(setAccounts).catch(() => {}),
-      sourcingAccountApi.list().then(accs => setSourcingAccounts(accs.filter(a => a.is_active))).catch(() => {}),
-      proxyApi.aligoRemain().then(r => { if (r.success) setSmsRemain(r) }).catch(() => {}),
-      forbiddenApi.getSetting('store_playauto').then(data => {
-        const d = data as Record<string, string> | null
-        if (!d) return
-        const map: Record<string, string> = {}
-        for (const k of ['alias1', 'alias2', 'alias3', 'alias4', 'alias5']) {
-          const v = d[k] || ''
-          const { code, alias } = parsePlayautoAliasEntry(v)
-          if (code && alias) map[code] = alias
-        }
-        setSiteAliasMap(map)
-      }).catch(() => {}),
-    ])
+    channelApi.list().then(setChannels).catch(() => {})
+    accountApi.listActiveCached(setAccounts)
+    sourcingAccountApi.list().then(accs => setSourcingAccounts(accs.filter(a => a.is_active))).catch(() => {})
+    forbiddenApi.getSetting('store_playauto').then(data => {
+      const d = data as Record<string, string> | null
+      if (!d) return
+      const map: Record<string, string> = {}
+      for (const k of ['alias1', 'alias2', 'alias3', 'alias4', 'alias5']) {
+        const v = d[k] || ''
+        const { code, alias } = parsePlayautoAliasEntry(v)
+        if (code && alias) map[code] = alias
+      }
+      setSiteAliasMap(map)
+    }).catch(() => {})
+  }, [])
+
+  // 외부 알리고 SMS 잔여건수 — 외부 API 지연이 드롭다운 표시를 막지 않도록 분리.
+  useEffect(() => {
+    proxyApi.aligoRemain().then(r => { if (r.success) setSmsRemain(r) }).catch(() => {})
   }, [])
 
   const { syncing, syncAccountId, setSyncAccountId, handleFetch } = useOrderSync({

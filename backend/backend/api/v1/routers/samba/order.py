@@ -344,7 +344,7 @@ async def _build_order_filters(
     search_text: str = "",
     search_category: str = "customer",
 ) -> list[Any]:
-    from sqlalchemy import and_, func, or_
+    from sqlalchemy import and_, func, or_, select
 
     filters: list[Any] = []
 
@@ -476,40 +476,55 @@ async def _build_order_filters(
             )
         )
 
-    # 등록필터 — SSG는 product_image가 항상 채워지므로 collected_product_id 단독 판단.
-    # 타 마켓은 "미등록 입력" UX로 source_url/product_image를 채운 주문도 등록으로 간주.
-    if registration_filter == "registered":
-        if market_filter == "type:ssg":
-            filters.append(SambaOrder.collected_product_id != None)  # noqa: E711
+    # 등록필터
+    # - product_image: SSG/스마트스토어/플레이오토가 매칭 없이도 자동으로 채워주므로 판정 기준에서 제외
+    # - source_url: SSG는 itemId 기반으로 주문 수집 시 자동 채워주므로 SSG 계정 주문에서는 판정 기준에서 제외
+    # - 타 마켓은 "미등록 입력" UX(사용자가 직접 source_url 채움)로 source_url 채우면 등록으로 간주 (기존 동작 유지)
+    if registration_filter in ("registered", "unregistered"):
+        from backend.domain.samba.account.model import SambaMarketAccount
+
+        _ssg_stmt = select(SambaMarketAccount.id).where(
+            SambaMarketAccount.market_type == "ssg"
+        )
+        if tenant_id is not None:
+            _ssg_stmt = _ssg_stmt.where(
+                or_(
+                    SambaMarketAccount.tenant_id == tenant_id,
+                    SambaMarketAccount.tenant_id == None,  # noqa: E711
+                )
+            )
+        _ssg_rows = (await session.execute(_ssg_stmt)).all()
+        ssg_channel_ids = [r[0] for r in _ssg_rows if r[0]]
+
+        has_source_url = and_(
+            SambaOrder.source_url != None,  # noqa: E711
+            SambaOrder.source_url != "",
+        )
+        no_source_url = or_(
+            SambaOrder.source_url == None,  # noqa: E711
+            SambaOrder.source_url == "",
+        )
+        if ssg_channel_ids:
+            is_ssg = SambaOrder.channel_id.in_(ssg_channel_ids)
+            not_ssg = SambaOrder.channel_id.notin_(ssg_channel_ids)
         else:
+            from sqlalchemy import false, true
+
+            is_ssg = false()
+            not_ssg = true()
+
+        if registration_filter == "registered":
             filters.append(
                 or_(
                     SambaOrder.collected_product_id != None,  # noqa: E711
-                    and_(
-                        SambaOrder.source_url != None,  # noqa: E711
-                        SambaOrder.source_url != "",
-                    ),
-                    and_(
-                        SambaOrder.product_image != None,  # noqa: E711
-                        SambaOrder.product_image != "",
-                    ),
+                    and_(not_ssg, has_source_url),
                 )
             )
-    elif registration_filter == "unregistered":
-        if market_filter == "type:ssg":
-            filters.append(SambaOrder.collected_product_id == None)  # noqa: E711
         else:
             filters.append(
                 and_(
                     SambaOrder.collected_product_id == None,  # noqa: E711
-                    or_(
-                        SambaOrder.source_url == None,  # noqa: E711
-                        SambaOrder.source_url == "",
-                    ),
-                    or_(
-                        SambaOrder.product_image == None,  # noqa: E711
-                        SambaOrder.product_image == "",
-                    ),
+                    or_(is_ssg, no_source_url),
                 )
             )
 

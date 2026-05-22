@@ -279,7 +279,7 @@ export default function CSPage() {
   }, [filterMarket, filterType, filterStatus, search, sortDesc, pageSize, page, csCustomStart, csCustomEnd, accounts])
 
   useEffect(() => { load() }, [load])
-  useEffect(() => { accountApi.listActive().then(setAccounts).catch(() => {}) }, [])
+  useEffect(() => { accountApi.listActiveCached(setAccounts) }, [])
 
   // 검색
   const handleSearch = async () => {

@@ -199,9 +199,10 @@ export default function ShipmentsPage() {
     }, DELETE_POLL_INTERVAL_MS)
   }, [stopBackgroundLogPolling])
 
-  // 마운트 시 계정 목록 즉시 로드 (검색 전에도 마켓등록 드롭박스에 표시)
+  // 마운트 시 계정 목록 즉시 로드 (검색 전에도 마켓등록 드롭박스에 표시).
+  // localStorage 캐시로 즉시 그려준 뒤 백그라운드 갱신.
   useEffect(() => {
-    accountApi.listActive().catch(() => []).then(a => setAccounts(a))
+    accountApi.listActiveCached(a => setAccounts(a ?? []))
   }, [])
 
   // 마운트 시 sinceIdx 를 현재 버퍼 끝(current_idx)으로 초기화 — 과거 transmit 잡 로그 재유입 차단
