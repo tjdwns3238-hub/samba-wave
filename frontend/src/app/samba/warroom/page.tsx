@@ -896,6 +896,15 @@ export default function WarroomPage() {
             {!autotuneRunning && <span style={{ fontSize: '0.75rem', color: '#FF6B6B' }}>정지</span>}
           </div>
           <div style={{ display: 'flex', gap: '0.5rem', fontSize: '0.8rem', color: '#888', alignItems: 'center' }}>
+            <button
+              onClick={() => { downloadDaemonInstaller(getOrCreateAutotuneDaemonDeviceId()) }}
+              title="데몬 설치/재설치 — 미감지 배너 없어도 항상 다운로드 가능"
+              style={{
+                padding: '0.25rem 0.6rem',
+                background: 'rgba(76,154,255,0.12)', border: '1px solid rgba(76,154,255,0.35)',
+                borderRadius: '6px', color: '#4C9AFF', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer',
+              }}
+            >데몬 다운로드</button>
             <input
               type="text"
               placeholder="상품번호"
