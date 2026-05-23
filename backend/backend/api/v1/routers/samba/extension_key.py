@@ -161,9 +161,10 @@ async def revoke_key(
 
 
 # 데몬 설치 exe 원본 (GitHub Release). 다운로드 프록시가 가져와 파일명에 install-token 박아 스트림.
+# asset 명은 upload.ps1 이 'lotteon-daemon-setup.exe' 로 고정(autotune 아님).
 _DAEMON_EXE_URL = (
     "https://github.com/sbk0674-web/samba-wave/releases/latest/download/"
-    "autotune-daemon-setup.exe"
+    "lotteon-daemon-setup.exe"
 )
 _INSTALL_TOKEN_TTL_HOURS = 1
 

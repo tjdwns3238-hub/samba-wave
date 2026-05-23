@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
 import {
   orderApi,
@@ -476,8 +476,15 @@ export default function OrdersPage() {
 
   // 모달이 열려있고 처리 중인 잡(PENDING/DISPATCHED)이 있으면 5초 폴링
   // 배치 id로만 조회하므로 행 추가/제거 없이 셀 값만 갱신 — 리스트 출렁임 없음
+  // SENT_TO_MARKET 카운트 증가 감지 시 주문 테이블 reload —
+  // 백엔드가 dispatch 성공 시 order.status='shipping' / shipping_status='국내배송중'
+  // 으로 갱신하므로 드롭박스가 자동으로 '국내배송중' 으로 바뀐다.
+  const lastSentCountRef = useRef<number>(0)
   useEffect(() => {
-    if (!trackingStatusOpen) return
+    if (!trackingStatusOpen) {
+      lastSentCountRef.current = 0
+      return
+    }
     refreshTrackingStatus()
     const interval = setInterval(() => {
       const inFlight = (trackingStatusData?.counts.PENDING || 0)
@@ -486,6 +493,15 @@ export default function OrdersPage() {
     }, 5000)
     return () => clearInterval(interval)
   }, [trackingStatusOpen, trackingStatusData, refreshTrackingStatus])
+
+  // dispatch 성공 카운트(SENT_TO_MARKET) 증가 감지 → 드롭박스 즉시 갱신
+  useEffect(() => {
+    const sentCount = trackingStatusData?.counts.SENT_TO_MARKET || 0
+    if (sentCount > lastSentCountRef.current) {
+      lastSentCountRef.current = sentCount
+      loadOrders()
+    }
+  }, [trackingStatusData, loadOrders])
 
   const handleTrackingSyncOne = async (o: SambaOrder) => {
     try {
@@ -933,6 +949,8 @@ export default function OrdersPage() {
             //  되어 사용자가 결과 보러 닫을 때마다 송장수집 무효화되던 사고 차단)
             // 진짜 취소 의도는 별도 "취소" 버튼 명시 클릭만 인정.
             setTrackingStatusOpen(false)
+            // dispatch 성공으로 status='shipping'(국내배송중) 갱신된 주문 반영
+            loadOrders()
           }}
           style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',

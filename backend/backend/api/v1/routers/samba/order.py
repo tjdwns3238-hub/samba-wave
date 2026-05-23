@@ -5723,16 +5723,35 @@ async def sync_orders_from_markets(
                             _fee = get_fee_rate_for_category(_cat_for_fee)
                             _bse_cmsn = int(_slamt * _fee / 100)
                             _pcs_cmsn = int(_slamt * _pcs_rate / 100)
-                            # 셀러 정산공식: slAmt − 셀러부담할인 − 기본수수료 − PCS수수료
-                            # (당사부담할인은 수수료 환급으로 상쇄, 별도 차감 X)
-                            _revenue = max(0, _slamt - _slr_dc - _bse_cmsn - _pcs_cmsn)
+                            # ─────────────────────────────────────────────────────────────
+                            # 롯데ON 정산예상 공식 [영구 가드 · 절대 변경 금지 · 2026-05-23 확정]
+                            #
+                            # 정산예상 = _customer_paid − _bse_cmsn − _pcs_cmsn
+                            #         (= actualAmt − 기본수수료 − PCS수수료)
+                            #
+                            # 샵마인 셀러센터 "정산내역" 모달 공식과 동일:
+                            #   공급금액   = 총주문금액 − 마켓수수료
+                            #   정산예상   = 공급금액 − 할인금액
+                            #            = (slAmt − bseCmsn) − fvrAmtSum
+                            #            = actualAmt − bseCmsn   (actualAmt는 전체할인 차감 후)
+                            #
+                            # ⛔ 회귀 방지 — 다음 패턴 절대 추가 금지:
+                            #   1. `_slamt − _slr_dc` 또는 `_slamt − _slr_dc − _lotte_dc`
+                            #      → actualAmt가 이미 전체할인(셀러+롯데+제휴몰) 반영했는데
+                            #        다시 일부 할인만 차감 = 항상 한쪽이 깨짐 (a401c15e 사고)
+                            #   2. `+ _lotte_dc` 환급 가산 (a91b2221 가짜 가정 — raw에 환급 필드 없음)
+                            #   3. `_slamt − _slr_dc − fvrAmtSum` (66fc0837 이중차감 사고)
+                            #
+                            # 핵심 원칙: 할인은 _customer_paid 계산 단계(5701~5712)에서 한 번만 반영.
+                            #          revenue 식에서는 _customer_paid를 그대로 쓰고 수수료만 차감.
+                            # bseCmsn은 raw에 없어도 카테고리 fee_rate × slAmt 폴백으로 충분 (샵마인도 동일).
+                            # 확정값 필요시 SettleItmdSales.pymtAmt 매칭(4010~4029) — 구매확정 후 덮어씀.
+                            # ─────────────────────────────────────────────────────────────
+                            _revenue = max(0, _customer_paid - _bse_cmsn - _pcs_cmsn)
                             order_data["revenue"] = _revenue
-                            # 화면 수수료율 — (총수수료 − 환급) / 실결제 기준 (롯데ON 화면 정의와 동일)
-                            _net_cmsn_display = max(
-                                0, _bse_cmsn + _pcs_cmsn - _lotte_dc
-                            )
+                            # 화면 수수료율 — 마켓수수료/실결제 기준 (롯데ON 정산내역 "실수수료율" 정의)
                             order_data["fee_rate"] = (
-                                round(_net_cmsn_display / _customer_paid * 100, 2)
+                                round((_bse_cmsn + _pcs_cmsn) / _customer_paid * 100, 2)
                                 if _customer_paid > 0
                                 else 0
                             )
