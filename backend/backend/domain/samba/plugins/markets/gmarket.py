@@ -68,6 +68,64 @@ class GMarketMarketPlugin(MarketPlugin):
             session, product_copy, account
         )
 
+        # 무신사 등 referer/hotlink 차단 CDN(msscdn 등) → R2 미러링 (11번가 동일 패턴)
+        # ESM 서버가 등록 이미지 URL을 직접 fetch하므로, 차단 도메인을
+        # api.samba-wave.co.kr 미러 URL로 치환해야 워터마크/차단 회피가 완성됨.
+        try:
+            from backend.domain.samba.image.service import ImageTransformService
+
+            _img_svc = ImageTransformService(session)
+            _imgs = product_copy.get("images") or []
+            _detail_imgs = product_copy.get("detail_images") or []
+            _dhtml = product_copy.get("detail_html") or ""
+            if _imgs:
+                product_copy["images"], _ = await _img_svc.mirror_external_to_r2(_imgs)
+            if _detail_imgs:
+                (
+                    product_copy["detail_images"],
+                    _,
+                ) = await _img_svc.mirror_external_to_r2(_detail_imgs)
+            if _dhtml:
+                product_copy["detail_html"] = await _img_svc.mirror_urls_in_html(_dhtml)
+            # 미러링 후에도 핫링크 차단 URL이 남으면 등록 차단(깨진 이미지 방지)
+            _still_blocked = [
+                u
+                for u in (product_copy.get("images") or [])
+                if ImageTransformService.is_hotlink_blocked_url(u)
+            ]
+            if _still_blocked:
+                return {
+                    "success": False,
+                    "message": (
+                        f"지마켓 등록 취소: R2 미러링 실패로 핫링크 차단 URL "
+                        f"{len(_still_blocked)}개 잔존. R2 설정 확인 후 재시도."
+                    ),
+                }
+        except Exception as e:
+            try:
+                from backend.domain.samba.image.service import (
+                    ImageTransformService as _ITS,
+                )
+
+                _blk = [
+                    u
+                    for u in (product_copy.get("images") or [])
+                    if _ITS.is_hotlink_blocked_url(u)
+                ]
+            except Exception:
+                _blk = []
+            if _blk:
+                logger.error(
+                    f"[지마켓] R2 미러링 오류 + 차단 URL 존재 — 등록 차단: {e}"
+                )
+                return {
+                    "success": False,
+                    "message": f"지마켓 등록 취소: R2 미러링 오류. {e}",
+                }
+            logger.warning(
+                f"[지마켓] 이미지 미러링 오류 — 차단 URL 없어 원본 유지: {e}"
+            )
+
         # 상세 HTML 프로토콜 보정 + lazy loading 삽입
         detail_html = product_copy.get("detail_html", "")
         if detail_html:
