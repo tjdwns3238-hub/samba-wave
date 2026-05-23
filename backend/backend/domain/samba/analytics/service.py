@@ -381,7 +381,6 @@ class SambaAnalyticsService:
         if cp_ids:
             from backend.domain.samba.collector.model import SambaCollectedProduct
 
-            all_products = await self.product_repo.list_async()
             # product_repo가 SambaProduct이므로 collector repo 별도 조회
             try:
                 from sqlmodel import select

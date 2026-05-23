@@ -445,7 +445,7 @@ export const orderApi = {
     request<TrackingInfo>(`${SAMBA_PREFIX}/orders/tracking?carrier=${encodeURIComponent(carrier)}&invoice=${encodeURIComponent(invoice)}`),
 };
 
-export interface TrackingEvent {
+interface TrackingEvent {
   time: string | null
   status: string | null
   status_code: string | null
@@ -1035,7 +1035,7 @@ export interface SambaShipment {
 
 // ── 스스그룹 타입 ──
 
-export interface GroupPreviewProduct {
+interface GroupPreviewProduct {
   id: string
   name: string
   color: string | null
@@ -1046,7 +1046,7 @@ export interface GroupPreviewProduct {
   same_day_delivery?: boolean
 }
 
-export interface GroupPreviewGroup {
+interface GroupPreviewGroup {
   group_key: string
   group_name: string
   products: GroupPreviewProduct[]
@@ -1890,15 +1890,6 @@ export const csInquiryApi = {
 
 // ── Analytics ──
 
-export interface AnalyticsStats {
-  total_sales: number;
-  total_orders: number;
-  total_profit: number;
-  avg_order_value: number;
-  profit_rate: number;
-}
-
-
 // ── Detail Templates ──
 
 export interface SambaDetailTemplate {
@@ -2137,26 +2128,6 @@ export const monitorApi = {
     ),
 }
 
-// ── S3 이미지 헬퍼 ──
-
-const S3_BUCKET = process.env.NEXT_PUBLIC_S3_BUCKET || ''
-const S3_REGION = process.env.NEXT_PUBLIC_S3_REGION || 'ap-northeast-2'
-
-/** S3 key → 공개 URL 변환 */
-export function getS3Url(key: string): string {
-  return `https://${S3_BUCKET}.s3.${S3_REGION}.amazonaws.com/${key}`
-}
-
-/** Presigned PUT URL로 파일 직접 업로드 */
-export async function uploadToS3(presignedUrl: string, file: File): Promise<void> {
-  const res = await fetch(presignedUrl, {
-    method: 'PUT',
-    headers: { 'Content-Type': file.type },
-    body: file,
-  })
-  if (!res.ok) throw new Error(`S3 업로드 실패: ${res.status}`)
-}
-
 // ── 사용자(로그인 계정) 관리 ──
 
 export interface SambaUser {
@@ -2197,7 +2168,7 @@ export const userApi = {
 
 // ── AI Sourcing (AI 소싱기) ──
 
-export interface AISourcingBrand {
+interface AISourcingBrand {
   brand: string
   count: number
   score: number
@@ -2222,7 +2193,7 @@ export interface AISourcingCombination {
   safety_reason: string
 }
 
-export interface AISourcingSummary {
+interface AISourcingSummary {
   total_brands_found: number
   safe_brands: number
   unsafe_brands: number
@@ -2441,14 +2412,6 @@ export interface ChromeProfile {
   display_name: string
 }
 
-export interface BalanceResult {
-  id: string
-  label: string
-  balance: number | null
-  status: string
-  message?: string
-}
-
 export const sourcingAccountApi = {
   list: (siteName?: string) => {
     const p = new URLSearchParams()
@@ -2480,7 +2443,7 @@ export const sourcingAccountApi = {
 
 // ── Rewards (적립금 자동 적립) ──
 
-export interface RewardActionMeta {
+interface RewardActionMeta {
   id: string
   site: string
   label: string

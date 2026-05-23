@@ -436,7 +436,6 @@ class AISourcingService:
 
         brand_map: dict[str, BrandScore] = {}
         pair_map: dict[str, BrandKeywordPair] = {}
-        known_brands = self._get_known_brand_list()
 
         for item in ranking_items:
             # 새 구조: { rank, brand, name, price, goodsNo }

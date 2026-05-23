@@ -4,7 +4,7 @@ import React, { Dispatch, SetStateAction } from 'react'
 import { inputStyle } from '@/lib/samba/styles'
 import { SHIPPING_COMPANIES } from '../constants'
 
-export interface OrderForm {
+interface OrderForm {
   channel_id: string
   product_name: string
   customer_name: string

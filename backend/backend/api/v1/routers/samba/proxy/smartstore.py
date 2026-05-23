@@ -68,12 +68,27 @@ async def smartstore_auth_test(
 
     try:
         # bcrypt 서명 생성 (네이버 Commerce API 인증 방식)
+        # 네이버 Commerce API clientSecret 은 29자 bcrypt salt 형식.
+        # $2y$ prefix 는 Python bcrypt 가 지원하지 않으므로 $2b$ 로 정규화.
+        # $2a$ / $2b$ 는 그대로 사용해야 서명이 일치한다.
+        salt = client_secret
+        if salt.startswith("$2y$"):
+            salt = "$2b$" + salt[4:]
         timestamp = int(time.time() * 1000)
         password = f"{client_id}_{timestamp}"
-        hashed = bcrypt.hashpw(
-            password.encode("utf-8"),
-            client_secret.encode("utf-8"),
-        )
+        try:
+            hashed = bcrypt.hashpw(
+                password.encode("utf-8"),
+                salt.encode("utf-8"),
+            )
+        except ValueError as ve:
+            return {
+                "success": False,
+                "message": (
+                    f"clientSecret 형식 오류 ({ve}). 네이버 커머스 API 센터에서 "
+                    "발급한 29자 bcrypt salt($2a$/$2b$ prefix)를 그대로 저장하세요."
+                ),
+            }
         client_secret_sign = base64.standard_b64encode(hashed).decode("utf-8")
 
         async with httpx.AsyncClient(timeout=15) as client:

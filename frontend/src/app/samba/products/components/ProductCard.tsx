@@ -129,7 +129,7 @@ function buildMarketProductUrl(
 
 // 가격범위별 마진 매칭 (백엔드 policy/service.py:_calculate_range_margin과 동일 로직)
 // cost >= min && cost < max 인 첫 번째 범위의 rate를 반환, 매칭 실패 시 fallback
-export function pickRangeMargin(
+function pickRangeMargin(
   cost: number,
   ranges: Array<{ min?: number; max?: number; rate?: number }>,
   fallback: number,
@@ -143,7 +143,7 @@ export function pickRangeMargin(
 }
 
 // 가격 계산 공통 함수 (ProductCard 내 2곳 중복 제거)
-export function calcPrice(
+function calcPrice(
   cost: number, mRate: number, ship: number, fee: number, extra: number, minMargin: number,
   ssMRate = 0, ssMAmount = 0,
 ): { price: number; marginAmt: number; usedMin: boolean; feeAmt: number; calcStr: string } {
@@ -294,7 +294,7 @@ function simultaneousReplace(
 }
 
 // 상품명 조합 적용 (name_composition 태그 기반)
-export function composeProductName(
+function composeProductName(
   product: SambaCollectedProduct,
   nameRule: SambaNameRule | undefined,
   deletionWords?: string[],

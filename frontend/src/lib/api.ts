@@ -22,7 +22,7 @@ export interface UserInfo {
   is_premium: boolean;
 }
 
-export interface RefreshTokenResponse {
+interface RefreshTokenResponse {
   app_auth_token: string;
   refresh_token: string;
 }
@@ -39,10 +39,7 @@ export function getAccessToken(): string | null {
   return localStorage.getItem(ACCESS_TOKEN_KEY);
 }
 
-/**
- * Get stored refresh token
- */
-export function getRefreshToken(): string | null {
+function getRefreshToken(): string | null {
   if (typeof window === "undefined") return null;
   return localStorage.getItem(REFRESH_TOKEN_KEY);
 }
@@ -109,10 +106,7 @@ export function hasTokens(): boolean {
   return getAccessToken() !== null;
 }
 
-/**
- * API Error class for typed error handling
- */
-export class ApiError extends Error {
+class ApiError extends Error {
   constructor(
     public status: number,
     public statusText: string,
@@ -251,33 +245,3 @@ export async function getCurrentUser(): Promise<UserInfo> {
   return apiRequest<UserInfo>("/api/v1/auth/me");
 }
 
-/**
- * Refresh tokens
- */
-export async function refreshTokens(): Promise<RefreshTokenResponse> {
-  const refreshToken = getRefreshToken();
-  if (!refreshToken) {
-    throw new ApiError(401, "No refresh token");
-  }
-
-  return apiRequest<RefreshTokenResponse>("/api/v1/auth/refresh", {
-    method: "POST",
-    body: JSON.stringify({ refresh_token: refreshToken }),
-  });
-}
-
-// ============================================
-// Generic API Methods
-// ============================================
-
-export const api = {
-  get: <T>(endpoint: string) => apiRequest<T>(endpoint),
-  post: <T>(endpoint: string, body: unknown) =>
-    apiRequest<T>(endpoint, { method: "POST", body: JSON.stringify(body) }),
-  put: <T>(endpoint: string, body: unknown) =>
-    apiRequest<T>(endpoint, { method: "PUT", body: JSON.stringify(body) }),
-  patch: <T>(endpoint: string, body: unknown) =>
-    apiRequest<T>(endpoint, { method: "PATCH", body: JSON.stringify(body) }),
-  delete: <T>(endpoint: string) =>
-    apiRequest<T>(endpoint, { method: "DELETE" }),
-};

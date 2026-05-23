@@ -1,6 +1,6 @@
 import { MARKET_KEYS } from './constants'
 
-export const marketColWidth = (mk: string) =>
+const marketColWidth = (mk: string) =>
   mk === 'coupang' || mk === 'ssg' || mk === 'ssg_std' ? '360px' : '300px'
 
 export const GRID_COLS = `80px 362px ${MARKET_KEYS.map(mk => marketColWidth(mk)).join(' ')} 40px`

@@ -461,7 +461,6 @@ class CategorySeedMixin:
             "lottehome": "롯데홈쇼핑",
             "gsshop": "GS샵",
         }
-        market_names = ", ".join(market_labels.get(m, m) for m in target_markets)
 
         # 키즈/주니어 키워드 — 소싱·후보 양쪽에서 동일하게 식별
         _kids_keywords = (
@@ -1465,13 +1464,7 @@ JSON만:
         updated = 0
         skipped = 0
         rule_mapped = 0
-        similarity_mapped = 0
         errors: List[str] = []
-
-        # DB 스마트스토어 카테고리 목록 (2단계 유사도 매칭용 — 리프만)
-        ss_cats: list[str] = []
-        if "smartstore" in all_market_keys:
-            ss_cats = _filter_to_leaves(await self._get_market_categories("smartstore"))
 
         # ── 3단계 매핑 전략 ──
         # AI 호출 대상만 별도 수집

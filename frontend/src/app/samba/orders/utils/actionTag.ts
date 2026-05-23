@@ -1,4 +1,4 @@
-export const ACTION_TAG_DELIMITER = ','
+const ACTION_TAG_DELIMITER = ','
 
 export function parseActionTags(value?: string | null): string[] {
   if (!value) return []

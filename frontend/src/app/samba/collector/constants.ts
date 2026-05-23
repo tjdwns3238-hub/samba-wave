@@ -27,7 +27,7 @@ export interface SiteOption {
 }
 
 // 품절상품 포함 옵션 (모든 소싱처 공통, 기본 체크해제)
-export const COMMON_OPTIONS: SiteOption[] = [
+const COMMON_OPTIONS: SiteOption[] = [
   { id: 'includeSoldOut', label: '품절상품 포함' },
 ]
 

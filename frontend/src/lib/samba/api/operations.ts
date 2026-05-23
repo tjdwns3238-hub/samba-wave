@@ -1,8 +1,6 @@
 export {
   jobApi,
   monitorApi,
-  getS3Url,
-  uploadToS3,
   userApi,
   aiSourcingApi,
   storeCareApi,
@@ -14,23 +12,16 @@ export {
 } from '../legacy'
 
 export type {
-  SambaJob,
-  QueueStatus,
   MonitorEvent,
   DashboardStats,
   RefreshLogEntry,
-  RefreshLogsResponse,
   SambaUser,
-  AISourcingBrand,
   AISourcingCombination,
-  AISourcingSummary,
   AISourcingResult,
   StoreCareSchedule,
   StoreCarePurchase,
   SambaSourcingAccount,
   ChromeProfile,
-  BalanceResult,
-  RewardActionMeta,
   RewardAccountRow,
   RewardsStatus,
   SourcingRoi,

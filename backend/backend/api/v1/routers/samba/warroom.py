@@ -391,9 +391,7 @@ async def refresh_store_scores(
                 vendor_id = extras.get("vendorId", "")
                 if not access_key or not secret_key:
                     continue
-                from backend.domain.samba.proxy.coupang import CoupangClient
 
-                client_cp = CoupangClient(access_key, secret_key)
                 results[acc.id] = {
                     **old,
                     "account_id": acc.id,

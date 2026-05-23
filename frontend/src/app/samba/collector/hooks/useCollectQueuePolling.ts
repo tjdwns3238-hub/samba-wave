@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { fetchWithAuth, API_BASE } from '@/lib/samba/api/shared'
 
-export interface CollectQueueItem {
+interface CollectQueueItem {
   id: string
   filter_name: string
   source_site: string

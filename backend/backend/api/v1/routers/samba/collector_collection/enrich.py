@@ -368,10 +368,6 @@ async def enrich_product(
             raise HTTPException(502, "KREAM 상세 조회 실패: 데이터 없음")
 
         opts = pd.get("options", [])
-        cat_str = pd.get("category", "")
-        cat_parts = (
-            [c.strip() for c in cat_str.split(">") if c.strip()] if cat_str else []
-        )
 
         fast_prices = [
             o.get("kreamFastPrice", 0) for o in opts if o.get("kreamFastPrice", 0) > 0
@@ -506,7 +502,6 @@ async def enrich_product(
         new_orig = detail.get("original_price") or product.original_price
         shipping_fee = detail.get("shipping_fee", 0) or 0
         new_cost = new_sale + shipping_fee
-        new_images = detail.get("images") or []
 
         new_options = detail.get("options") or []
         updates: dict[str, Any] = {

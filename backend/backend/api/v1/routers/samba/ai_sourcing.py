@@ -595,7 +595,6 @@ async def receive_ranking_data(request: dict[str, Any]):
     date = request.get("date", "")
     ranking_items = request.get("ranking_items", [])
     search_keywords = request.get("search_keywords", {})
-    raw_text = request.get("search_raw_text")
 
     # 카테고리코드 → 카테고리명 매핑
     code_to_name = {v: k for k, v in MUSINSA_CATEGORIES.items()}

@@ -186,10 +186,3 @@ export function useAuth() {
   return context;
 }
 
-/**
- * Hook for checking if user is authenticated
- */
-export function useIsAuthenticated() {
-  const { isAuthenticated, isLoading } = useAuth();
-  return { isAuthenticated, isLoading };
-}

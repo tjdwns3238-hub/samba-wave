@@ -443,9 +443,20 @@ async def brand_discover(body: BrandDiscoverRequest):
 
     if body.source_site == "SSG":
         from backend.domain.samba.plugins.sourcing.ssg import SSGPlugin
+        from backend.domain.samba.proxy.ssg_sourcing import RateLimitError
 
         plugin = SSGPlugin()
-        return await plugin.discover_brands(body.keyword)
+        # SSG 429 → anyio TaskGroup 내부에서 ExceptionGroup 으로 전파되어 ASGI 연결 단절
+        # 유발. 명시적으로 HTTPException(429) 로 변환하여 클라이언트에 정상 응답.
+        try:
+            return await plugin.discover_brands(body.keyword)
+        except RateLimitError as exc:
+            raise HTTPException(429, f"SSG 요청 제한: {exc}") from exc
+        except BaseExceptionGroup as eg:
+            rate_errs = [e for e in eg.exceptions if isinstance(e, RateLimitError)]
+            if rate_errs:
+                raise HTTPException(429, f"SSG 요청 제한: {rate_errs[0]}") from eg
+            raise
 
     if body.source_site == "FashionPlus":
         from backend.domain.samba.plugins.sourcing.fashionplus import FashionPlusPlugin

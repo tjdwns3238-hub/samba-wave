@@ -1,8 +1,3 @@
-import { MARKET_SELECT_OPTIONS } from '@/lib/samba/markets'
-
-// 마켓 셀렉트 옵션 (markets.ts 단일 소스)
-export const MARKET_TYPES = MARKET_SELECT_OPTIONS
-
 // Claude AI 모델 목록
 export const CLAUDE_MODELS = [
   { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (권장)' },
@@ -10,20 +5,11 @@ export const CLAUDE_MODELS = [
   { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 (빠름/저렴)' },
 ]
 
-// AI 기능 목록
-export const AI_FEATURES = [
-  { key: 'productName', label: '상품명 가공' },
-  { key: 'description', label: '상세설명 생성' },
-  { key: 'csReply', label: 'CS 자동 답변' },
-  { key: 'autoTag', label: '태그 자동 생성' },
-  { key: 'imageProcess', label: '이미지 가공' },
-]
-
 // 환율 통화 코드 타입
 export type ExchangeCurrencyCode = 'USD' | 'JPY' | 'CNY' | 'EUR'
 
 // 환율 항목 타입
-export type ExchangeRateItem = {
+type ExchangeRateItem = {
   code: ExchangeCurrencyCode
   label: string
   baseRate: number

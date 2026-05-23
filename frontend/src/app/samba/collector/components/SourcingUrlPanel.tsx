@@ -8,7 +8,7 @@ import { SITES, SITE_OPTIONS } from '../constants'
 import MusinsaBrandModal from './MusinsaBrandModal'
 import LotteOnBrandModal from './LotteOnBrandModal'
 
-export type BrandCategory = { categoryCode: string; path: string; count: number; category1: string; category2: string; category3: string }
+type BrandCategory = { categoryCode: string; path: string; count: number; category1: string; category2: string; category3: string }
 type BrandModalEntry = { name: string; count: number; id?: string }
 type BrandModalParsed = { brand: string; keyword: string; gf: string } | null
 type MusinsaBrand = { brandCode: string; brandName: string }

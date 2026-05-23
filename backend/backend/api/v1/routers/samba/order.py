@@ -6654,7 +6654,6 @@ def _parse_smartstore_order(
     # 클레임 상태 (취소/반품/교환 요청)
     # 우선순위: 호출자가 전달한 claim 서브 객체 → productOrder 최상위 순으로 fallback
     _ci = claim_info or {}
-    claim_type = _ci.get("claimType") or po.get("claimType", "") or ""
     claim_status = _ci.get("claimStatus") or po.get("claimStatus", "") or ""
 
     claim_status_map = {

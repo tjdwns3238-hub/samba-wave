@@ -1,47 +1,12 @@
 'use client'
 
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, BarChart, Bar, Legend } from 'recharts'
+import { Tooltip, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, BarChart, Bar, Legend } from 'recharts'
 import { fmtNum } from '@/lib/samba/styles'
-
-const COLORS = ['#FF8C00', '#4C9AFF', '#22C55E', '#A855F7', '#EF4444', '#F59E0B', '#06B6D4', '#EC4899', '#8B5CF6', '#10B981']
 
 interface ChartProps {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   data: Record<string, any>[]
   height?: number
-}
-
-// 마켓별 매출 점유율 파이차트
-export function MarketSharePie({ data, height = 280 }: ChartProps) {
-  const formatted = data.map((d, i) => ({
-    name: d.channel_name || d.name || `#${i + 1}`,
-    value: d.sales || 0,
-  })).filter(d => d.value > 0)
-
-  if (!formatted.length) return <p style={{ color: '#666', fontSize: '0.8rem' }}>데이터 없음</p>
-
-  return (
-    <ResponsiveContainer width="100%" height={height}>
-      <PieChart>
-        <Pie
-          data={formatted}
-          cx="50%"
-          cy="50%"
-          innerRadius={50}
-          outerRadius={90}
-          dataKey="value"
-          label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}
-          labelLine={false}
-          fontSize={11}
-        >
-          {formatted.map((_, i) => (
-            <Cell key={i} fill={COLORS[i % COLORS.length]} />
-          ))}
-        </Pie>
-        <Tooltip formatter={(v) => `${fmtNum(Number(v))}원`} />
-      </PieChart>
-    </ResponsiveContainer>
-  )
 }
 
 // 매출 추이 라인차트

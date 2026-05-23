@@ -506,9 +506,6 @@ async def refresh_products(
         # 품절 상품 → 마켓 판매중지/삭제 → 삼바 DB 삭제
         import asyncio
         from backend.domain.samba.shipment.dispatcher import delete_from_market
-        from backend.domain.samba.account.repository import SambaMarketAccountRepository
-
-        account_repo = SambaMarketAccountRepository(session)
 
         # 계정 배치 조회 (N+1 방지)
         all_acc_ids = set()

@@ -457,7 +457,6 @@ async def bg_jobs_config(
     from ._helpers import _set_setting
 
     _tid = _default_tenant_id()
-    env_token = os.environ.get("BG_WORKER_TOKEN", "")
     cfg = await _get_setting(session, "bg_worker", tenant_id=_tid)
     db_token = (cfg or {}).get("worker_token", "") if isinstance(cfg, dict) else ""
 

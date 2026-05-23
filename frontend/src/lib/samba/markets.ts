@@ -66,9 +66,6 @@ export const MARKET_ID_BY_LABEL: Record<string, string> = Object.fromEntries(
   MARKETS.map(m => [m.label, m.id])
 )
 
-/** id → 한글 라벨 (정책 키 호환) */
-export const MARKET_TYPE_TO_POLICY_KEY: Record<string, string> = { ...MARKET_LABELS }
-
 /** 설정 페이지용 셀렉트 옵션 (categoryOnly 마켓 제외) */
 export const MARKET_SELECT_OPTIONS = [
   { value: '', label: '── 국내 오픈마켓 ──', disabled: true },

@@ -36,26 +36,6 @@ export const SOURCING_SEARCH_URLS: Record<string, string> = {
   SNKRDUNK: 'https://snkrdunk.com/en/search/result?keyword=',
 }
 
-export const SOURCING_PRODUCT_URLS: Record<string, string> = {
-  MUSINSA: 'https://www.musinsa.com/products/',
-  KREAM: 'https://kream.co.kr/products/',
-  FashionPlus: 'https://www.fashionplus.co.kr/goods/detail/',
-  ABCmart: 'https://www.a-rt.com/product?prdtNo=',
-  Nike: 'https://www.nike.com/kr/t/',
-  LOTTEON: 'https://www.lotteon.com/p/product/',
-  NAVERSTORE: 'https://smartstore.naver.com/',
-  SNKRDUNK: 'https://snkrdunk.com/en/sneakers/',
-}
-
-export const SOURCING_ORDER_URLS: Record<string, string> = {
-  MUSINSA: 'https://www.musinsa.com/order/order-detail/',
-  KREAM: 'https://kream.co.kr/my/purchasing/',
-  FashionPlus: 'https://www.fashionplus.co.kr/mypage/order/detail/',
-  ABCmart: 'https://abcmart.a-rt.com/mypage/order/read-order-detail?orderNo=',
-  GrandStage: 'https://grandstage.a-rt.com/mypage/order/read-order-detail?orderNo=',
-  Nike: 'https://www.nike.com/kr/orders/',
-}
-
 export const DELIVERY_TRACKING_URLS: Record<string, string> = {
   'CJ대한통운': 'https://trace.cjlogistics.com/next/tracking.html?wblNo=',
   '한진택배': 'https://www.hanjin.com/kor/CMS/DeliveryMgr/WaybillResult.do?mession=&searchType=General&wblnumText2=',

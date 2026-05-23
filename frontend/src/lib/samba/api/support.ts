@@ -8,10 +8,8 @@ export {
 export type {
   SambaReturn,
   SambaCSInquiry,
-  CSInquiryListResponse,
   CSReplyTemplate,
   CSSyncResultItem,
-  AnalyticsStats,
   SambaDetailTemplate,
   SambaNameRule,
 } from '../legacy'

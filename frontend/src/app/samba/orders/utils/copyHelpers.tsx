@@ -3,7 +3,7 @@
 import React from 'react'
 import { showAlert } from '@/components/samba/Modal'
 
-export const copyableTextStyle: React.CSSProperties = {
+const copyableTextStyle: React.CSSProperties = {
   color: '#E5E5E5',
   cursor: 'copy',
   textDecoration: 'underline',
@@ -11,7 +11,7 @@ export const copyableTextStyle: React.CSSProperties = {
   textUnderlineOffset: '2px',
 }
 
-export const handleCopyText = async (value: string | null | undefined) => {
+const handleCopyText = async (value: string | null | undefined) => {
   let text = (value || '').trim()
   text = text.replace(/\([^)]*\)/g, '').trim()
   if (!text) {

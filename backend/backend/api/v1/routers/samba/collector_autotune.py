@@ -633,12 +633,6 @@ async def _site_autotune_loop(device_id: str, site: str):
                         from backend.domain.samba.shipment.service import (
                             calc_market_price,
                         )
-                        from backend.domain.samba.policy.repository import (
-                            SambaPolicyRepository,
-                        )
-                        from backend.domain.samba.account.repository import (
-                            SambaMarketAccountRepository,
-                        )
                         from backend.domain.samba.shipment.dispatcher import (
                             delete_from_market,
                         )
@@ -647,9 +641,6 @@ async def _site_autotune_loop(device_id: str, site: str):
                         product_map: dict[str, object] = {p.id: p for p in products}
                         _policy_cache: dict[str, object] = {}
                         _account_cache: dict[str, object] = {}
-                        account_repo = SambaMarketAccountRepository(session)
-                        policy_repo = SambaPolicyRepository(session)
-
                         # 계정 사전 로드
                         _all_account_ids: set[str] = set()
                         for _p in products:

@@ -1432,7 +1432,6 @@ async def cleanup_elevenst_orphans_v2(
     if body.product_ids:
         prod_q = prod_q.where(SambaCollectedProduct.id.in_(body.product_ids))
     all_db_products = (await session.execute(prod_q)).scalars().all()
-    all_db_id_set: set[str] = {str(p.id) for p in all_db_products}
 
     per_account: list[dict] = []
     total_market = 0

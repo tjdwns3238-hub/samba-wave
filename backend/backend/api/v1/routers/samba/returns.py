@@ -259,9 +259,6 @@ async def list_returns(
 
     # 주문의 ext_order_number(타마켓주문링크) 또는 소싱처 주문상세 URL을 return_link로 매칭
     # 주문탭 원주문링크와 100% 동일한 로직
-    from backend.domain.samba.order.repository import SambaOrderRepository
-
-    order_repo = SambaOrderRepository(session)
     order_ids = list({r.order_id for r in returns if r.order_id})
     link_map: dict[str, str] = {}
     channel_id_map: dict[str, str] = {}  # order_id → channel_id
@@ -736,7 +733,6 @@ async def sync_returns_from_markets(
                 claims_data: list[dict[str, Any]] = []
                 for ro in raw_orders:
                     po = ro.get("productOrder", ro)
-                    order_info = ro.get("order", {})
                     claim_info = (
                         ro.get("claim")
                         if isinstance(ro.get("claim"), dict)
@@ -1723,9 +1719,6 @@ async def sync_returns_from_markets(
                         order_id=order_id, type="exchange"
                     )
 
-                    status_raw = item.get("ordPrdStatCd", "") or item.get(
-                        "clmStatCd", ""
-                    )
                     mapped_status = "requested"
 
                     timeline_msg = "11번가 교환 요청이 접수되었습니다."

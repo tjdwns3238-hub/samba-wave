@@ -20,7 +20,7 @@ export const getDeviceId = (): string => {
   }
 }
 
-export const setDeviceId = (v: string): void => {
+const setDeviceId = (v: string): void => {
   const cleaned = (v || '').trim()
   if (!cleaned) return
   cached = cleaned

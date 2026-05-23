@@ -261,7 +261,6 @@ async def collect_by_url(
             skipped_boutique = 0
             _batch_buf: list[dict] = []
             _BATCH_SIZE = 10
-            rate_limited = False
 
             async def _flush_batch() -> int:
                 """버퍼에 쌓인 상품을 한번에 DB 저장."""
@@ -353,7 +352,6 @@ async def collect_by_url(
                     logger.warning(
                         f"[무신사] 요청 제한 감지 — 수집 중단 (수집완료: {saved}/{len(targets)})"
                     )
-                    rate_limited = True
                     break
                 except Exception as e:
                     logger.warning(f"[수집 실패] {goods_no}: {e}")
