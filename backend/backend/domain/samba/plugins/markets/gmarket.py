@@ -43,7 +43,11 @@ class GMarketMarketPlugin(MarketPlugin):
         from backend.domain.samba.proxy.esmplus import ESMPlusClient
 
         # 판매자 ID — creds에서 apiKey(sellerId) 가져오기
-        seller_id = creds.get("apiKey", "") or creds.get("sellerId", "")
+        seller_id = (
+            creds.get("apiKey", "")
+            or creds.get("sellerId", "")
+            or (getattr(account, "seller_id", "") or "")
+        )
         if not seller_id:
             return {
                 "success": False,
@@ -309,7 +313,11 @@ class GMarketMarketPlugin(MarketPlugin):
         if not creds:
             return {"success": False, "message": "인증정보 없음"}
 
-        seller_id = creds.get("apiKey", "") or creds.get("sellerId", "")
+        seller_id = (
+            creds.get("apiKey", "")
+            or creds.get("sellerId", "")
+            or (getattr(account, "seller_id", "") or "")
+        )
         if not seller_id:
             return {"success": False, "message": "지마켓 판매자 ID 없음"}
 

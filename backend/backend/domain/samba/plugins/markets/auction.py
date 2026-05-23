@@ -43,7 +43,11 @@ class AuctionPlugin(MarketPlugin):
         from backend.domain.samba.proxy.esmplus import ESMPlusClient
 
         # 판매자 ID
-        seller_id = creds.get("apiKey", "") or creds.get("sellerId", "")
+        seller_id = (
+            creds.get("apiKey", "")
+            or creds.get("sellerId", "")
+            or (getattr(account, "seller_id", "") or "")
+        )
         if not seller_id:
             return {
                 "success": False,
@@ -299,7 +303,11 @@ class AuctionPlugin(MarketPlugin):
         if not creds:
             return {"success": False, "message": "인증정보 없음"}
 
-        seller_id = creds.get("apiKey", "") or creds.get("sellerId", "")
+        seller_id = (
+            creds.get("apiKey", "")
+            or creds.get("sellerId", "")
+            or (getattr(account, "seller_id", "") or "")
+        )
         if not seller_id:
             return {"success": False, "message": "옥션 판매자 ID 없음"}
 
