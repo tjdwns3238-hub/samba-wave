@@ -5053,6 +5053,11 @@ async def sync_orders_from_markets(
                     _ssg_raw_orders = _raw_cache.get(account["id"])
                     if _ssg_raw_orders is None:
                         _ssg_raw_orders = await _ssg_client.get_orders(days=body.days)
+                    # 출고대기(피킹완료) 주문 추가 조회 — listShppDirection은 배송지시(11)만 반환
+                    # 캐시 여부와 무관하게 항상 호출
+                    _ssg_wo_orders = await _ssg_client.get_warehouse_out_orders(days=body.days)
+                    if _ssg_wo_orders:
+                        _ssg_raw_orders = list(_ssg_raw_orders) + _ssg_wo_orders
                     logger.info(
                         f"[주문동기화] {label}: SSG 주문 {len(_ssg_raw_orders)}건 조회"
                     )
@@ -5078,6 +5083,14 @@ async def sync_orders_from_markets(
                             try:
                                 await _ssg_client.confirm_order(_shpp_no, _shpp_seq)
                                 _ssg_confirm_ok += 1
+                                # 발주확인 성공 → orders_data의 해당 주문 상태를 출고대기로 업데이트
+                                # (listShppDirection API는 발주확인 후 출고대기 주문을 반환하지 않으므로
+                                #  confirm 성공 시 직접 DB 반영)
+                                _confirmed_sid = f"{_shpp_no}|{_shpp_seq}"
+                                for _od in orders_data:
+                                    if _od.get("shipment_id") == _confirmed_sid:
+                                        _od["shipping_status"] = "출고대기"
+                                        break
                             except Exception as _ce:
                                 logger.warning(
                                     f"[주문동기화] {label}: 발주확인 실패 "
