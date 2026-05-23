@@ -555,55 +555,6 @@ export default function OrdersPage() {
   
   return (
     <div style={{ color: '#E5E5E5' }}>
-      <OrdersTopBar
-        notifications={notifications}
-        setNotifications={setNotifications}
-        setStatusFilter={setStatusFilter}
-        setMarketStatus={setMarketStatus}
-        setCustomStart={setCustomStart}
-        setCustomEnd={setCustomEnd}
-        setPeriod={setPeriod}
-        isProductMode={isProductMode}
-        cpId={cpId}
-        cpName={cpName}
-        filteredOrdersCount={totalCount}
-        pendingCount={pendingCount}
-        smsRemain={smsRemain}
-        logMessages={logMessages}
-        setLogMessages={setLogMessages}
-      />
-
-      <OrdersFilterBar
-        isProductMode={isProductMode}
-        period={period} setPeriod={setPeriod}
-        customStart={customStart} setCustomStart={setCustomStart}
-        customEnd={customEnd} setCustomEnd={setCustomEnd}
-        startLocked={startLocked} setStartLocked={setStartLocked}
-        dateLocked={dateLocked} setDateLocked={setDateLocked}
-        syncAccountId={syncAccountId} setSyncAccountId={setSyncAccountId}
-        syncing={syncing} handleFetch={handleFetch}
-        bulkStatus={bulkStatus} setBulkStatus={setBulkStatus}
-        bulkUpdating={bulkUpdating} handleBulkAction={handleBulkAction}
-        selectedIdsSize={selectedIds.size}
-        filteredOrdersCount={totalCount}
-        filteredOrdersTotalSale={totalSale}
-        searchCategory={searchCategory} setSearchCategory={setSearchCategory}
-        searchText={searchText} setSearchText={setSearchText}
-        loadOrders={applySearch}
-        marketFilter={marketFilter} setMarketFilter={setMarketFilter}
-        siteFilter={siteFilter} setSiteFilter={setSiteFilter}
-        accountFilter={accountFilter} setAccountFilter={setAccountFilter}
-        marketStatus={marketStatus} setMarketStatus={setMarketStatus}
-        registrationFilter={registrationFilter} setRegistrationFilter={setRegistrationFilter}
-        inputFilter={inputFilter} setInputFilter={setInputFilter}
-        invoiceFilter={invoiceFilter} setInvoiceFilter={setInvoiceFilter}
-        statusFilter={statusFilter} setStatusFilter={setStatusFilter}
-        sortBy={sortBy} setSortBy={setSortBy}
-        pageSize={pageSize} setPageSize={setPageSize}
-        accounts={accounts} sourcingAccounts={sourcingAccounts}
-        siteOptions={siteOptions}
-      />
-
       {/* 주문 자동실행 토글바 — 주문가져오기 + 송장수집 인터벌 자동 실행 */}
       <div style={{
         padding: '0.75rem 1rem', margin: '6px 0',
@@ -732,6 +683,55 @@ export default function OrdersPage() {
           </div>
         )}
       </div>
+
+      <OrdersTopBar
+        notifications={notifications}
+        setNotifications={setNotifications}
+        setStatusFilter={setStatusFilter}
+        setMarketStatus={setMarketStatus}
+        setCustomStart={setCustomStart}
+        setCustomEnd={setCustomEnd}
+        setPeriod={setPeriod}
+        isProductMode={isProductMode}
+        cpId={cpId}
+        cpName={cpName}
+        filteredOrdersCount={totalCount}
+        pendingCount={pendingCount}
+        smsRemain={smsRemain}
+        logMessages={logMessages}
+        setLogMessages={setLogMessages}
+      />
+
+      <OrdersFilterBar
+        isProductMode={isProductMode}
+        period={period} setPeriod={setPeriod}
+        customStart={customStart} setCustomStart={setCustomStart}
+        customEnd={customEnd} setCustomEnd={setCustomEnd}
+        startLocked={startLocked} setStartLocked={setStartLocked}
+        dateLocked={dateLocked} setDateLocked={setDateLocked}
+        syncAccountId={syncAccountId} setSyncAccountId={setSyncAccountId}
+        syncing={syncing} handleFetch={handleFetch}
+        bulkStatus={bulkStatus} setBulkStatus={setBulkStatus}
+        bulkUpdating={bulkUpdating} handleBulkAction={handleBulkAction}
+        selectedIdsSize={selectedIds.size}
+        filteredOrdersCount={totalCount}
+        filteredOrdersTotalSale={totalSale}
+        searchCategory={searchCategory} setSearchCategory={setSearchCategory}
+        searchText={searchText} setSearchText={setSearchText}
+        loadOrders={applySearch}
+        marketFilter={marketFilter} setMarketFilter={setMarketFilter}
+        siteFilter={siteFilter} setSiteFilter={setSiteFilter}
+        accountFilter={accountFilter} setAccountFilter={setAccountFilter}
+        marketStatus={marketStatus} setMarketStatus={setMarketStatus}
+        registrationFilter={registrationFilter} setRegistrationFilter={setRegistrationFilter}
+        inputFilter={inputFilter} setInputFilter={setInputFilter}
+        invoiceFilter={invoiceFilter} setInvoiceFilter={setInvoiceFilter}
+        statusFilter={statusFilter} setStatusFilter={setStatusFilter}
+        sortBy={sortBy} setSortBy={setSortBy}
+        pageSize={pageSize} setPageSize={setPageSize}
+        accounts={accounts} sourcingAccounts={sourcingAccounts}
+        siteOptions={siteOptions}
+      />
 
       {/* 송장 자동전송 미니바 — 일괄 트리거 + 안내 */}
       <div style={{
