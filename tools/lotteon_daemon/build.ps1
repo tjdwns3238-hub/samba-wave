@@ -28,12 +28,9 @@ Write-Step "Install build deps"
 & python -m pip install --upgrade pip
 & python -m pip install playwright httpx pyinstaller pystray Pillow
 
-Write-Step "Playwright Chromium download (bundle source)"
-$browsersDir = Join-Path $here 'playwright_browsers'
-$env:PLAYWRIGHT_BROWSERS_PATH = $browsersDir
-& playwright install chromium
-
-Write-Step "PyInstaller build (onefile + noconsole + tray)"
+# chromium 번들 제거(2026-05-23): 350MB→~25MB. 데몬은 시스템 크롬/Edge 헤드리스 사용
+# (_launch_browser channel="chrome"→"msedge"). Edge 는 Windows 기본 설치라 거의 항상 존재.
+Write-Step "PyInstaller build (onefile + noconsole + tray, no chromium bundle)"
 if (Test-Path 'dist') { Remove-Item -Recurse -Force 'dist' }
 if (Test-Path 'build') { Remove-Item -Recurse -Force 'build' }
 & pyinstaller `
@@ -41,7 +38,6 @@ if (Test-Path 'build') { Remove-Item -Recurse -Force 'build' }
   --onefile `
   --noconfirm `
   --noconsole `
-  --add-data "$browsersDir;playwright_browsers" `
   --collect-all playwright `
   --collect-all httpx `
   --collect-all pystray `

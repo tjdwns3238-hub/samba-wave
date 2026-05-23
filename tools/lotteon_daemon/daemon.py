@@ -399,6 +399,25 @@ def _extract_did_from_argv_or_exename() -> str | None:
     return _extract_kv_from_argv_or_exename("did")
 
 
+def _extract_install_token() -> str:
+    """파일명/argv 에서 install-token(`_it-<hex>`) 추출.
+
+    다운로드 프록시가 exe 파일명에 `_it-<token>.exe` 형식으로 박는다('=' 회피).
+    데몬 첫 실행 시 이 토큰을 long-lived 키와 교환(exchange)한다.
+    """
+    candidates: list[str] = []
+    try:
+        candidates.append(Path(sys.executable).name)
+    except Exception:
+        pass
+    candidates.extend(sys.argv[1:])
+    for src in candidates:
+        m = re.search(r"_it-([0-9a-f]{16,})", src)
+        if m:
+            return m.group(1)
+    return ""
+
+
 def _extract_backend_from_argv_or_exename() -> str | None:
     """파일명/argv 에서 backend URL 추출. 포크 사용자도 본인 backend 가리킬 수 있게."""
     val = _extract_kv_from_argv_or_exename("backend")
@@ -1040,6 +1059,34 @@ async def process_job(
     return None
 
 
+async def _launch_browser(pw, headless: bool):
+    """시스템 브라우저(크롬→Edge) 우선 → 번들 chromium 폴백.
+
+    chromium(~300MB) 번들 대신 PC 에 이미 깔린 크롬/Edge 를 헤드리스로 빌려쓴다.
+    → exe ~20MB 로 경량화(다운로드 즉시). Edge 는 Windows 기본 설치라 거의 항상 존재.
+    SSG/ABCmart/LOTTEON PDP 추출 동작은 시스템 크롬·Edge 헤드리스로 검증됨(2026-05-23).
+    """
+    _args = ["--no-sandbox", "--disable-blink-features=AutomationControlled"]
+    last_err: Exception | None = None
+    for ch in ("chrome", "msedge"):
+        try:
+            b = await pw.chromium.launch(channel=ch, headless=headless, args=_args)
+            logger.info("브라우저 실행: 시스템 %s (headless=%s)", ch, headless)
+            return b
+        except Exception as exc:
+            last_err = exc
+            logger.warning("브라우저 channel=%s 실행 실패: %s", ch, str(exc)[:100])
+    # 폴백: 번들/기본 chromium (번들 제거 시 미존재 → 에러)
+    try:
+        b = await pw.chromium.launch(headless=headless, args=_args)
+        logger.info("브라우저 실행: 번들 chromium (headless=%s)", headless)
+        return b
+    except Exception as exc:
+        raise RuntimeError(
+            f"브라우저 실행 실패 (chrome/msedge/chromium 모두): {last_err} / {exc}"
+        )
+
+
 async def run_daemon(args: argparse.Namespace) -> int:
     state = DaemonState(max_consecutive_fail=args.max_consecutive_fail)
     backend_url = args.backend_url.rstrip("/")
@@ -1090,10 +1137,7 @@ async def run_daemon(args: argparse.Namespace) -> int:
         # 창 띄우는 알려진 버그가 있어 쿠키만 storage_state.json 영속 저장.
         storage_state_path = profile_dir / "storage_state.json"
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(
-                headless=args.headless,
-                args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-            )
+            browser = await _launch_browser(pw, args.headless)
             context_kwargs: dict[str, Any] = {
                 "viewport": {"width": 1280, "height": 900},
                 "user_agent": (
@@ -1430,7 +1474,8 @@ def _parse_args() -> argparse.Namespace:
     # 2. DAEMON_API_KEY 환경변수
     # 3. (미주입) 캐시/글로벌 발급 폴백
     _apikey_default = (
-        _extract_kv_from_argv_or_exename("apikey")
+        _extract_install_token()  # 파일명 _it-<token> (다운로드 프록시가 박음)
+        or _extract_kv_from_argv_or_exename("apikey")  # 레거시 apikey=
         or os.environ.get("DAEMON_API_KEY")
         or ""
     )
@@ -1608,10 +1653,7 @@ async def run_seed_session(args: argparse.Namespace) -> int:
         return 0
     logger.info("=== 세션 시드 모드 시작: %s ===", ",".join(login_sites))
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(
-            headless=False,
-            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-        )
+        browser = await _launch_browser(pw, headless=False)
         context_kwargs: dict[str, Any] = {
             "viewport": {"width": 1280, "height": 900},
             "user_agent": (

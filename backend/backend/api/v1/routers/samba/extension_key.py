@@ -8,7 +8,8 @@ from typing import Optional
 
 import httpx
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 from sqlalchemy import select, update
@@ -199,22 +200,42 @@ async def daemon_installer(
     session.add(record)
     await session.commit()
 
+    # 파일명에 '=' 쓰면 브라우저 Content-Disposition 파싱에서 잘려 토큰 유실됨.
+    # '=' 없는 '_it-<token>' 형식으로 박고 데몬이 정규식으로 추출한다.
+    fname = f"autotune-daemon-setup_it-{raw_token}.exe"
+
+    # 350MB exe 를 메모리에 통째로 올리지 않고 청크 스트리밍 — 메모리 안전 + 즉시 응답 시작.
+    # (r.content 통짜 로드 시 fetch+로드 동안 응답이 안 와 브라우저 다운로드가 멈춤)
+    client = httpx.AsyncClient(follow_redirects=True, timeout=300.0)
     try:
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            r = await client.get(_DAEMON_EXE_URL, timeout=120.0)
-            r.raise_for_status()
-            exe_bytes = r.content
+        req = client.build_request("GET", _DAEMON_EXE_URL)
+        upstream = await client.send(req, stream=True)
+        if upstream.status_code != 200:
+            await upstream.aclose()
+            await client.aclose()
+            raise HTTPException(
+                502, f"데몬 설치 파일 응답 오류: {upstream.status_code}"
+            )
+    except HTTPException:
+        raise
     except Exception as exc:
+        await client.aclose()
         raise HTTPException(502, f"데몬 설치 파일 다운로드 실패: {exc}")
 
-    fname = f"autotune-daemon-setup_apikey={raw_token}"
-    if device_id:
-        fname += f"_did={device_id}"
-    fname += ".exe"
-    return Response(
-        content=exe_bytes,
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    async def _stream():
+        try:
+            async for chunk in upstream.aiter_bytes(1 << 16):
+                yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
+    headers = {"Content-Disposition": f'attachment; filename="{fname}"'}
+    _clen = upstream.headers.get("content-length")
+    if _clen:
+        headers["Content-Length"] = _clen
+    return StreamingResponse(
+        _stream(), media_type="application/octet-stream", headers=headers
     )
 
 
