@@ -1566,7 +1566,9 @@ class SSGClient:
             }
         }
         try:
-            data = await self._call_api("POST", "/api/pd/1/listWarehouseOut.ssg", body=body)
+            data = await self._call_api(
+                "POST", "/api/pd/1/listWarehouseOut.ssg", body=body
+            )
         except Exception as e:
             logger.warning(f"[SSG 출고대기] listWarehouseOut 조회 실패: {e}")
             return []
@@ -2019,8 +2021,7 @@ class SSGClient:
         ord_item_div = str(raw.get("ordItemDiv", ""))
         # listWarehouseOut은 lastShppProgStatDtlCd, listShppDirection은 shppProgStatDtlCd
         shpp_prog = str(
-            raw.get("lastShppProgStatDtlCd", "")
-            or raw.get("shppProgStatDtlCd", "")
+            raw.get("lastShppProgStatDtlCd", "") or raw.get("shppProgStatDtlCd", "")
         )
 
         # 상태 매핑
@@ -2033,13 +2034,13 @@ class SSGClient:
         elif shpp_prog == "11":
             status, shipping_status = "pending", "상품준비중"
         elif shpp_prog in ("21", "22", "31"):
-            status, shipping_status = "pending", "출고대기"
+            status, shipping_status = "pending", "주문접수"
         elif shpp_prog == "41":
-            status, shipping_status = "pending", "출고대기"
+            status, shipping_status = "pending", "주문접수"
         elif shpp_prog == "42":
             status, shipping_status = "pending", "출고보류"
         elif shpp_prog == "43":
-            status, shipping_status = "shipped", "배송중"
+            status, shipping_status = "shipped", "국내배송중"
         elif shpp_prog == "51":
             status, shipping_status = "delivered", "배송완료"
         else:
@@ -2048,7 +2049,9 @@ class SSGClient:
         rl_ord_amt = float(raw.get("rlordAmt", 0) or 0)
         dc_amt = float(raw.get("dcAmt", 0) or 0)
         sell_price = float(raw.get("sellprc", 0) or 0) or (rl_ord_amt + dc_amt)
-        spl_prc = float(raw.get("splprc", 0) or raw.get("splPrc", 0) or 0)  # listWarehouseOut은 splPrc
+        spl_prc = float(
+            raw.get("splprc", 0) or raw.get("splPrc", 0) or 0
+        )  # listWarehouseOut은 splPrc
         # 수령인 우선, 없으면 주문자 fallback (str 정규화)
         customer_name = str(raw.get("rcptpeNm", "") or raw.get("ordpeNm", "") or "")
         # 수령인 연락처 우선 (휴대폰 → 집전화 → 주문자 휴대폰)
