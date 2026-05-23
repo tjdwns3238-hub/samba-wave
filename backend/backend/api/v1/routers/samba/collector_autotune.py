@@ -254,6 +254,14 @@ async def _run_transmit_in_background(coro_factory):
 _pc_allowed_sites: dict[str, set[str]] = {}
 _pc_last_seen: dict[str, float] = {}
 PC_LAST_SEEN_TTL = 86400.0  # 24시간
+# deviceId당 최근 폴링된 사이트셋 이력 — {device_id: {frozenset(sites): last_ts}}.
+# 같은 deviceId 를 여러 PC(예: 프로필 복사/시드로 deviceId 중복)가 서로 다른
+# X-Allowed-Sites 로 폴링하면 register 가 매 폴링 last-write 로 덮어써 active_sites 가
+# flip-flop(예: [LOTTEON]↔[ABCmart,SSG...]) → 일부 소싱처가 계속 탈락하던 문제.
+# deviceId 단위로 TTL 내 폴링된 사이트셋을 합집합(union)해 안정화한다.
+# (서로 다른 deviceId 간 PC분담은 영향 없음 — 같은 deviceId 충돌만 합쳐짐.)
+_pc_site_history: dict[str, dict[frozenset, float]] = {}
+_PC_SITE_UNION_TTL = 90.0  # 90초 — 폴링 끊긴 사이트셋은 만료돼 자연 축소
 # 다음 폴링 시 해당 PC에게만 forceStop 신호를 전달할 집합 (개별 중지용)
 _pc_force_stop_set: set[str] = set()
 # 사용자 의도(전역 enabled) 인메모리 미러 — DB autotune_enabled 와 동기.
@@ -288,12 +296,24 @@ def register_pc_allowed_sites(device_id: str, sites: list[str] | None) -> bool:
         existed = dev in _pc_allowed_sites or dev in _pc_last_seen
         _pc_allowed_sites.pop(dev, None)
         _pc_last_seen.pop(dev, None)
+        _pc_site_history.pop(dev, None)
         return existed
-    new_set = {s.strip() for s in sites if s and s.strip()}
+    new_set = frozenset(s.strip() for s in sites if s and s.strip())
+    now = time.time()
+    # deviceId 단위 사이트셋 이력에 기록 + TTL 만료 정리 후 union 산출.
+    # 같은 deviceId 를 여러 PC가 다른 사이트셋으로 폴링해도 union 으로 안정화
+    # (last-write 덮어쓰기로 인한 active_sites flip-flop 차단).
+    hist = _pc_site_history.setdefault(dev, {})
+    hist[new_set] = now
+    for _fs in [_fs for _fs, _ts in hist.items() if now - _ts > _PC_SITE_UNION_TTL]:
+        del hist[_fs]
+    union: set[str] = set()
+    for _fs in hist:
+        union |= _fs
     prev = _pc_allowed_sites.get(dev)
-    changed = prev != new_set
-    _pc_allowed_sites[dev] = new_set
-    _pc_last_seen[dev] = time.time()
+    changed = prev != union
+    _pc_allowed_sites[dev] = union
+    _pc_last_seen[dev] = now
     return changed
 
 
@@ -360,6 +380,7 @@ def get_active_pcs() -> dict[str, set[str]]:
     for d in stale:
         _pc_last_seen.pop(d, None)
         _pc_allowed_sites.pop(d, None)
+        _pc_site_history.pop(d, None)
     return {d: sites for d, sites in _pc_allowed_sites.items() if d in _pc_last_seen}
 
 
