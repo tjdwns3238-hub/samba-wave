@@ -216,6 +216,24 @@ async def autotune_daemon_health(
     return {"alive": alive, "last_seen": float(latest_last)}
 
 
+@sourcing_queue_router.get("/autotune-daemon/concurrency")
+async def autotune_daemon_concurrency() -> dict[str, Any]:
+    """데몬용 사이트별 동시실행 설정 조회 (JWT 면제, X-Api-Key 도 불필요).
+
+    데몬이 이 값(워룸 인풋박스 = site_autotune_concurrency)만큼 사이트별 페이지를
+    병렬로 띄워 PC 자원을 활용한다. /autotune/concurrency 는 samba_auth(JWT) 게이트라
+    헤드리스 데몬이 못 부르므로, 인증 불필요한 본 프록시 경로를 별도로 둔다.
+    """
+    try:
+        from backend.domain.samba.collector.refresher import (
+            get_effective_autotune_concurrency,
+        )
+
+        return {"concurrency": get_effective_autotune_concurrency()}
+    except Exception:
+        return {"concurrency": {}}
+
+
 @sourcing_queue_router.post("/sourcing/collect-result")
 async def sourcing_collect_result(body: dict[str, Any]) -> dict[str, Any]:
     """확장앱이 수집 결과를 전달 (인증 불필요)."""

@@ -68,7 +68,7 @@ except ImportError:
 # ====================================================================
 # 데몬 버전 — build.ps1 가 갱신. 자동 업데이트 비교 기준.
 # ====================================================================
-DAEMON_VERSION = "1.1.1"
+DAEMON_VERSION = "1.1.2"
 
 
 # ====================================================================
@@ -1089,6 +1089,37 @@ async def extract_lotteon_pdp(page: Page, url: str, product_id: str) -> dict[str
     return await extract_pdp(page, url, product_id, SITE_HANDLERS["LOTTEON"])
 
 
+async def fetch_autotune_concurrency(
+    client: httpx.AsyncClient,
+    backend_url: str,
+    device_id: str,
+    api_key: str,
+) -> dict[str, int]:
+    """백엔드에서 사이트별 동시실행 설정(워룸 인풋박스 값) 조회.
+
+    이 값만큼 사이트별 페이지를 병렬로 띄워 PC 자원을 활용한다.
+    실패 시 빈 dict — 호출처가 사이트당 1로 폴백.
+    """
+    try:
+        r = await client.get(
+            f"{backend_url}/api/v1/samba/proxy/autotune-daemon/concurrency",
+            headers={"X-Device-Id": device_id, "X-Api-Key": api_key},
+            timeout=10.0,
+        )
+        if r.status_code == 200:
+            raw = (r.json() or {}).get("concurrency") or {}
+            out: dict[str, int] = {}
+            for k, v in raw.items():
+                try:
+                    out[k] = max(1, int(v))
+                except Exception:
+                    pass
+            return out
+    except Exception as exc:
+        logger.debug("동시실행 설정 조회 실패: %s", str(exc)[:80])
+    return {}
+
+
 async def process_job(
     page: Page,
     client: httpx.AsyncClient,
@@ -1336,77 +1367,157 @@ async def run_daemon(args: argparse.Namespace) -> int:
             if login_sites:
                 await _save_storage_state()
 
-            idle_logged_at = 0.0
-            while True:
-                if state.should_die():
-                    logger.error(
-                        "연속 실패 %d 건 초과 — 종료(supervisor 재기동 유도)",
-                        state.consecutive_fail,
-                    )
-                    await context.close()
-                    await browser.close()
-                    return 1
+            # ── 사이트별 병렬 워커 풀 (PC 자원 활용) ───────────────────────
+            # 백엔드 _site_autotune_loop 는 사이트별 병렬로 잡을 만들지만, 데몬이 페이지
+            # 1개로 직렬 처리하면 get_next_job 의 site ASC 정렬 때문에 알파벳 뒤 사이트
+            # (SSG 등)가 굶는다. 워룸 동시실행 설정(인풋박스)만큼 사이트별 페이지를 띄워
+            # 각 사이트를 독립 병렬 처리한다. 60초마다 재조회해 인풋박스 변경을 탄력 반영.
+            _MAX_TOTAL_PAGES = int(os.environ.get("DAEMON_MAX_PAGES", "16"))
 
-                # 로그인 만료 누적 시 재로그인 (requires_login 사이트 각각).
-                # 한 사이트 재로그인 실패해도 전체 종료하지 않고 그 사이트만 제외 —
-                # 나머지 사이트는 계속 처리(초기 로그인과 동일 정책).
-                if login_sites and state.consecutive_login_required >= 3:
-                    logger.warning("login_required 3회 연속 — 재로그인 시도")
-                    _relogin_failed: list[str] = []
-                    for _site in login_sites:
-                        if not await ensure_logged_in_for_site(
-                            page,
+            async def _site_worker(site: str, wid: str, wpage: Page) -> None:
+                _idle_at = 0.0
+                while not state.should_die():
+                    try:
+                        job = await fetch_job(
                             http_client,
                             backend_url,
                             args.device_id,
                             api_key,
-                            SITE_HANDLERS[_site],
-                        ):
-                            logger.warning("%s 재로그인 실패 — 이 사이트만 제외", _site)
-                            _relogin_failed.append(_site)
-                    if _relogin_failed:
-                        active_sites = [
-                            s for s in active_sites if s not in _relogin_failed
-                        ]
-                        login_sites = [
-                            s for s in login_sites if s not in _relogin_failed
-                        ]
-                        allowed_sites_header = ",".join(active_sites)
-                        if not active_sites:
-                            logger.error(
-                                "모든 사이트 재로그인 실패 — 종료 (supervisor 재기동)"
+                            allowed_sites=site,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        logger.debug("[%s] fetch_job 예외: %s", wid, str(exc)[:80])
+                        await asyncio.sleep(args.poll_interval)
+                        continue
+                    if not job:
+                        _now = time.time()
+                        if _now - _idle_at > 60:
+                            logger.info(
+                                "[%s] 대기 중 (processed=%d ok=%d fail=%d)",
+                                wid,
+                                state.processed,
+                                state.succeeded,
+                                state.failed,
                             )
-                            await context.close()
-                            await browser.close()
-                            return 4
-                        logger.info(
-                            "재로그인 실패 사이트 제외 후 계속: active=%s",
-                            allowed_sites_header,
+                            _idle_at = _now
+                        await asyncio.sleep(args.poll_interval)
+                        continue
+                    try:
+                        await process_job(
+                            wpage, http_client, backend_url, job, state, api_key
                         )
-                    state.reset_login_required()
-                    await _save_storage_state()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        logger.warning("[%s] process_job 예외: %s", wid, str(exc)[:120])
 
-                job = await fetch_job(
-                    http_client,
-                    backend_url,
-                    args.device_id,
-                    api_key,
-                    allowed_sites=allowed_sites_header,
+            async def _relogin_monitor(rl_page: Page) -> None:
+                while not state.should_die():
+                    await asyncio.sleep(10)
+                    if login_sites and state.consecutive_login_required >= 3:
+                        logger.warning("login_required 3회 연속 — 재로그인 시도")
+                        for _site in list(login_sites):
+                            try:
+                                await ensure_logged_in_for_site(
+                                    rl_page,
+                                    http_client,
+                                    backend_url,
+                                    args.device_id,
+                                    api_key,
+                                    SITE_HANDLERS[_site],
+                                )
+                            except asyncio.CancelledError:
+                                raise
+                            except Exception as exc:
+                                logger.warning(
+                                    "%s 재로그인 예외: %s", _site, str(exc)[:80]
+                                )
+                        state.reset_login_required()
+                        await _save_storage_state()
+
+            def _eff_conc(conc: dict) -> dict:
+                # 사이트별 동시실행 — 총 페이지 수를 _MAX_TOTAL_PAGES 로 캡(메모리 보호).
+                eff: dict = {}
+                budget = _MAX_TOTAL_PAGES
+                for s in active_sites:
+                    n = min(max(1, int(conc.get(s, 1))), budget)
+                    if n <= 0:
+                        break
+                    eff[s] = n
+                    budget -= n
+                return eff
+
+            _workers: list[asyncio.Task] = []
+            _pages: list[Page] = []
+
+            async def _spawn(conc_eff: dict) -> None:
+                for site, n in conc_eff.items():
+                    for i in range(n):
+                        pg = await context.new_page()
+                        _pages.append(pg)
+                        _workers.append(
+                            asyncio.create_task(
+                                _site_worker(site, f"{site}#{i + 1}", pg)
+                            )
+                        )
+
+            async def _despawn() -> None:
+                for t in _workers:
+                    t.cancel()
+                for t in _workers:
+                    try:
+                        await t
+                    except BaseException:
+                        pass
+                for pg in _pages:
+                    try:
+                        await pg.close()
+                    except Exception:
+                        pass
+                _workers.clear()
+                _pages.clear()
+
+            _mon_task = asyncio.create_task(_relogin_monitor(page))
+            _cur_conc = _eff_conc(
+                await fetch_autotune_concurrency(
+                    http_client, backend_url, args.device_id, api_key
                 )
-                if not job:
-                    now = time.time()
-                    if now - idle_logged_at > 30:
-                        logger.info(
-                            "대기 중 (processed=%d ok=%d fail=%d)",
-                            state.processed,
-                            state.succeeded,
-                            state.failed,
+            )
+            await _spawn(_cur_conc)
+            logger.info(
+                "사이트별 병렬 워커 스폰: %s (총 %d 페이지)", _cur_conc, len(_workers)
+            )
+            try:
+                while not state.should_die():
+                    await asyncio.sleep(60)
+                    _new_conc = _eff_conc(
+                        await fetch_autotune_concurrency(
+                            http_client, backend_url, args.device_id, api_key
                         )
-                        idle_logged_at = now
-                    await asyncio.sleep(args.poll_interval)
-                    continue
-
-                await process_job(page, http_client, backend_url, job, state, api_key)
+                    )
+                    if _new_conc != _cur_conc:
+                        logger.info(
+                            "동시실행 변경 %s → %s — 워커 재스폰", _cur_conc, _new_conc
+                        )
+                        await _despawn()
+                        _cur_conc = _new_conc
+                        await _spawn(_cur_conc)
+            finally:
+                _mon_task.cancel()
+                try:
+                    await _mon_task
+                except BaseException:
+                    pass
+                await _despawn()
+            logger.error(
+                "연속 실패 %d 건 초과 — 종료(supervisor 재기동 유도)",
+                state.consecutive_fail,
+            )
+            await context.close()
+            await browser.close()
+            return 1
 
 
 def _setup_logging() -> None:
