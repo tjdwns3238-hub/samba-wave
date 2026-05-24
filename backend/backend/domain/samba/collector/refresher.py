@@ -517,10 +517,14 @@ def get_refresh_logs(
     if source_filter:
         logs = [l for l in logs if l.get("source") == source_filter]
     if device_id_filter:
-        # 쉼표 분리 다중 device_id 허용 — 본인 PC 브라우저 + 본인 PC 데몬 둘 다 자기
-        # 로그로 인정. 데몬 잡 로그가 PC 페이지에서 숨겨져 "안 돌아감" 오인하던 문제 해결.
+        # 쉼표 분리 다중 device_id 허용(브라우저+본인 데몬) + 빈 device_id(글로벌/태깅
+        # 누락) 통과. 다른 PC tagged 로그만 명시 차단. ContextVar 가 cycle 안 일부 경로
+        # 에서 propagate 안 돼 device_id 빈채로 찍히는 로그가 다수 — strict 차단 시
+        # 페이지 0건 사고 (2026-05-25). empty 는 본인 글로벌로 간주.
         allow = {d.strip() for d in device_id_filter.split(",") if d.strip()}
-        logs = [l for l in logs if l.get("device_id") in allow]
+        logs = [
+            l for l in logs if not l.get("device_id") or l.get("device_id") in allow
+        ]
     return logs, _refresh_log_total
 
 
