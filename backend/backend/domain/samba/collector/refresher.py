@@ -1513,8 +1513,14 @@ async def refresh_products_bulk(
                 # 배치 크기(200) 가 아닌 사이클 전체(N만) 기준으로 통일.
                 if global_counter:
                     _gk = global_counter.get("key")
-                    _idx_ref = global_counter.get("idx_ref") or {}
-                    _total_ref = global_counter.get("total_ref") or {}
+                    # `or {}` 금지 — idx_ref가 빈 dict({})면 falsy라 매번 새 throwaway dict가
+                    # 생성돼 증가분이 모듈 dict에 안 남는다(순번 1 고정 버그). None일 때만 폴백.
+                    _idx_ref = global_counter.get("idx_ref")
+                    if _idx_ref is None:
+                        _idx_ref = {}
+                    _total_ref = global_counter.get("total_ref")
+                    if _total_ref is None:
+                        _total_ref = {}
                     _idx_ref[_gk] = _idx_ref.get(_gk, 0) + 1
                     _g_idx = _idx_ref[_gk]
                     _g_total = _total_ref.get(_gk, 0)

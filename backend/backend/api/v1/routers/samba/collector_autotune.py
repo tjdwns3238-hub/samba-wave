@@ -639,6 +639,10 @@ async def _site_autotune_loop(device_id: str, site: str):
                         elif _gkey not in _autotune_cycle_stats:
                             _autotune_cycle_stats[_gkey] = _new_cycle_stats()
                             _autotune_cycle_stats[_gkey]["started_at"] = now.isoformat()
+                        # idx dict 시드 — 비어 있으면 refresher가 빈 dict로 오판해 순번이
+                        # 1에 갇힌다(aa3beeb7에서 시드해주던 리셋 조건이 빠진 뒤 노출된 버그).
+                        # 키를 미리 0으로 등록해 누적 카운팅이 정상 동작하도록 보장.
+                        _autotune_global_idx.setdefault(_gkey, 0)
                         _autotune_global_total[_gkey] = _total_global
                         log.info(
                             "[오토튠][디버그][%s][%s] 사이클 #%d SELECT 완료: %d건 대상 / 전체 %d건 (진행 %d) (elapsed=%.1fs)",
