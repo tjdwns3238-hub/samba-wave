@@ -927,6 +927,29 @@ async def _start_elevenst_ghost_reconciler() -> None:
     )
 
 
+# 컨테이너 재시작 후 filters 캐시 cold → 첫 호출 100초 → 프론트 fetch 타임아웃 →
+# 체크박스 빈 채로 뜨던 문제. startup 시 백그라운드로 미리 워밍업.
+async def _warmup_filters_cache() -> None:
+    """autotune_get_filters 캐시 백그라운드 워밍업 (2026-05-25, 사용자 요청)."""
+    _log = logging.getLogger("backend.lifecycle")
+    try:
+        from backend.api.v1.routers.samba.collector_autotune import autotune_get_filters
+
+        await autotune_get_filters()
+        _log.info("[lifecycle] filters 캐시 워밍업 완료")
+    except Exception as exc:
+        _log.warning("[lifecycle] filters 캐시 워밍업 실패(무시): %s", exc)
+
+
+_filters_warmup_task: asyncio.Task | None = None
+
+
+async def _start_filters_warmup() -> None:
+    """startup 직후 filters 캐시 채움 — 첫 사용자 fetch 타임아웃 방지."""
+    global _filters_warmup_task
+    _filters_warmup_task = asyncio.create_task(_warmup_filters_cache())
+
+
 async def _start_lotteon_ghost_reconciler() -> None:
     """롯데ON 유령상품 일일 자동 감지 잡 — 24시간 주기."""
     global _lotteon_ghost_reconciler_task
@@ -1108,6 +1131,7 @@ async def lifespan(app: FastAPI):
         await _start_sourcing_job_cleanup()
         await _start_lotteon_ghost_reconciler()
         await _start_elevenst_ghost_reconciler()
+        await _start_filters_warmup()
         await _start_coupang_pid_reconciler()
     _validate_startup_settings()
 

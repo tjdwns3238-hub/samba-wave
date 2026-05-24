@@ -752,7 +752,7 @@ export default function WarroomPage() {
           try {
             _lastAutoRejoinAt = Number(window.localStorage.getItem('samba.autotune.autoRejoinAt') || '0')
           } catch { /* ignore */ }
-          const cooldownPassed = now - Math.max(autoRejoinAtRef.current, _lastAutoRejoinAt) > 60_000
+          const cooldownPassed = now - Math.max(autoRejoinAtRef.current, _lastAutoRejoinAt) > 10_000
           // enabled=false(사용자 정지) 면 자동재합류 금지 — intent 게이트와 이중 방어.
           if (intent === 'start' && meMissing && cooldownPassed && atStatus.enabled !== false) {
             autoRejoinAtRef.current = now
