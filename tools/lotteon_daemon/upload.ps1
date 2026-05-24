@@ -25,13 +25,13 @@ if (-not (Test-Path $src)) {
   exit 1
 }
 
-# 업로드용 임시 이름 — github release asset 명을 'lotteon-daemon-setup.exe' 로 고정.
+# 업로드용 이름 — github release asset 'samba.exe' 단일 파일 (v1.3.0+, 유상 판매용 깔끔한 이름).
 $assetDir = Join-Path $here 'dist\release'
 New-Item -ItemType Directory -Path $assetDir -Force | Out-Null
-$assetPath = Join-Path $assetDir 'lotteon-daemon-setup.exe'
+$assetPath = Join-Path $assetDir 'samba.exe'
 Copy-Item -Path $src -Destination $assetPath -Force
 
-$tag = "lotteon-daemon-v$Version"
+$tag = "samba-daemon-v$Version"
 Write-Host "GitHub Release 생성/갱신: $tag"
 
 # 기존 릴리스 있으면 자산 교체, 없으면 새로 생성
@@ -41,10 +41,10 @@ if ($LASTEXITCODE -eq 0) {
   & gh release upload $tag $assetPath --clobber
 } else {
   Write-Host "신규 릴리스 생성"
-  & gh release create $tag $assetPath --title "LOTTEON Daemon $Version" --notes "LOTTEON 헤드리스 데몬 $Version"
+  & gh release create $tag $assetPath --title "Samba Daemon $Version" --notes "삼바 헤드리스 데몬 $Version (samba.exe 단일 파일, 멀티PC 지원)"
 }
 
 Write-Host ""
 Write-Host "완료." -ForegroundColor Green
-Write-Host "다운로드 URL: https://github.com/sbk0674-web/samba-wave/releases/latest/download/lotteon-daemon-setup.exe"
-Write-Host "다음 단계: backend sourcing.py LOTTEON_DAEMON_LATEST_VERSION → '$Version' 갱신 후 배포"
+Write-Host "다운로드 URL: https://github.com/sbk0674-web/samba-wave/releases/latest/download/samba.exe"
+Write-Host "다음 단계: backend sourcing.py AUTOTUNE_DAEMON_LATEST_VERSION → '$Version' 갱신 후 배포"

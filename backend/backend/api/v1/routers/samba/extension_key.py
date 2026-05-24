@@ -3,7 +3,7 @@
 import hashlib
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
@@ -161,13 +161,13 @@ async def revoke_key(
         raise HTTPException(404, "키를 찾을 수 없거나 이미 revoke됨")
 
 
-# 데몬 설치 exe 원본 (GitHub Release). 다운로드 프록시가 가져와 파일명에 install-token 박아 스트림.
-# asset 명은 upload.ps1 이 'lotteon-daemon-setup.exe' 로 고정(autotune 아님).
+# 데몬 설치 exe 원본 (GitHub Release). 단일 파일명 `samba.exe` — 모든 PC 동일 파일.
+# 토큰/PC명 임베드 제거(2026-05-25, v1.3.0): 유상 판매용 깔끔한 파일명. 인증은 별도 키 발급
+# 엔드포인트(`/extension-keys/daemon-key/issue`)로 분리 — 사용자 UI에서 키 발급/복사 후
+# 데몬 첫 실행 시 입력. 멀티PC = 같은 파일 + 같은 키 사용 가능 (Datadog Agent 패턴).
 _DAEMON_EXE_URL = (
-    "https://github.com/sbk0674-web/samba-wave/releases/latest/download/"
-    "lotteon-daemon-setup.exe"
+    "https://github.com/sbk0674-web/samba-wave/releases/latest/download/samba.exe"
 )
-_INSTALL_TOKEN_TTL_HOURS = 1
 
 
 @router.get("/daemon-installer")
@@ -178,39 +178,12 @@ async def daemon_installer(
 ):
     """데몬 설치 exe 다운로드 (JWT 필요).
 
-    로그인 사용자의 테넌트로 1시간 만료 install-token 을 발급해 exe 파일명에 박아
-    스트림한다(`autotune-daemon-setup_apikey=<token>_did=<device>.exe`). 데몬은 첫 실행 시
-    파일명에서 토큰을 추출해 /extension-keys/exchange 로 long-lived 키와 교환한다.
-    파일명 유출되어도 1시간 후 자동 만료 → 피해 최소화.
+    단일 파일 `samba.exe` — 토큰/PC명 임베드 없음. 어떤 PC에서도 동일 파일 사용 가능.
+    데몬 인증용 API 키는 별도 엔드포인트(`/extension-keys/daemon-key/issue`)에서 발급받아
+    데몬 첫 실행 시 입력하거나 `%APPDATA%\\samba-autotune-daemon\\api_key.txt` 에 저장.
     """
-    now = datetime.now(_UTC)
-    raw_token = secrets.token_hex(32)
-    device_id = (request.query_params.get("device_id") or "").strip() or None
-    record = SambaExtensionKey(
-        id=_new_ulid(),
-        key_hash=_hash_key(raw_token),
-        tenant_id=ctx.tenant_id,
-        user_id=ctx.user_id,
-        label="install-token",
-        device_id=device_id,
-        is_install_token=True,
-        created_at=now,
-        expires_at=now + timedelta(hours=_INSTALL_TOKEN_TTL_HOURS),
-    )
-    session.add(record)
-    await session.commit()
-
-    # 파일명에 '=' 쓰면 브라우저 Content-Disposition 파싱에서 잘려 토큰 유실됨.
-    # '=' 없는 '_it-<token>'(+포크용 '_be-<hex>') 형식으로 박고 데몬이 정규식으로 추출한다.
-    # daemon_public_backend_url 설정 시 백엔드 URL 을 hex 로 박아 포크 데몬이 본인 백엔드를 향함.
-    # 미설정(메인 운영)이면 미박음 → 데몬 기본값 사용(동일 동작).
-    _be_part = ""
-    _be_url = (
-        (getattr(settings, "daemon_public_backend_url", "") or "").strip().rstrip("/")
-    )
-    if _be_url:
-        _be_part = f"_be-{_be_url.encode('utf-8').hex()}"
-    fname = f"autotune-daemon-setup{_be_part}_it-{raw_token}.exe"
+    _ = ctx, session  # 인증 게이트용 (실제 사용 X, 로그인 사용자만 다운로드 허용)
+    fname = "samba.exe"
 
     # 350MB exe 를 메모리에 통째로 올리지 않고 청크 스트리밍 — 메모리 안전 + 즉시 응답 시작.
     # (r.content 통짜 로드 시 fetch+로드 동안 응답이 안 와 브라우저 다운로드가 멈춤)
@@ -247,7 +220,51 @@ async def daemon_installer(
     )
 
 
-# ── install-token 교환 (JWT 면제, install-token 자체로 인증) ──────────────
+# ── 데몬 API 키 발급 (v1.3.0+) ──────────────────────────────────────────
+# 단일 파일 `samba.exe` + 별도 키 발급 모델. 로그인 사용자가 UI에서 키 발급 → 복사 →
+# 데몬 첫 실행 시 입력. 같은 키 여러 PC에서 사용 가능 (long-lived tenant key).
+
+
+class _DaemonKeyResponse(BaseModel):
+    api_key: str
+    id: str
+    label: str
+
+
+@router.post("/daemon-key/issue", response_model=_DaemonKeyResponse)
+async def issue_daemon_key(
+    request: Request,
+    ctx: _UserCtx = Depends(_get_user_ctx),
+    session: AsyncSession = Depends(get_write_session_dependency),
+) -> _DaemonKeyResponse:
+    """로그인 사용자 테넌트의 long-lived 데몬 키 발급 + 평문 반환.
+
+    UI '데몬 키 발급' 버튼에서 호출 → 응답의 api_key 를 사용자에게 표시 + 복사 버튼 제공.
+    사용자가 각 PC 데몬 첫 실행 시 입력하거나 api_key.txt 에 저장.
+    install-token (1시간 만료) 과 달리 long-lived (revoke 전까지 유효).
+    같은 키를 여러 PC에서 사용 가능 — hostname 기반 device_id 로 자동 구분됨.
+    """
+    _ = request  # 미사용 (인증 게이트만)
+    now = datetime.now(_UTC)
+    raw_token = secrets.token_hex(32)
+    label = "데몬 키"
+    record = SambaExtensionKey(
+        id=_new_ulid(),
+        key_hash=_hash_key(raw_token),
+        tenant_id=ctx.tenant_id,
+        user_id=ctx.user_id,
+        label=label,
+        device_id=None,
+        is_install_token=False,
+        created_at=now,
+        expires_at=None,
+    )
+    session.add(record)
+    await session.commit()
+    return _DaemonKeyResponse(api_key=raw_token, id=record.id, label=label)
+
+
+# ── install-token 교환 (JWT 면제, install-token 자체로 인증) — 레거시 호환 ─────────
 # 데몬은 사람 로그인 불가(헤드리스)이므로, 다운로드 시 박힌 1시간 만료 install-token
 # 을 첫 실행 때 long-lived 키와 교환한다. install-token 은 api_gateway 가 검증해
 # request.state.tenant_id 를 주입하고, exchange 경로에서만 통과시킨다(일반 API 차단).

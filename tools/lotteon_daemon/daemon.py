@@ -78,7 +78,7 @@ except ImportError:
 # ====================================================================
 # 데몬 버전 — build.ps1 가 갱신. 자동 업데이트 비교 기준.
 # ====================================================================
-DAEMON_VERSION = "1.2.1"
+DAEMON_VERSION = "1.3.0"
 
 
 # ====================================================================
@@ -609,6 +609,40 @@ async def _exchange_install_token(
     return ""
 
 
+def _prompt_api_key_dialog() -> str:
+    """v1.3.0+ — 첫 실행 시 사용자에게 API 키 직접 입력받는 Tk 다이얼로그.
+
+    samba.exe 단일 파일 모델에서 파일명 토큰 없음 → 사용자가 웹 UI '데몬 키 발급' 후
+    여기 입력. 입력값은 api_key.txt 에 캐시되어 이후 재사용.
+    """
+    try:
+        import tkinter as tk
+        from tkinter import simpledialog
+
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            root.attributes("-topmost", True)
+        except Exception:
+            pass
+        key = simpledialog.askstring(
+            "삼바 데몬 API 키 입력",
+            (
+                "삼바 웹사이트(오토튠 페이지) > '데몬 키 발급' 버튼을 누르고\n"
+                "받은 키를 여기에 붙여넣으세요:"
+            ),
+            parent=root,
+        )
+        try:
+            root.destroy()
+        except Exception:
+            pass
+        return (key or "").strip()
+    except Exception as exc:
+        logger.warning("API 키 입력 다이얼로그 실패: %s", exc)
+        return ""
+
+
 async def bootstrap_api_key(
     client: httpx.AsyncClient,
     backend_url: str,
@@ -616,18 +650,27 @@ async def bootstrap_api_key(
     cache_path: Path,
     injected_key: str = "",
 ) -> str:
-    """API key 결정. 우선순위: install-token 교환 > 캐시(long-lived) > 글로벌 발급(레거시).
+    """API key 결정. 우선순위: env > injected install-token > 캐시 > Tk dialog > 글로벌(레거시).
 
-    injected_key(파일명 apikey=<install-token>): 웹 /samba/extension-link 다운로드 시 박힌
-    1시간 테넌트 install-token. fresh 토큰이면 stale 글로벌 캐시보다 교환을 먼저 시도해
-    테넌트 키로 갈아끼운다(2026-05-23). 과거엔 캐시 무조건 우선이라, 마이그레이션 전
-    글로벌 키가 캐시된 데몬은 재다운로드해도 글로벌에 고착 → 소싱처 credential 403 으로
-    자동로그인 불가였다. install-token 은 일회용 — 이미 교환됐으면 exchange 가 빈값을
-    반환하므로 그때는 캐시(교환된 테넌트 키)를 사용한다.
+    v1.3.0+ samba.exe 단일 파일 모델: 파일명 토큰 없음. 사용자가 웹에서 long-lived 키 발급
+    후 (a) 환경변수 SAMBA_API_KEY (b) %APPDATA%\\samba-autotune-daemon\\api_key.txt
+    (c) 첫 실행 시 Tk 다이얼로그로 입력. 모든 폴백 실패하면 글로벌 발급(레거시 호환).
     """
     cached = ""
     if cache_path.exists():
         cached = cache_path.read_text(encoding="utf-8").strip()
+
+    # 0. 환경변수 우선 (운영자 자동화 + 변경 즉시 반영)
+    env_key = (os.environ.get("SAMBA_API_KEY", "") or "").strip()
+    if env_key:
+        try:
+            if env_key != cached:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                cache_path.write_text(env_key, encoding="utf-8")
+                logger.info("SAMBA_API_KEY 환경변수 사용 — 캐시 갱신")
+        except Exception as exc:
+            logger.debug("env key 캐시 저장 실패(무시): %s", exc)
+        return env_key
 
     # 1. 주입된 install-token 우선 교환 — fresh 다운로드 시 stale 글로벌 캐시를 덮어쓴다.
     if injected_key:
@@ -660,7 +703,19 @@ async def bootstrap_api_key(
         logger.info("API key 캐시 사용: %s", cache_path)
         return cached
 
-    # 3. 글로벌 발급 (레거시 — 테넌트 credential 조회 불가, install-token 없을 때만)
+    # 3. (v1.3.0+) Tk 다이얼로그로 사용자 직접 입력 — samba.exe 단일 파일 모델
+    logger.info("캐시·env 모두 없음 → 사용자 API 키 입력 다이얼로그 표시")
+    user_key = _prompt_api_key_dialog()
+    if user_key:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(user_key, encoding="utf-8")
+            logger.info("사용자 입력 키 캐시 저장 — %s", cache_path)
+        except Exception as exc:
+            logger.warning("입력 키 캐시 저장 실패(무시): %s", exc)
+        return user_key
+
+    # 4. 글로벌 발급 (레거시 — 테넌트 credential 조회 불가, 다이얼로그도 실패한 경우)
     logger.info("API key 발급 요청 → /proxy/extension-key")
     r = await client.post(
         f"{backend_url}/api/v1/samba/sourcing-accounts/extension-key",
