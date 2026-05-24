@@ -1005,6 +1005,7 @@ class JobWorker:
         )
         from backend.domain.samba.account.repository import SambaMarketAccountRepository
         from backend.db.orm import get_write_session
+        from backend.domain.samba.job.repository import SambaJobRepository
 
         # tetris 매칭 사전 로드
         # (source_site_norm, brand_norm) → list[market_account_id] (브랜드당 여러 마켓 배정 가능)
@@ -1085,6 +1086,9 @@ class JobWorker:
             await session.commit()
             return
         await repo.update_progress(job.id, start_from, total)
+        # 초기 진행률 즉시 커밋 — 이후 progress/완료 처리는 fresh 단명 세션으로 격리하므로
+        # 장수명 main session이 루프 내내 idle-in-transaction으로 남지 않도록 트랜잭션 종료
+        await session.commit()
 
         # 이어하기: 이전 실행의 카운트 복원
         prev_result = job.result or {}
@@ -1393,36 +1397,45 @@ class JobWorker:
                 logger.info(f"[잡워커] 메모리 회수 ({i_last + 1}/{total}건)")
 
             # 잡 progress 업데이트 (배치 완료 후)
+            # 장수명 main session 재사용 시 pool_recycle(2분)/idle 타임아웃으로 커넥션이
+            # 닫히면 greenlet_spawn 잡 실패가 드물게 발생 → is_cancelled/_on_progress 패턴처럼
+            # 매 배치 fresh 단명 세션으로 격리(main session 의존 제거 → 항상 healthy 커넥션).
             try:
-                await repo.update_progress(job.id, i_last + 1, total)
-                _job = await repo.get_async(job.id)
-                if _job:
-                    _job.result = {
-                        "success": success_count,
-                        "skipped": skip_count,
-                        "failed": fail_count,
-                    }
-                await session.commit()
+                async with get_write_session() as _prog_sess:
+                    _prog_repo = SambaJobRepository(_prog_sess)
+                    await _prog_repo.update_progress(job.id, i_last + 1, total)
+                    _pjob = await _prog_repo.get_async(job.id)
+                    if _pjob:
+                        _pjob.result = {
+                            "success": success_count,
+                            "skipped": skip_count,
+                            "failed": fail_count,
+                        }
+                        _prog_sess.add(_pjob)
+                    await _prog_sess.commit()
             except Exception as pg_err:
-                logger.error(f"[잡워커] progress 업데이트 실패: {job.id} — {pg_err}")
+                logger.warning(
+                    f"[잡워커] progress 업데이트 실패(무시): {job.id} — {pg_err}"
+                )
                 _add_job_log(
                     job.id,
                     f"[{i_last + 1}/{total}] DB 세션 오류 — 다음 건 계속 진행",
                 )
-                try:
-                    await session.rollback()
-                except Exception as exc:
-                    logger.warning(f"[잡워커] 세션 롤백 실패: {job.id} — {exc}")
 
         final_fail = fail_count
         _add_job_log(
             job.id,
             f"전송 완료 — 성공 {success_count}건, 스킵 {skip_count}건, 실패 {final_fail}건",
         )
-        await repo.complete_job(
-            job.id,
-            {"success": success_count, "skipped": skip_count, "failed": final_fail},
-        )
+        # 완료 처리도 fresh 단명 세션 — 장수명 main session이 pool_recycle로 닫혀도
+        # 잡 완료 상태가 유실되거나 greenlet_spawn으로 잡이 실패 처리되지 않도록 격리
+        async with get_write_session() as _done_sess:
+            _done_repo = SambaJobRepository(_done_sess)
+            await _done_repo.complete_job(
+                job.id,
+                {"success": success_count, "skipped": skip_count, "failed": final_fail},
+            )
+            await _done_sess.commit()
         logger.info(
             f"[잡워커] 전송 완료: {job.id} (성공 {success_count}, 스킵 {skip_count}, 실패 {final_fail}/{total}건)"
         )
