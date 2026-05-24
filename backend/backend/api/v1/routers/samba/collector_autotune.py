@@ -3660,13 +3660,13 @@ class PcAllowedSitesRequest(BaseModel):
 async def autotune_pc_allowed_sites_set(body: PcAllowedSitesRequest):
     """PC 분담 등록 — 이 PC가 처리할 사이트 목록. 변경 시 DB 영속화.
 
-    데몬(samba-daemon- prefix) device 는 authoritative 로 확정 등록 — 폴링 union
-    누적을 무시하고 UI 지정값 그대로 박아, 체크 해제 시 실제로 사이트가 빠진다.
-    확장앱 device 는 기존 동작(union) 유지.
+    UI 명시 POST 는 모두 authoritative — 사용자가 체크박스로 직접 지정한 값을 폴링
+    union 이 덮어쓰지 않도록 강제. PC 간섭 방지 (2026-05-25 사용자 재요청
+    "무조건 서로 간섭없이"). 폴링(X-Allowed-Sites 헤더)은 여전히 union 유지 —
+    같은 deviceId 다중 PC flip-flop 가드.
     """
     dev = (body.device_id or "").strip()
-    is_daemon = dev.startswith("samba-daemon-")
-    if register_pc_allowed_sites(body.device_id, body.sites, authoritative=is_daemon):
+    if register_pc_allowed_sites(body.device_id, body.sites, authoritative=True):
         from backend.db.orm import get_write_session
 
         async with get_write_session() as _sess:
