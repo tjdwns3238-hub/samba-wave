@@ -122,11 +122,16 @@ echo ""
 # 1. Docker 빌드 (캐시 활용, --no-cache 옵션 지원)
 log_step 1 4 "Docker 이미지 빌드 중..."
 DEPLOYED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+# 확장앱 자가업뎃 단일 출처 — manifest.json version 을 백엔드에 주입.
+# (스크립트 위치 기준 경로 → 어디서 실행해도 동일)
+_DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EXT_VERSION=$(jq -r '.version' "$_DEPLOY_DIR/../extension/manifest.json" 2>/dev/null || echo "")
 BUILD_ARGS=(
   --platform linux/amd64
   --build-arg BUILDKIT_INLINE_CACHE=1
   --build-arg "COMMIT_SHA=$SHA"
   --build-arg "DEPLOYED_AT=$DEPLOYED_AT"
+  --build-arg "EXT_VERSION=$EXT_VERSION"
 )
 if [[ "$NO_CACHE" == "true" ]]; then
   echo "   ⚠️ --no-cache 모드: 전체 재빌드 (5~10분 소요)"

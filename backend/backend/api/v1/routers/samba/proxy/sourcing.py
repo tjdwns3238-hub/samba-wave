@@ -211,15 +211,22 @@ async def autotune_daemon_latest_version() -> dict[str, Any]:
     }
 
 
-# 확장앱 자가 업데이트 버전.
-# 빌드 컨텍스트가 backend/ 라서 repo 루트 extension/manifest.json 은 COPY 못 함
-# (Dockerfile COPY 제거). 프로덕션은 아래 fallback 상수를 사용하므로
-# manifest version 을 올릴 때 이 상수도 같이 올린다.
-# (manifest.json 이 컨테이너에 있으면 읽지만, 보통 없어 fallback 사용)
+# 확장앱 자가 업데이트 버전 fallback.
+# 1차 출처는 deploy.sh 가 주입하는 EXTENSION_LATEST_VERSION env(= manifest.json version).
+# env 가 없을 때(로컬 개발 등)만 이 상수 사용 — 평소엔 신경 안 써도 됨.
 _EXT_VERSION_FALLBACK = "2.13.44"
 
 
 def _read_extension_version() -> str:
+    # 단일 출처: deploy.sh 가 extension/manifest.json version 을 --build-arg EXT_VERSION
+    # 으로 주입 → Dockerfile ENV EXTENSION_LATEST_VERSION. 빌드컨텍스트가 backend/ 라
+    # 파일 COPY 는 불가하지만 build-arg 는 값만 전달하므로 가능.
+    import os as _os
+
+    env_v = (_os.environ.get("EXTENSION_LATEST_VERSION") or "").strip()
+    if env_v:
+        return env_v
+    # 파일이 컨테이너에 있으면 읽기(레거시/예외 경로), 없으면 fallback 상수.
     import json as _json
     from pathlib import Path as _Path
 

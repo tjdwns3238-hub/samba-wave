@@ -45,6 +45,11 @@ ARG DEPLOYED_AT=
 ENV COMMIT_SHA=$COMMIT_SHA
 ENV DEPLOYED_AT=$DEPLOYED_AT
 
+# 확장앱 자가업뎃 버전 — deploy.sh가 extension/manifest.json version 을 주입.
+# 빌드컨텍스트(backend/) 밖 파일이라 COPY 불가하지만 build-arg 는 값 전달 가능 → 단일 출처.
+ARG EXT_VERSION=
+ENV EXTENSION_LATEST_VERSION=$EXT_VERSION
+
 # 비루트 사용자로 실행 (보안 강화)
 RUN groupadd -r appuser && useradd -r -g appuser -d /app appuser \
     && chown -R appuser:appuser /app
