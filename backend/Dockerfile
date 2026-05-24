@@ -38,9 +38,6 @@ COPY backend ./backend
 COPY scripts ./scripts
 COPY alembic.ini ./alembic.ini
 COPY alembic ./alembic
-# 확장앱 manifest — 자가 업데이트 버전 단일 출처(extension-version 엔드포인트가 읽음).
-# manifest.json version 만 올리면 백엔드가 자동 동기화(상수 중복 갱신 불필요).
-COPY extension/manifest.json ./extension/manifest.json
 
 # 배포 메타데이터 (헬스체크에 노출) — deploy.sh가 --build-arg 로 주입
 ARG COMMIT_SHA=unknown

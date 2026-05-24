@@ -211,10 +211,11 @@ async def autotune_daemon_latest_version() -> dict[str, Any]:
     }
 
 
-# 확장앱 자가 업데이트 — extension/manifest.json version 단일 출처.
-# Dockerfile 이 manifest.json 을 /app/backend/extension/ 로 COPY → 여기서 읽는다.
-# 컨테이너에서 못 읽으면(로컬 개발 등) fallback 상수 사용. manifest 가 진실 원천이라
-# manifest 만 올리면 프로덕션 백엔드가 자동 동기화(상수 중복 갱신 불필요).
+# 확장앱 자가 업데이트 버전.
+# 빌드 컨텍스트가 backend/ 라서 repo 루트 extension/manifest.json 은 COPY 못 함
+# (Dockerfile COPY 제거). 프로덕션은 아래 fallback 상수를 사용하므로
+# manifest version 을 올릴 때 이 상수도 같이 올린다.
+# (manifest.json 이 컨테이너에 있으면 읽지만, 보통 없어 fallback 사용)
 _EXT_VERSION_FALLBACK = "2.13.44"
 
 
