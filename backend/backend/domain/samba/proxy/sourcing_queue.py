@@ -308,7 +308,11 @@ class SourcingQueue:
         loop = asyncio.get_event_loop()
         future: asyncio.Future[Any] = loop.create_future()
         if owner_device_id is None:
-            owner_device_id = get_autotune_owner(site)
+            # 데몬 풀에 이 사이트 처리 가능한 데몬이 있으면 데몬에 라우팅(detail 과 동일).
+            # 없으면(None) 기존 확장앱 흐름 폴백 → 데몬 다운 시에도 송장 끊김 없음.
+            from backend.domain.samba.proxy.daemon_pool import pick_daemon_owner
+
+            owner_device_id = pick_daemon_owner(site) or get_autotune_owner(site)
 
         job: dict[str, Any] = {
             "requestId": request_id,
@@ -449,13 +453,16 @@ class SourcingQueue:
                 for i, s in enumerate(_DAEMON_ONLY_SITES):
                     params[f"dsite_{i}"] = s
 
-            # site 필터
+            # site 필터 — 케이싱 무관 매칭.
+            # detail 잡 site='ABCmart'(혼합)인데 tracking 잡 site='ABCMART'(대문자)라
+            # 데몬 폴링(X-Poll-Site='ABCmart')이 ABCMART tracking 잡을 dequeue 하려면
+            # UPPER 양쪽 비교 필요. 사이트명 충돌 없어 안전.
             if allowed_sites is not None:
                 site_list = [s.strip() for s in allowed_sites if s.strip()]
                 placeholders = ", ".join(f":site_{i}" for i in range(len(site_list)))
-                conditions.append(f"site IN ({placeholders})")
+                conditions.append(f"UPPER(site) IN ({placeholders})")
                 for i, s in enumerate(site_list):
-                    params[f"site_{i}"] = s
+                    params[f"site_{i}"] = s.upper()
 
             where = " AND ".join(conditions)
             # [중요] 모달 리스트 정렬과 동일 순서 — site → sourcing_account_id → created_at.

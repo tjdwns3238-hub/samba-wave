@@ -32,10 +32,13 @@ def pick_daemon_owner(site: str, settings_obj: object | None = None) -> str | No
         )
 
         now = time.time()
+        # 케이싱 무관 매칭 — 데몬 등록 사이트는 'ABCmart'(혼합)인데 송장 site 는
+        # 'ABCMART'(대문자)로 들어오므로 UPPER 비교. detail('ABCmart')도 그대로 매칭됨.
+        _site_u = (site or "").upper()
         for dev, sites in _pc_allowed_sites.items():
             if not dev.startswith("samba-daemon-"):
                 continue
-            if site not in sites:
+            if _site_u not in {s.upper() for s in sites}:
                 continue
             last = _pc_last_seen.get(dev, 0)
             if now - last > 60:

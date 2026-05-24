@@ -125,22 +125,37 @@ async def sourcing_collect_queue(request: Request) -> Any:
         from backend.api.v1.routers.samba.collector_autotune import (
             persist_pc_allowed_sites,
             register_pc_allowed_sites,
+            touch_daemon_presence,
             update_pc_last_seen,
         )
 
         update_pc_last_seen(device_id)
-        raw_sites_for_reg = request.headers.get("X-Allowed-Sites")
-        if device_id and raw_sites_for_reg is not None:
-            sites_for_reg = [
-                s.strip() for s in raw_sites_for_reg.split(",") if s.strip()
-            ]
-            # 변경 발생 시에만 DB 영속화 — 매 폴링 write 부담 회피
-            if register_pc_allowed_sites(device_id, sites_for_reg):
+        _is_daemon = device_id.startswith("samba-daemon-")
+        if _is_daemon:
+            # 데몬은 자기 사이트를 헤더(X-Allowed-Sites)로 '선언'하지 않는다 —
+            # 폴링 union 이 배정을 부풀려 UI 지정을 무력화하던 문제 차단.
+            # 사이트 출처는 오직 UI POST(/autotune/pc-allowed-sites, authoritative).
+            # 여기선 last_seen 갱신 + 미등록 데몬 1회 빈 등록(UI 목록 노출)만 한다.
+            if touch_daemon_presence(device_id):
                 from backend.db.orm import get_write_session
 
                 async with get_write_session() as _persist_sess:
                     await persist_pc_allowed_sites(_persist_sess)
                     await _persist_sess.commit()
+        else:
+            # 확장앱: 기존 동작 — 폴링 헤더로 union 등록(같은 deviceId flip-flop 방지)
+            raw_sites_for_reg = request.headers.get("X-Allowed-Sites")
+            if device_id and raw_sites_for_reg is not None:
+                sites_for_reg = [
+                    s.strip() for s in raw_sites_for_reg.split(",") if s.strip()
+                ]
+                # 변경 발생 시에만 DB 영속화 — 매 폴링 write 부담 회피
+                if register_pc_allowed_sites(device_id, sites_for_reg):
+                    from backend.db.orm import get_write_session
+
+                    async with get_write_session() as _persist_sess:
+                        await persist_pc_allowed_sites(_persist_sess)
+                        await _persist_sess.commit()
     except Exception:
         pass
     # X-Allowed-Sites 헤더 의미:
@@ -283,21 +298,53 @@ async def autotune_daemon_health(
 
 
 @sourcing_queue_router.get("/autotune-daemon/concurrency")
-async def autotune_daemon_concurrency() -> dict[str, Any]:
-    """데몬용 사이트별 동시실행 설정 조회 (JWT 면제, X-Api-Key 도 불필요).
+async def autotune_daemon_concurrency(request: Request) -> dict[str, Any]:
+    """데몬용 사이트별 동시실행 설정 + 이 데몬이 담당할 사이트 조회 (인증 불필요).
 
-    데몬이 이 값(워룸 인풋박스 = site_autotune_concurrency)만큼 사이트별 페이지를
-    병렬로 띄워 PC 자원을 활용한다. /autotune/concurrency 는 samba_auth(JWT) 게이트라
-    헤드리스 데몬이 못 부르므로, 인증 불필요한 본 프록시 경로를 별도로 둔다.
+    데몬이 60초마다 호출하는 기존 경로에 `assigned_sites` 를 얹어, 데몬이 UI에서
+    지정된 자기 사이트만큼만 워커를 스폰하게 한다(추가 호출 0). 동시에 last_seen 을
+    갱신해 사이트 0개(워커 미스폰)인 데몬도 UI '연결된 데몬' 목록에 뜨게 한다.
+
+    응답:
+      concurrency: {site: n} — assigned_sites 로 필터된 사이트별 동시실행 캡.
+      assigned_sites: [site] — UI 지정 담당 사이트. 빈 배열이면 대기(워커 0).
     """
+    device_id = (request.headers.get("X-Device-Id") or "").strip()
+    assigned: list[str] = []
+    try:
+        from backend.api.v1.routers.samba.collector_autotune import (
+            get_pc_allowed_sites,
+            persist_pc_allowed_sites,
+            touch_daemon_presence,
+        )
+
+        if device_id.startswith("samba-daemon-"):
+            # 하트비트 — 사이트 0개 데몬도 목록에 뜨게(미등록 시 1회 빈 등록)
+            if touch_daemon_presence(device_id):
+                from backend.db.orm import get_write_session
+
+                async with get_write_session() as _persist_sess:
+                    await persist_pc_allowed_sites(_persist_sess)
+                    await _persist_sess.commit()
+        _my = get_pc_allowed_sites(device_id)
+        if _my:
+            assigned = sorted(_my)
+    except Exception:
+        assigned = []
+
     try:
         from backend.domain.samba.collector.refresher import (
             get_effective_autotune_concurrency,
         )
 
-        return {"concurrency": get_effective_autotune_concurrency()}
+        conc = get_effective_autotune_concurrency()
     except Exception:
-        return {"concurrency": {}}
+        conc = {}
+
+    # 데몬은 담당 사이트만 워커 스폰 — 배정 없으면 빈 conc(대기). 비데몬은 legacy 전체.
+    if device_id.startswith("samba-daemon-"):
+        conc = {s: n for s, n in conc.items() if s in assigned}
+    return {"concurrency": conc, "assigned_sites": assigned}
 
 
 @sourcing_queue_router.post("/sourcing/collect-result")

@@ -315,15 +315,41 @@ def update_pc_last_seen(device_id: str) -> None:
         _pc_last_seen[device_id.strip()] = time.time()
 
 
+def touch_daemon_presence(device_id: str) -> bool:
+    """데몬 폴링/concurrency 조회 도착 시 호출.
+
+    last_seen 갱신 + 미등록 데몬은 빈 분담([])으로 1회 등록해 UI '연결된 데몬' 목록에
+    뜨게 한다. 이미 등록(UI 지정)된 데몬의 사이트는 건드리지 않는다 — 데몬 헤더가
+    배정을 부풀리지 못하게 함(union 스킵). 신규 등록 발생 시 True 반환(DB 영속화용).
+    """
+    dev = (device_id or "").strip()
+    if not dev:
+        return False
+    _pc_last_seen[dev] = time.time()
+    if dev not in _pc_allowed_sites:
+        _pc_allowed_sites[dev] = set()
+        _pc_site_history[dev] = {}
+        return True
+    return False
+
+
 PC_ALLOWED_SITES_DB_KEY = "autotune_pc_allowed_sites"
 
 
-def register_pc_allowed_sites(device_id: str, sites: list[str] | None) -> bool:
+def register_pc_allowed_sites(
+    device_id: str, sites: list[str] | None, *, authoritative: bool = False
+) -> bool:
     """PC 분담 등록/갱신 (UI/폴링용 메타데이터).
 
     sites=None → 등록 제거
     sites=[] → 빈 분담 (이 PC는 아무 사이트 안 받음)
     sites=[...] → 명시 사이트만 받음
+
+    authoritative=True (UI에서 데몬 사이트 지정 시) → 폴링 union 이력 무시하고
+      입력값을 그대로 확정 등록. 데몬은 자기 사이트를 폴링 헤더로 선언하지 않으므로
+      (sourcing.collect-queue 가 데몬 device 는 union 등록 스킵) UI 지정값이 유일한
+      출처가 되어 체크 해제 시 실제로 사이트가 빠진다(눈가림 아님).
+    authoritative=False (확장앱 폴링) → 기존 union 이력 누적(같은 deviceId flip-flop 방지).
 
     실제 변경이 발생했을 때 True 반환 — 호출자가 DB 영속화 필요 여부 판단용.
     """
@@ -338,6 +364,14 @@ def register_pc_allowed_sites(device_id: str, sites: list[str] | None) -> bool:
         return existed
     new_set = frozenset(s.strip() for s in sites if s and s.strip())
     now = time.time()
+    # authoritative: UI 확정 지정 — union 이력 비우고 입력값 그대로 박는다.
+    if authoritative:
+        _pc_site_history[dev] = {new_set: now}
+        prev = _pc_allowed_sites.get(dev)
+        changed = prev != set(new_set)
+        _pc_allowed_sites[dev] = set(new_set)
+        _pc_last_seen[dev] = now
+        return changed
     # deviceId 단위 사이트셋 이력에 기록 + TTL 만료 정리 후 union 산출.
     # 같은 deviceId 를 여러 PC가 다른 사이트셋으로 폴링해도 union 으로 안정화
     # (last-write 덮어쓰기로 인한 active_sites flip-flop 차단).
@@ -3621,8 +3655,15 @@ class PcAllowedSitesRequest(BaseModel):
 
 @router.post("/autotune/pc-allowed-sites")
 async def autotune_pc_allowed_sites_set(body: PcAllowedSitesRequest):
-    """PC 분담 등록 — 이 PC가 처리할 사이트 목록. 변경 시 DB 영속화."""
-    if register_pc_allowed_sites(body.device_id, body.sites):
+    """PC 분담 등록 — 이 PC가 처리할 사이트 목록. 변경 시 DB 영속화.
+
+    데몬(samba-daemon- prefix) device 는 authoritative 로 확정 등록 — 폴링 union
+    누적을 무시하고 UI 지정값 그대로 박아, 체크 해제 시 실제로 사이트가 빠진다.
+    확장앱 device 는 기존 동작(union) 유지.
+    """
+    dev = (body.device_id or "").strip()
+    is_daemon = dev.startswith("samba-daemon-")
+    if register_pc_allowed_sites(body.device_id, body.sites, authoritative=is_daemon):
         from backend.db.orm import get_write_session
 
         async with get_write_session() as _sess:
@@ -3632,17 +3673,39 @@ async def autotune_pc_allowed_sites_set(body: PcAllowedSitesRequest):
     return {
         "ok": True,
         "registered_pcs": len(pcs),
-        "this_pc": sorted(pcs.get(body.device_id.strip(), set())),
+        "this_pc": sorted(pcs.get(dev, set())),
     }
 
 
 @router.get("/autotune/pc-allowed-sites")
 async def autotune_pc_allowed_sites_get():
-    """현재 등록된 모든 PC 분담 매핑 조회 (디버그용)."""
+    """현재 등록된 모든 PC 분담 매핑 조회 + 데몬 목록(UI '연결된 데몬'용).
+
+    by_device: {device_id: [sites]} — 전체 매핑(레거시 호환).
+    daemons: [{device_id, sites, last_seen_ago, alive}] — samba-daemon- prefix 만,
+             UI에서 데몬별 사이트 지정 카드 렌더용. last_seen_ago=초, alive=60초내.
+    """
     pcs = get_active_pcs()
+    now = time.time()
+    daemons = []
+    for dev, sites in pcs.items():
+        if not dev.startswith("samba-daemon-"):
+            continue
+        last = _pc_last_seen.get(dev, 0.0)
+        ago = round(now - last) if last else None
+        daemons.append(
+            {
+                "device_id": dev,
+                "sites": sorted(sites),
+                "last_seen_ago": ago,
+                "alive": bool(last and now - last < 60),
+            }
+        )
+    daemons.sort(key=lambda d: d["device_id"])
     return {
         "registered_pcs": len(pcs),
         "by_device": {dev: sorted(sites) for dev, sites in pcs.items()},
+        "daemons": daemons,
     }
 
 

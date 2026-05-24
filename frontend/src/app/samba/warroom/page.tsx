@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useCallback, useEffect, useRef, useState, memo } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react'
 import { collectorApi } from '@/lib/samba/api/commerce'
 import { fetchWithAuth } from '@/lib/samba/api/shared'
 import { monitorApi, type DashboardStats, type MonitorEvent, type RefreshLogEntry } from '@/lib/samba/api/operations'
@@ -460,6 +460,10 @@ export default function WarroomPage() {
   const [availSources, setAvailSources] = useState<string[]>([])
   const [availMarkets, setAvailMarkets] = useState<string[]>([])
   const filterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // 연결된 데몬 목록 — 데몬별 담당 사이트를 UI에서 직접 지정(authoritative).
+  // 체크 해제 시 백엔드가 실제로 그 사이트를 데몬에서 빼므로 '눈가림'이 아니다.
+  type DaemonInfo = { device_id: string; sites: string[]; last_seen_ago: number | null; alive: boolean }
+  const [daemons, setDaemons] = useState<DaemonInfo[]>([])
 
   // load() 폴링 closure stale 방지 — 최신값 ref 동기화
   useEffect(() => { filterSourcesOuterRef.current = filterSources }, [filterSources])
@@ -589,6 +593,45 @@ export default function WarroomPage() {
       })
     } catch { /* ignore */ }
   }, [])
+
+  // 데몬이 처리 가능한 사이트(브라우저 PDP 로그인 필요한 detail 소싱처). 무신사/GS는 서버사이드라 제외.
+  const DAEMON_SITES = useMemo(() => ['LOTTEON', 'ABCmart', 'GrandStage', 'SSG'], [])
+
+  // 연결된 데몬 목록 주기 조회 (15초) — 데몬별 담당 사이트/생존 표시
+  const fetchDaemons = useCallback(async () => {
+    try {
+      const { API_BASE_URL: apiBase } = await import('@/config/api')
+      const res = await fetchWithAuth(`${apiBase}/api/v1/samba/collector/autotune/pc-allowed-sites`)
+      if (!res.ok) return
+      const data = await res.json()
+      if (Array.isArray(data?.daemons)) setDaemons(data.daemons)
+    } catch { /* ignore */ }
+  }, [])
+
+  useEffect(() => {
+    fetchDaemons()
+    const t = setInterval(fetchDaemons, 15000)
+    return () => clearInterval(t)
+  }, [fetchDaemons])
+
+  // 데몬 사이트 토글 — 즉시 낙관적 반영 후 백엔드 확정 등록(데몬 device_id 로 POST)
+  const toggleDaemonSite = useCallback(async (deviceId: string, site: string) => {
+    let nextSites: string[] = []
+    setDaemons(prev => prev.map(d => {
+      if (d.device_id !== deviceId) return d
+      nextSites = d.sites.includes(site) ? d.sites.filter(s => s !== site) : [...d.sites, site]
+      return { ...d, sites: nextSites }
+    }))
+    try {
+      const { API_BASE_URL: apiBase } = await import('@/config/api')
+      await fetchWithAuth(`${apiBase}/api/v1/samba/collector/autotune/pc-allowed-sites`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_id: deviceId, sites: nextSites }),
+      })
+    } catch { /* ignore — 다음 폴링에서 서버값으로 보정 */ }
+    fetchDaemons()
+  }, [fetchDaemons])
 
   const toggleSource = useCallback((site: string) => {
     setFilterSources(prev => {
@@ -1040,6 +1083,42 @@ export default function WarroomPage() {
                   />
                   <span style={{ fontSize: '0.7rem', color: checked ? '#ddd' : '#666', whiteSpace: 'nowrap' }}>{labelMap[src] || src}</span>
                 </label>
+              )
+            })}
+          </div>
+        )}
+        {/* 연결된 데몬 — 데몬별 담당 소싱처 지정 (체크 = 그 데몬이 실제 작업) */}
+        {daemons.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+            <span style={{ fontSize: '0.75rem', color: '#9AA5C0', fontWeight: 600, whiteSpace: 'nowrap' }}>연결된 데몬 (PC별 담당 소싱처)</span>
+            {daemons.map(d => {
+              const shortId = d.device_id.replace('samba-daemon-', '')
+              const daemonLabelMap: Record<string, string> = { ABCmart: 'ABC마트', SSG: 'SSG', LOTTEON: '롯데ON', GrandStage: '그랜드스테이지' }
+              return (
+                <div key={d.device_id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', padding: '0.3rem 0.5rem', background: 'rgba(255,255,255,0.03)', borderRadius: '6px' }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', minWidth: '9rem' }}>
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: d.alive ? '#3FB950' : '#555', flexShrink: 0 }} />
+                    <span style={{ fontSize: '0.7rem', color: d.alive ? '#ddd' : '#777', fontFamily: 'monospace' }} title={d.device_id}>{shortId}</span>
+                    <span style={{ fontSize: '0.6rem', color: '#666' }}>{d.last_seen_ago != null ? `${fmtNum(d.last_seen_ago)}초전` : '대기'}</span>
+                  </span>
+                  {DAEMON_SITES.map(site => {
+                    const on = d.sites.includes(site)
+                    return (
+                      <label key={site} style={{ display: 'flex', alignItems: 'center', gap: '2px', cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={on}
+                          onChange={() => toggleDaemonSite(d.device_id, site)}
+                          style={{ accentColor: '#FF8C00', width: 13, height: 13, cursor: 'pointer' }}
+                        />
+                        <span style={{ fontSize: '0.7rem', color: on ? '#FF8C00' : '#666', whiteSpace: 'nowrap' }}>{daemonLabelMap[site] || site}</span>
+                      </label>
+                    )
+                  })}
+                  {d.sites.length === 0 && (
+                    <span style={{ fontSize: '0.65rem', color: '#777' }}>미배정 (대기 중)</span>
+                  )}
+                </div>
               )
             })}
           </div>

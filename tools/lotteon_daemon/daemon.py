@@ -60,7 +60,6 @@ from playwright.async_api import (  # noqa: E402
 # 사이트 핸들러 레지스트리 (ABCmart/GrandStage/SSG). LOTTEON 은 본 파일 하단 등록.
 try:
     from site_handlers import (  # type: ignore
-        ABCMART_LOGOUT_URL,
         LOTTEON_LOGOUT_URL,
         SITE_HANDLERS,
         SiteHandler,
@@ -69,7 +68,6 @@ try:
 except ImportError:
     sys.path.insert(0, str(Path(__file__).parent))
     from site_handlers import (  # type: ignore
-        ABCMART_LOGOUT_URL,
         LOTTEON_LOGOUT_URL,
         SITE_HANDLERS,
         SiteHandler,
@@ -80,7 +78,7 @@ except ImportError:
 # ====================================================================
 # 데몬 버전 — build.ps1 가 갱신. 자동 업데이트 비교 기준.
 # ====================================================================
-DAEMON_VERSION = "1.1.6"
+DAEMON_VERSION = "1.2.0"
 
 
 # ====================================================================
@@ -1020,7 +1018,9 @@ async def logout_site(page: Page, handler: SiteHandler) -> None:
     if not handler.logout_url:
         return
     try:
-        await page.goto(handler.logout_url, wait_until="domcontentloaded", timeout=20_000)
+        await page.goto(
+            handler.logout_url, wait_until="domcontentloaded", timeout=20_000
+        )
         await page.wait_for_timeout(1_500)
         logger.info("%s 로그아웃 완료 (계정 전환)", handler.site)
     except Exception as exc:
@@ -1067,7 +1067,9 @@ async def ensure_logged_in_as_account(
     return ok
 
 
-async def extract_tracking(page: Page, url: str, handler: SiteHandler) -> dict[str, Any]:
+async def extract_tracking(
+    page: Page, url: str, handler: SiteHandler
+) -> dict[str, Any]:
     """송장조회 페이지 진입 + 스크랩 → {success, courierName, trackingNumber}.
 
     단일 페이지(SSG/ABC/LOTTEON): goto → tracking_js evaluate.
@@ -1109,14 +1111,22 @@ async def extract_tracking(page: Page, url: str, handler: SiteHandler) -> dict[s
             data = await page.evaluate(handler.tracking_js)
         except Exception as exc:
             return {"success": False, "error": f"trace 스크랩 예외: {str(exc)[:120]}"}
-        return data if isinstance(data, dict) else {"success": False, "error": "trace 결과 비dict"}
+        return (
+            data
+            if isinstance(data, dict)
+            else {"success": False, "error": "trace 결과 비dict"}
+        )
 
     # ── 단일 페이지 흐름 ──
     try:
         data = await page.evaluate(handler.tracking_js)
     except Exception as exc:
         return {"success": False, "error": f"tracking evaluate 예외: {str(exc)[:120]}"}
-    return data if isinstance(data, dict) else {"success": False, "error": "evaluate 결과 비dict"}
+    return (
+        data
+        if isinstance(data, dict)
+        else {"success": False, "error": "evaluate 결과 비dict"}
+    )
 
 
 async def post_tracking_result(
@@ -1154,7 +1164,9 @@ async def post_tracking_result(
         if r.status_code in _RETRY_STATUSES and attempt < len(_RETRY_DELAYS):
             await asyncio.sleep(_RETRY_DELAYS[attempt])
             continue
-        logger.warning("송장 결과전송 실패 status=%s body=%s", r.status_code, r.text[:200])
+        logger.warning(
+            "송장 결과전송 실패 status=%s body=%s", r.status_code, r.text[:200]
+        )
         return False
     return False
 
@@ -1181,13 +1193,18 @@ async def process_tracking_job(
 
     if not handler or not handler.tracking_js:
         await post_tracking_result(
-            client, backend_url, request_id,
-            {"success": False, "error": f"daemon tracking 미지원: {site}"}, api_key,
+            client,
+            backend_url,
+            request_id,
+            {"success": False, "error": f"daemon tracking 미지원: {site}"},
+            api_key,
         )
         state.record_failure()
         return
 
-    logger.info("[송장] 처리 시작 site=%s req=%s acc=%s", site, request_id, account_id or "-")
+    logger.info(
+        "[송장] 처리 시작 site=%s req=%s acc=%s", site, request_id, account_id or "-"
+    )
     t0 = time.time()
 
     # 1) 주문 매칭 계정 로그인 (송장은 마이페이지라 로그인 필수)
@@ -1196,15 +1213,20 @@ async def process_tracking_job(
     )
     if not login_ok:
         await post_tracking_result(
-            client, backend_url, request_id,
-            {"success": False, "error": f"{site} 계정 로그인 실패 (acc={account_id})"}, api_key,
+            client,
+            backend_url,
+            request_id,
+            {"success": False, "error": f"{site} 계정 로그인 실패 (acc={account_id})"},
+            api_key,
         )
         state.record_failure()
         return
 
     # 2) 송장조회 페이지 스크랩
     try:
-        data = await asyncio.wait_for(extract_tracking(page, url, handler), timeout=90.0)
+        data = await asyncio.wait_for(
+            extract_tracking(page, url, handler), timeout=90.0
+        )
     except asyncio.TimeoutError:
         data = {"success": False, "error": "daemon 송장 추출 타임아웃"}
     except Exception as exc:
@@ -1219,11 +1241,16 @@ async def process_tracking_job(
     if data.get("success"):
         logger.info(
             "[송장] 완료 req=%s %s/%s (%.1fs)",
-            request_id, data.get("courierName"), data.get("trackingNumber"), dt,
+            request_id,
+            data.get("courierName"),
+            data.get("trackingNumber"),
+            dt,
         )
         state.record_success()
     else:
-        logger.info("[송장] 미수집 req=%s err=%s (%.1fs)", request_id, data.get("error"), dt)
+        logger.info(
+            "[송장] 미수집 req=%s err=%s (%.1fs)", request_id, data.get("error"), dt
+        )
         state.record_failure()
 
 
@@ -1370,11 +1397,14 @@ async def fetch_autotune_concurrency(
     backend_url: str,
     device_id: str,
     api_key: str,
-) -> dict[str, int]:
-    """백엔드에서 사이트별 동시실행 설정(워룸 인풋박스 값) 조회.
+) -> tuple[dict[str, int], list[str] | None]:
+    """백엔드에서 사이트별 동시실행 설정 + 이 데몬이 담당할 사이트 조회.
 
+    반환: (concurrency, assigned_sites)
+      concurrency: {site: n} — 담당 사이트별 동시실행 캡. 실패 시 빈 dict.
+      assigned_sites: UI에서 지정한 이 데몬의 담당 사이트 목록.
+        None = 조회 실패(이전 active_sites 유지). [] = 명시적 미배정(대기).
     이 값만큼 사이트별 페이지를 병렬로 띄워 PC 자원을 활용한다.
-    실패 시 빈 dict — 호출처가 사이트당 1로 폴백.
     """
     try:
         r = await client.get(
@@ -1383,17 +1413,23 @@ async def fetch_autotune_concurrency(
             timeout=10.0,
         )
         if r.status_code == 200:
-            raw = (r.json() or {}).get("concurrency") or {}
+            body = r.json() or {}
+            raw = body.get("concurrency") or {}
             out: dict[str, int] = {}
             for k, v in raw.items():
                 try:
                     out[k] = max(1, int(v))
                 except Exception:
                     pass
-            return out
+            assigned = body.get("assigned_sites")
+            if isinstance(assigned, list):
+                assigned = [str(s).strip() for s in assigned if str(s).strip()]
+            else:
+                assigned = None
+            return out, assigned
     except Exception as exc:
-        logger.debug("동시실행 설정 조회 실패: %s", str(exc)[:80])
-    return {}
+        logger.debug("동시실행/배정 조회 실패: %s", str(exc)[:80])
+    return {}, None
 
 
 async def process_job(
@@ -1529,27 +1565,21 @@ async def run_daemon(args: argparse.Namespace) -> int:
     profile_dir.mkdir(parents=True, exist_ok=True)
     api_key_path = profile_dir / "api_key.txt"
 
-    # 활성 사이트 — `--sites=LOTTEON,ABCmart,SSG` 콤마 구분.
-    # 기본값은 데몬 전용 사이트 전체(SITE_HANDLERS) — 확장앱 detail 가드가 거는
-    # LOTTEON/ABCmart/GrandStage/SSG 를 한 데몬이 모두 처리한다.
-    # 기본 active_sites — 전체 핸들러(MUSINSA 송장전용 포함). 데몬이 송장 잡도 폴링.
-    raw_sites = (getattr(args, "sites", "") or ",".join(SITE_HANDLERS)).strip()
-    active_sites = [
-        s.strip() for s in raw_sites.split(",") if s.strip() in SITE_HANDLERS
+    # 담당 사이트는 백엔드(UI '연결된 데몬' 지정)가 결정한다 — 데몬은 스스로 사이트를
+    # 선언하지 않는다(체크 해제 시 실제로 작업에서 빠지도록). --sites 는 테스트/강제
+    # 오버라이드용(보통 미지정). 미지정이면 백엔드 배정만 따른다.
+    # api_key 부트스트랩 후 fetch_autotune_concurrency 로 active_sites 를 채운다.
+    _cli_sites = [
+        s.strip()
+        for s in (getattr(args, "sites", "") or "").split(",")
+        if s.strip() in SITE_HANDLERS
     ]
-    if not active_sites:
-        active_sites = list(SITE_HANDLERS)
+    active_sites: list[str] = list(_cli_sites)  # 시작값 — 백엔드 배정 조회 후 갱신
     allowed_sites_header = ",".join(active_sites)
-    # startup 로그인은 detail 지원 사이트만 — 송장전용(MUSINSA)은 잡 처리 시 계정별 로그인.
-    # (MUSINSA 를 startup 로그인하면 기본계정 1개만 로그인돼 무의미 + captcha 위험)
-    login_sites = [
-        s
-        for s in active_sites
-        if SITE_HANDLERS[s].requires_login and SITE_HANDLERS[s].detail_supported
-    ]
-    dialog_accept_sites = {
-        s for s in active_sites if SITE_HANDLERS[s].dialog_policy == "accept"
-    }
+    login_sites: list[str] = []  # 백엔드 배정 조회 후 active_sites 기준으로 채움
+    _logged_in: set[str] = (
+        set()
+    )  # 로그인 완료 사이트 — 런타임 추가 사이트 재로그인 판단
 
     logger.info(
         "데몬 시작 device_id=%s backend=%s profile=%s sites=%s",
@@ -1576,6 +1606,25 @@ async def run_daemon(args: argparse.Namespace) -> int:
         except Exception as exc:
             logger.error("API key 부트스트랩 실패: %s", exc)
             return 2
+
+        def _compute_login_sites(sites: list[str]) -> list[str]:
+            # startup 로그인은 detail 지원 사이트만 — 송장전용(MUSINSA)은 잡 처리 시
+            # 계정별 로그인(startup 로그인하면 기본계정 1개만 돼 무의미 + captcha 위험).
+            return [
+                s
+                for s in sites
+                if SITE_HANDLERS[s].requires_login and SITE_HANDLERS[s].detail_supported
+            ]
+
+        # 담당 사이트 초기 조회 — UI 지정값(authoritative). CLI --sites 지정 시 그 값 우선.
+        _conc0, _assigned0 = await fetch_autotune_concurrency(
+            http_client, backend_url, args.device_id, api_key
+        )
+        if not _cli_sites and _assigned0 is not None:
+            active_sites = list(_assigned0)
+            allowed_sites_header = ",".join(active_sites)
+        login_sites = _compute_login_sites(active_sites)
+        logger.info("초기 담당 사이트: %s (login=%s)", active_sites, login_sites)
 
         # launch + new_context(storage_state) — persistent_context 는 headless=True 무시하고
         # 창 띄우는 알려진 버그가 있어 쿠키만 storage_state.json 영속 저장.
@@ -1608,23 +1657,23 @@ async def run_daemon(args: argparse.Namespace) -> int:
             page = await context.new_page()
 
             # SSG 임직원 alert 자동 dismiss — 띄워두면 페이지 멈춰 다음 잡 차단.
-            if dialog_accept_sites:
-
-                async def _on_dialog(dialog):
+            # 담당 사이트가 런타임에 바뀌므로(SSG 가 나중에 배정될 수 있음) 핸들러는
+            # 항상 등록한다. accept 실패 시 dismiss 폴백이라 다른 사이트에도 안전.
+            async def _on_dialog(dialog):
+                try:
+                    logger.info(
+                        "dialog auto-accept type=%s msg=%s",
+                        dialog.type,
+                        (dialog.message or "")[:80],
+                    )
+                    await dialog.accept()
+                except Exception:
                     try:
-                        logger.info(
-                            "dialog auto-accept type=%s msg=%s",
-                            dialog.type,
-                            (dialog.message or "")[:80],
-                        )
-                        await dialog.accept()
+                        await dialog.dismiss()
                     except Exception:
-                        try:
-                            await dialog.dismiss()
-                        except Exception:
-                            pass
+                        pass
 
-                page.on("dialog", lambda d: asyncio.create_task(_on_dialog(d)))
+            page.on("dialog", lambda d: asyncio.create_task(_on_dialog(d)))
 
             async def _save_storage_state() -> None:
                 try:
@@ -1669,6 +1718,33 @@ async def run_daemon(args: argparse.Namespace) -> int:
                 )
             if login_sites:
                 await _save_storage_state()
+            _logged_in.update(
+                login_sites
+            )  # 로그인 성공 사이트 기록(실패는 위에서 제외됨)
+
+            async def _ensure_login_for_new_sites(sites: list[str]) -> None:
+                # 런타임에 새로 배정된 requires_login 사이트 로그인(이미 한 건 스킵).
+                for _s in _compute_login_sites(sites):
+                    if _s in _logged_in:
+                        continue
+                    try:
+                        ok = await ensure_logged_in_for_site(
+                            page,
+                            http_client,
+                            backend_url,
+                            args.device_id,
+                            api_key,
+                            SITE_HANDLERS[_s],
+                        )
+                        if ok:
+                            _logged_in.add(_s)
+                            await _save_storage_state()
+                        else:
+                            logger.warning(
+                                "%s 런타임 로그인 실패 — 다음 주기 재시도", _s
+                            )
+                    except Exception as _e:
+                        logger.warning("%s 런타임 로그인 예외: %s", _s, str(_e)[:80])
 
             # ── 사이트별 병렬 워커 풀 (PC 자원 활용) ───────────────────────
             # 백엔드 _site_autotune_loop 는 사이트별 병렬로 잡을 만들지만, 데몬이 페이지
@@ -1714,7 +1790,12 @@ async def run_daemon(args: argparse.Namespace) -> int:
                         continue
                     try:
                         await process_job(
-                            wpage, http_client, backend_url, job, state, api_key,
+                            wpage,
+                            http_client,
+                            backend_url,
+                            job,
+                            state,
+                            api_key,
                             args.device_id,
                         )
                     except asyncio.CancelledError:
@@ -1748,9 +1829,13 @@ async def run_daemon(args: argparse.Namespace) -> int:
 
             def _eff_conc(conc: dict) -> dict:
                 # 사이트별 동시실행 — 총 페이지 수를 _MAX_TOTAL_PAGES 로 캡(메모리 보호).
+                # conc 키 = 백엔드가 이 데몬 담당 사이트로 필터해 내려준 사이트들.
+                # (active_sites 가 아닌 conc 키를 순회 — 미배정 사이트는 conc 에 없어 자동 제외)
                 eff: dict = {}
                 budget = _MAX_TOTAL_PAGES
-                for s in active_sites:
+                for s in conc:
+                    if s not in SITE_HANDLERS:
+                        continue
                     n = min(max(1, int(conc.get(s, 1))), budget)
                     if n <= 0:
                         break
@@ -1789,11 +1874,22 @@ async def run_daemon(args: argparse.Namespace) -> int:
                 _pages.clear()
 
             _mon_task = asyncio.create_task(_relogin_monitor(page))
-            _cur_conc = _eff_conc(
-                await fetch_autotune_concurrency(
+
+            async def _sync_assignment() -> dict:
+                # 백엔드에서 동시실행 + 담당 사이트 조회 → active_sites/login 반영 후
+                # _eff_conc(담당 사이트 워커 맵) 반환. _cli_sites 지정 시 배정 무시(강제).
+                nonlocal active_sites, allowed_sites_header
+                conc_raw, assigned = await fetch_autotune_concurrency(
                     http_client, backend_url, args.device_id, api_key
                 )
-            )
+                if not _cli_sites and assigned is not None:
+                    if set(assigned) != set(active_sites):
+                        active_sites = list(assigned)
+                        allowed_sites_header = ",".join(active_sites)
+                        await _ensure_login_for_new_sites(active_sites)
+                return _eff_conc(conc_raw)
+
+            _cur_conc = await _sync_assignment()
             await _spawn(_cur_conc)
             logger.info(
                 "사이트별 병렬 워커 스폰: %s (총 %d 페이지)", _cur_conc, len(_workers)
@@ -1801,14 +1897,12 @@ async def run_daemon(args: argparse.Namespace) -> int:
             try:
                 while not state.should_die():
                     await asyncio.sleep(60)
-                    _new_conc = _eff_conc(
-                        await fetch_autotune_concurrency(
-                            http_client, backend_url, args.device_id, api_key
-                        )
-                    )
+                    _new_conc = await _sync_assignment()
                     if _new_conc != _cur_conc:
                         logger.info(
-                            "동시실행 변경 %s → %s — 워커 재스폰", _cur_conc, _new_conc
+                            "담당/동시실행 변경 %s → %s — 워커 재스폰",
+                            _cur_conc,
+                            _new_conc,
                         )
                         await _despawn()
                         _cur_conc = _new_conc
