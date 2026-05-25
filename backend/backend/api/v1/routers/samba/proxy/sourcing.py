@@ -132,11 +132,22 @@ async def sourcing_collect_queue(request: Request) -> Any:
         update_pc_last_seen(device_id)
         _is_daemon = device_id.startswith("samba-daemon-")
         if _is_daemon:
-            # 데몬은 자기 사이트를 헤더(X-Allowed-Sites)로 '선언'하지 않는다 —
-            # 폴링 union 이 배정을 부풀려 UI 지정을 무력화하던 문제 차단.
-            # 사이트 출처는 오직 UI POST(/autotune/pc-allowed-sites, authoritative).
-            # 여기선 last_seen 갱신 + 미등록 데몬 1회 빈 등록(UI 목록 노출)만 한다.
-            if touch_daemon_presence(device_id):
+            # 데몬 폴링 시 X-Allowed-Sites = 데몬의 active_sites = 사용자 의도
+            # → authoritative 자동 등록 (SaaS 1클릭: 사용자 수동 분담 박기 X).
+            # 2026-05-25 사용자 '포크 유저 1만명 박아줄거냐' 피드백 반영.
+            # 미등록 데몬도 빈 entry 1회 생성(UI 목록 노출).
+            touch_daemon_presence(device_id)
+            raw_sites_for_reg = request.headers.get("X-Allowed-Sites")
+            need_persist = False
+            if raw_sites_for_reg is not None:
+                sites_for_reg = [
+                    s.strip() for s in raw_sites_for_reg.split(",") if s.strip()
+                ]
+                if register_pc_allowed_sites(
+                    device_id, sites_for_reg, authoritative=True
+                ):
+                    need_persist = True
+            if need_persist:
                 from backend.db.orm import get_write_session
 
                 async with get_write_session() as _persist_sess:
