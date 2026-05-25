@@ -355,6 +355,7 @@ _order_auto_sync_last_run: float = 0.0
 _reward_auto_task: asyncio.Task | None = None
 _reward_auto_last_run: float = 0.0
 _pc_sync_task: asyncio.Task | None = None
+_pc_cleanup_task: asyncio.Task | None = None
 
 
 async def _pc_sync_loop() -> None:
@@ -374,6 +375,66 @@ async def _pc_sync_loop() -> None:
         except Exception as exc:
             _lg.warning(f"[lifecycle][pc-sync] 동기화 실패(무시): {exc}")
         await asyncio.sleep(10)
+
+
+async def _pc_cleanup_loop() -> None:
+    """매 60초 PC 분담 매핑 자동 cleanup — dead device + 빈 분담 제거.
+
+    1) samba_extension_key 에서 active device_id 목록 조회 (revoked/expired 제외)
+    2) autotune_pc_allowed_sites 에서 active_set 외 device 또는 빈 분담 dev 제거
+    3) 변경 발생 시 DB UPDATE → 다음 sync_loop 가 in-memory 정리
+
+    사용자가 데몬 삭제/PC 교체 시 옛 흔적 자동 정리 — 수동 SQL 부담 제거.
+    """
+    import json
+
+    from backend.api.v1.routers.samba.proxy._helpers import _get_setting, _set_setting
+    from backend.db.orm import get_read_session, get_write_session
+
+    _lg = logging.getLogger("backend.pc-cleanup")
+    while True:
+        try:
+            # 1) active device 목록
+            async with get_read_session() as session:
+                from sqlalchemy import text
+
+                rows = await session.execute(
+                    text(
+                        "SELECT DISTINCT device_id FROM samba_extension_key "
+                        "WHERE device_id IS NOT NULL AND revoked_at IS NULL "
+                        "AND (expires_at IS NULL OR expires_at > now())"
+                    )
+                )
+                active_set = {r[0] for r in rows.all() if r[0]}
+
+                # 2) DB 분담 매핑 조회
+                current = await _get_setting(session, "autotune_pc_allowed_sites")
+            if not isinstance(current, dict):
+                await asyncio.sleep(60)
+                continue
+
+            # 3) cleanup — active device + 분담 비어있지 않음만 유지
+            cleaned = {
+                k: v
+                for k, v in current.items()
+                if v and k in active_set and isinstance(v, list)
+            }
+
+            if cleaned != current:
+                removed = sorted(set(current.keys()) - set(cleaned.keys()))
+                async with get_write_session() as wsess:
+                    await _set_setting(wsess, "autotune_pc_allowed_sites", cleaned)
+                    await wsess.commit()
+                _lg.info(
+                    "[pc-cleanup] dead device 매핑 %d개 제거: %s",
+                    len(removed),
+                    removed[:5],
+                )
+        except Exception as exc:
+            _lg.warning(f"[lifecycle][pc-cleanup] 실패(무시): {exc}")
+            # unused 방지
+            _ = json  # noqa: F841
+        await asyncio.sleep(60)
 
 
 async def _tetris_sync_loop() -> None:
@@ -597,12 +658,13 @@ async def _warmup_tetris_board_cache(logger: logging.Logger) -> None:
 
 
 async def _start_tetris_sync_scheduler() -> None:
-    global _tetris_sync_task, _pc_sync_task
+    global _tetris_sync_task, _pc_sync_task, _pc_cleanup_task
 
     _tetris_sync_task = asyncio.create_task(_tetris_sync_loop())
     _pc_sync_task = asyncio.create_task(_pc_sync_loop())
+    _pc_cleanup_task = asyncio.create_task(_pc_cleanup_loop())
     logging.getLogger("backend.lifecycle").info(
-        "[lifecycle] 테트리스 sync + PC 분담 sync 스케줄러 시작"
+        "[lifecycle] 테트리스 sync + PC 분담 sync + cleanup 스케줄러 시작"
     )
 
 
