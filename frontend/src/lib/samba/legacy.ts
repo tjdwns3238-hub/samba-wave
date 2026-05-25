@@ -966,12 +966,14 @@ export const collectorApi = {
 
 export interface SambaMarketAccount {
   id: string;
+  tenant_id?: string;
   market_type: string;
   market_name: string;
   account_label: string;
   seller_id?: string;
   business_name?: string;
   is_active: boolean;
+  is_default?: boolean;
   additional_fields?: Record<string, unknown>;
   created_at: string;
 }
@@ -1013,6 +1015,8 @@ export const accountApi = {
     request<SambaMarketAccount>(`${SAMBA_PREFIX}/accounts/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   toggle: (id: string) =>
     request<SambaMarketAccount>(`${SAMBA_PREFIX}/accounts/${id}/toggle`, { method: "PUT" }),
+  setDefault: (id: string) =>
+    request<SambaMarketAccount>(`${SAMBA_PREFIX}/accounts/${id}/set-default`, { method: "PUT" }),
   delete: (id: string) =>
     request<{ ok: boolean }>(`${SAMBA_PREFIX}/accounts/${id}`, { method: "DELETE" }),
   getSecrets: (id: string) =>

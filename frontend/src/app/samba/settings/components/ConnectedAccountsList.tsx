@@ -22,12 +22,14 @@ interface Props {
   setCoupangOutboundList: Dispatch<SetStateAction<OutboundPlace[]>>
   setCoupangInboundList: Dispatch<SetStateAction<InboundPlace[]>>
   handleAccountDelete: (id: string) => void | Promise<void>
+  handleAccountSetDefault?: (id: string) => void | Promise<void>
 }
 
 export function ConnectedAccountsList(props: Props) {
   const {
     marketKey, accounts, editingAccountId, setEditingAccountId, setStoreData,
     setCoupangOutboundList, setCoupangInboundList, handleAccountDelete,
+    handleAccountSetDefault,
   } = props
   const marketAccounts = accounts.filter(a => a.market_type === marketKey)
 
@@ -44,8 +46,25 @@ export function ConnectedAccountsList(props: Props) {
               padding: '0.4rem 0.625rem', background: 'rgba(255,255,255,0.02)',
               borderRadius: '6px', border: '1px solid rgba(45,45,45,0.5)',
             }}>
+              {handleAccountSetDefault && (
+                <label
+                  title={a.is_default ? '기본 계정' : '기본 계정으로 지정'}
+                  style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}
+                >
+                  <input
+                    type="radio"
+                    name={`default-${marketKey}`}
+                    checked={!!a.is_default}
+                    onChange={() => { void handleAccountSetDefault(a.id) }}
+                    style={{ cursor: 'pointer', accentColor: '#FF8C00' }}
+                  />
+                </label>
+              )}
               <div style={{ flex: 1, minWidth: 0, fontSize: '0.8rem', color: '#E5E5E5', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {a.account_label}
+                {a.is_default && (
+                  <span style={{ marginLeft: '0.35rem', fontSize: '0.65rem', color: '#FF8C00' }}>★기본</span>
+                )}
               </div>
               <button
                 onClick={() => {

@@ -15,7 +15,7 @@ import { ConnectedAccountsList } from './ConnectedAccountsList'
 
 type Props = StoreSettingsState & Pick<StoreSettingsActions,
   'updateStoreField' | 'saveStoreSettings' | 'testStoreAuth' |
-  'handleAccountToggle' | 'handleAccountDelete' | 'togglePasswordVisibility' |
+  'handleAccountToggle' | 'handleAccountDelete' | 'handleAccountSetDefault' | 'togglePasswordVisibility' |
   'setStoreTab' | 'setStoreData' | 'setSsgShippingOptions' | 'setSsgAddrOptions' |
   'setEsmPlaceOptions' | 'setEsmDispatchOptions' |
   'setLotteonDeliveryPolicyOptions' | 'setLotteonWarehouseOptions' |
@@ -37,7 +37,7 @@ export function StoreSettingsPanel(props: Props) {
     lotteHomeDeliveryPolicyOptions, lotteHomeExtraPolicyOptions, lotteHomeShippingPlaceOptions, lotteHomeReturnPlaceOptions,
     networkIps, networkIpStatus,
     updateStoreField, saveNetworkIps, saveStoreSettings, testStoreAuth,
-    handleAccountDelete, togglePasswordVisibility,
+    handleAccountDelete, handleAccountSetDefault, togglePasswordVisibility,
     setStoreTab, setStoreData,
     setSsgShippingOptions, setSsgAddrOptions,
     setEsmPlaceOptions, setEsmDispatchOptions,
@@ -650,6 +650,7 @@ export function StoreSettingsPanel(props: Props) {
             setCoupangOutboundList={setCoupangOutboundList}
             setCoupangInboundList={setCoupangInboundList}
             handleAccountDelete={handleAccountDelete}
+            handleAccountSetDefault={handleAccountSetDefault}
           />
         </div>
       ))}

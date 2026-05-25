@@ -73,17 +73,20 @@ async def send_invoice_to_market(
 
 
 async def _send_lotteon(order, account, courier, tracking, session):
-    from backend.domain.samba.forbidden.repository import SambaSettingsRepository
+    from backend.domain.samba.account.resolver import resolve_market_creds
     from backend.domain.samba.proxy.lotteon import LotteonClient
 
     lo_api_key = (
         (account.additional_fields or {}).get("apiKey", "") or account.api_key or ""
     )
     if not lo_api_key:
-        _repo = SambaSettingsRepository(session)
-        _row = await _repo.find_by_async(key="store_lotteon")
-        if _row and isinstance(_row.value, dict):
-            lo_api_key = _row.value.get("apiKey", "")
+        # (2026-05-25) store_lotteon 직접 조회 → resolver. account.tenant_id 자동 추출.
+        _tid = getattr(account, "tenant_id", None) if account else None
+        _creds = await resolve_market_creds(
+            session, _tid, market_type="lotteon", store_key="store_lotteon"
+        )
+        if _creds:
+            lo_api_key = _creds.get("apiKey", "")
     if not lo_api_key:
         return False, "롯데ON API Key 누락"
 
@@ -103,18 +106,24 @@ async def _send_lotteon(order, account, courier, tracking, session):
 
 
 async def _send_smartstore(order, account, courier, tracking, session):
-    from backend.domain.samba.forbidden.repository import SambaSettingsRepository
+    from backend.domain.samba.account.resolver import resolve_market_creds
     from backend.domain.samba.proxy.smartstore import SmartStoreClient
 
     _extras = account.additional_fields or {}
     cid = _extras.get("clientId", "") or account.api_key or ""
     csecret = _extras.get("clientSecret", "") or account.api_secret or ""
     if not cid or not csecret:
-        _repo = SambaSettingsRepository(session)
-        _row = await _repo.find_by_async(key="store_smartstore")
-        if _row and isinstance(_row.value, dict):
-            cid = cid or _row.value.get("clientId", "")
-            csecret = csecret or _row.value.get("clientSecret", "")
+        # (2026-05-25) store_smartstore 직접 조회 → resolver. account.tenant_id 자동 추출.
+        _tid = getattr(account, "tenant_id", None) if account else None
+        _creds = await resolve_market_creds(
+            session,
+            _tid,
+            market_type="smartstore",
+            store_key="store_smartstore",
+        )
+        if _creds:
+            cid = cid or _creds.get("clientId", "")
+            csecret = csecret or _creds.get("clientSecret", "")
     if not cid or not csecret:
         return False, "스마트스토어 자격증명(clientId/Secret) 누락"
 

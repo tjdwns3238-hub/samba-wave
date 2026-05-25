@@ -45,6 +45,7 @@ export interface StoreSettingsActions {
   testStoreAuth: (marketKey: string) => Promise<void>
   handleAccountToggle: (id: string) => Promise<void>
   handleAccountDelete: (id: string) => Promise<void>
+  handleAccountSetDefault: (id: string) => Promise<void>
   togglePasswordVisibility: (key: string) => void
   setStoreTab: (tab: string) => void
   setStoreData: React.Dispatch<React.SetStateAction<Record<string, Record<string, string>>>>
@@ -480,6 +481,26 @@ export function useStoreSettings(): StoreSettingsState & StoreSettingsActions {
     setAccounts(prev => prev.map(a => a.id === id ? { ...a, is_active: !a.is_active } : a))
     await loadAccounts()
   }
+  const handleAccountSetDefault = async (id: string) => {
+    // 라디오 동작 — 백엔드가 같은 (tenant, market_type) 다른 계정 is_default=false 강제.
+    // 낙관적 갱신: 즉시 로컬에서 라디오 상태 반영 → 백엔드 응답 후 재조회.
+    const target = accounts.find(a => a.id === id)
+    if (!target) return
+    setAccounts(prev => prev.map(a =>
+      a.market_type === target.market_type
+        ? { ...a, is_default: a.id === id }
+        : a
+    ))
+    try {
+      await accountApi.setDefault(id)
+    } catch (e) {
+      // 실패 시 원복
+      await loadAccounts()
+      throw e
+    }
+    await loadAccounts()
+  }
+
   const handleAccountDelete = async (id: string) => {
     if (!await showConfirm('삭제하시겠습니까?')) return
     await accountApi.delete(id)
@@ -538,6 +559,7 @@ export function useStoreSettings(): StoreSettingsState & StoreSettingsActions {
     testStoreAuth,
     handleAccountToggle,
     handleAccountDelete,
+    handleAccountSetDefault,
     togglePasswordVisibility,
     setStoreTab,
     setStoreData,

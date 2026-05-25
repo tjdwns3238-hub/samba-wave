@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Any
+from typing import Any, Optional
 
 from backend.domain.samba.plugins.market_base import MarketPlugin
 from backend.utils.logger import logger
@@ -1246,6 +1246,7 @@ class LotteonPlugin(MarketPlugin):
         # 따라서 진입 시점에 필요한 필드를 dict/스칼라로 스냅샷하여 이후엔 ORM 접근 금지.
         _account_extras_snapshot: dict[str, Any] = {}
         _account_api_key_snapshot: str = ""
+        _account_tenant_id_snapshot: Optional[str] = None
         if account:
             try:
                 _account_extras_snapshot = (
@@ -1257,6 +1258,10 @@ class LotteonPlugin(MarketPlugin):
                 _account_api_key_snapshot = getattr(account, "api_key", "") or ""
             except Exception:
                 _account_api_key_snapshot = ""
+            try:
+                _account_tenant_id_snapshot = getattr(account, "tenant_id", None)
+            except Exception:
+                _account_tenant_id_snapshot = None
 
         api_key = creds.get("apiKey", "")
 
@@ -1659,13 +1664,15 @@ class LotteonPlugin(MarketPlugin):
 
         # 글로벌 설정을 항상 base로 읽고, 계정 설정으로 오버라이드
         # (owhpNo 유무와 무관하게 shippingType 등 발송 설정도 반영되어야 함)
-        from backend.domain.samba.forbidden.model import SambaSettings
-        from sqlmodel import select
+        # (2026-05-25) store_lotteon 직접 SQL → resolver. tenant_id 는 진입 시점 snapshot 사용.
+        from backend.domain.samba.account.resolver import resolve_market_creds
 
-        stmt = select(SambaSettings).where(SambaSettings.key == "store_lotteon")
-        result = await session.execute(stmt)
-        row = result.scalars().first()
-        _lotteon_setting_val = row.value if row else None
+        _lotteon_setting_val = await resolve_market_creds(
+            session,
+            _account_tenant_id_snapshot,
+            market_type="lotteon",
+            store_key="store_lotteon",
+        )
         try:
             await session.commit()
         except Exception:

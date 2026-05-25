@@ -220,6 +220,29 @@ async def toggle_account(
     return result
 
 
+@router.put("/{account_id}/set-default")
+async def set_default_account(
+    account_id: str,
+    session: AsyncSession = Depends(get_write_session_dependency),
+    tenant_id: Optional[str] = Depends(get_optional_tenant_id),
+):
+    """기본 계정 지정 — 같은 (tenant_id, market_type) 의 다른 계정은 is_default=false 강제.
+
+    store_* 단일 키 폴백을 대체하는 진실의 출처 마킹. 라디오 동작.
+    """
+    svc = _get_service(session)
+    if tenant_id is not None:
+        existing = await svc.get_account(account_id)
+        if not existing:
+            raise HTTPException(404, "계정을 찾을 수 없습니다")
+        if existing.tenant_id != tenant_id:
+            raise HTTPException(403, "해당 계정에 대한 권한이 없습니다")
+    result = await svc.set_default(account_id, tenant_id=tenant_id)
+    if not result:
+        raise HTTPException(404, "계정을 찾을 수 없습니다")
+    return mask_model_secrets(result.model_dump())
+
+
 @router.delete("/{account_id}")
 async def delete_account(
     account_id: str,

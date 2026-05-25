@@ -225,6 +225,19 @@ async def save_setting(
     from backend.domain.samba.forbidden.model import SambaSettings
     from backend.utils.masking import drop_masked_secret_fields
 
+    # (2026-05-25) store_* deprecation 경고 — 마켓 자격증명은 samba_market_account 로 통일 중.
+    # frontend 가 accountApi.create/update 로 전환 완료(7d) 후 410 차단 예정.
+    # 지금은 호환을 위해 저장 허용하되 로그로 사용 빈도 추적.
+    if key.startswith("store_") and key not in ("store_network_ips",):
+        from backend.utils.logger import logger as _lg
+
+        _lg.warning(
+            "[deprecated] PUT /forbidden/settings/%s — 마켓 자격증명 store_* 저장 경로 폐기 예정. "
+            "POST /api/v1/samba/accounts 로 이전 필요 (tenant_id=%s)",
+            key,
+            tenant_id,
+        )
+
     value = body.get("value")
     # tenant_id가 있으면 테넌트 전용 키(tenant_id:key)로 upsert
     # SambaSettings PK가 key 단일 컬럼이므로 테넌트별 네임스페이스 분리
