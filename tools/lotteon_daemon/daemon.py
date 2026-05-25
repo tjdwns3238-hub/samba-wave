@@ -78,7 +78,7 @@ except ImportError:
 # ====================================================================
 # 데몬 버전 — build.ps1 가 갱신. 자동 업데이트 비교 기준.
 # ====================================================================
-DAEMON_VERSION = "1.4.1"
+DAEMON_VERSION = "1.4.2"
 
 
 # ====================================================================
@@ -131,31 +131,59 @@ def _register_run_key(exe_path: Path) -> None:
         logger_print(f"Run 키 등록 실패(무시): {exc}")
 
 
-_DAEMON_UPDATE_URL = (
+_DAEMON_UPDATE_URL_LEGACY = (
     "https://github.com/sbk0674-web/samba-wave/releases/latest/download/"
-    "lotteon-daemon-setup.exe"
+    "samba.exe"
+)
+# v1.4.2+: backend 경유 self-update — install-token 박힌 exe 자동 받음.
+# 데몬이 자동 키 갱신 가능 (옛 키 invalid 케이스도 자동 복구).
+_DAEMON_UPDATE_URL_BACKEND = (
+    "https://api.samba-wave.co.kr/api/v1/samba/extension-keys/daemon-self-update"
 )
 
 
-def _perform_self_update() -> bool:
+def _perform_self_update(api_key: str = "") -> bool:
     """신버전 exe 다운로드 → swap 배치 생성·실행 → True 면 supervisor 종료(배치가 재시작).
 
-    frozen exe 는 실행 중 자기 교체 불가(Windows 파일 잠금) → 배치가 데몬 종료를 기다린 뒤
-    move 후 재시작한다. 키는 install_dir/api_key.txt 캐시 재사용(재발급·재설치 불필요).
+    api_key 주입 시 backend 경유 self-update (토큰 박힌 exe → 자동 키 갱신).
+    api_key 없으면 GitHub 직접 다운로드(레거시, 토큰 없음).
     """
     if not _is_frozen() or os.name != "nt":
-        return False  # 개발 모드/비윈도우는 자동교체 미지원
+        return False
     import urllib.request
 
     install_dir = _install_dir()
     exe_path = install_dir / "daemon.exe"
     new_path = install_dir / "daemon.exe.new"
-    try:
-        logger_print(f"자동 업데이트: 새 exe 다운로드 {_DAEMON_UPDATE_URL}")
-        urllib.request.urlretrieve(_DAEMON_UPDATE_URL, str(new_path))
-    except Exception as exc:
-        logger_print(f"자동 업데이트 다운로드 실패(무시): {exc}")
-        return False
+    if api_key:
+        # backend 경유 — X-Api-Key 헤더로 인증, install-token 박힌 exe 받음
+        try:
+            logger_print("자동 업데이트: backend 경유 다운로드 (자동 키 갱신)")
+            req = urllib.request.Request(
+                _DAEMON_UPDATE_URL_BACKEND, headers={"X-Api-Key": api_key}
+            )
+            with urllib.request.urlopen(req, timeout=120) as resp, open(
+                new_path, "wb"
+            ) as f:
+                while True:
+                    chunk = resp.read(1 << 16)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+        except Exception as exc:
+            logger_print(f"backend 경유 self-update 실패 → GitHub fallback: {exc}")
+            try:
+                urllib.request.urlretrieve(_DAEMON_UPDATE_URL_LEGACY, str(new_path))
+            except Exception as exc2:
+                logger_print(f"GitHub fallback 도 실패(무시): {exc2}")
+                return False
+    else:
+        try:
+            logger_print(f"자동 업데이트: 새 exe 다운로드 {_DAEMON_UPDATE_URL_LEGACY}")
+            urllib.request.urlretrieve(_DAEMON_UPDATE_URL_LEGACY, str(new_path))
+        except Exception as exc:
+            logger_print(f"자동 업데이트 다운로드 실패(무시): {exc}")
+            return False
     # 원래 args 보존(--worker 제외). install-token(_it-)은 파일명에만 있고 캐시 키 우선이라 무관.
     _args = " ".join(f'"{a}"' for a in sys.argv[1:] if a != "--worker")
     bat = install_dir / "_self_update.bat"
@@ -2571,7 +2599,15 @@ def _supervisor_loop() -> int:
             # 신버전 감지 → 자동 업데이트(새 exe 다운 + swap 배치). 성공 시 supervisor 종료
             # (배치가 데몬 종료 대기 후 교체·재시작). 실패 시 구버전으로 계속 재시작.
             logger_print("supervisor: 신버전 감지(rc=10) — 자동 업데이트 시도")
-            if _perform_self_update():
+            # 캐시된 api_key 주입 → backend 경유 self-update → 자동 키 갱신
+            _cached_key = ""
+            try:
+                _kp = _install_dir() / "api_key.txt"
+                if _kp.exists():
+                    _cached_key = _kp.read_text(encoding="utf-8").strip()
+            except Exception:
+                pass
+            if _perform_self_update(api_key=_cached_key):
                 logger_print("supervisor: 자동 업데이트 위임 완료 — 종료")
                 return 0
             logger_print("supervisor: 자동 업데이트 실패 — 구버전으로 계속")

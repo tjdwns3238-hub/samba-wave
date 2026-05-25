@@ -291,11 +291,75 @@ async def issue_daemon_key(
     return _DaemonKeyResponse(api_key=raw_token, id=record.id, label=label)
 
 
-# ── install-token 교환 (JWT 면제, install-token 자체로 인증) — 레거시 호환 ─────────
-# 데몬은 사람 로그인 불가(헤드리스)이므로, 다운로드 시 박힌 1시간 만료 install-token
-# 을 첫 실행 때 long-lived 키와 교환한다. install-token 은 api_gateway 가 검증해
-# request.state.tenant_id 를 주입하고, exchange 경로에서만 통과시킨다(일반 API 차단).
+# ── 데몬 self-update (X-Api-Key 인증, JWT 면제) — SaaS 1클릭 자동 갱신 ─────────
+# 데몬이 자동 업데이트할 때 backend 경유로 받아 새 install-token 박힌 exe 획득 → 다음
+# 실행 시 새 토큰 추출 → 새 long-lived 키 캐시. 옛 키 invalid 케이스 자동 복구.
 public_router = APIRouter(prefix="/extension-keys", tags=["extension-keys-public"])
+
+
+@public_router.get("/daemon-self-update")
+async def daemon_self_update(
+    request: Request,
+    session: AsyncSession = Depends(get_write_session_dependency),
+):
+    """데몬 self-update 전용 — X-Api-Key 로 인증된 데몬에 새 토큰 박힌 exe 제공.
+
+    api-gateway 가 X-Api-Key 검증 → tenant_id 주입. 이 endpoint 는 그 tenant_id 로
+    새 install-token 발급 + 표준 daemon-installer 와 동일 로직으로 exe 끝에 토큰 append.
+    데몬 swap 후 자동으로 새 토큰 추출 → 새 long-lived 키 갱신 → 옛 키 자연 폐기.
+    """
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if not tenant_id:
+        raise HTTPException(401, "유효한 X-Api-Key 필요")
+    now = datetime.now(_UTC)
+    raw_token = secrets.token_hex(32)
+    install_record = SambaExtensionKey(
+        id=_new_ulid(),
+        key_hash=_hash_key(raw_token),
+        tenant_id=tenant_id,
+        user_id=None,
+        label="install-token (self-update)",
+        device_id=None,
+        is_install_token=True,
+        created_at=now,
+        expires_at=now + _install_token_ttl(),
+    )
+    session.add(install_record)
+    await session.commit()
+
+    token_marker = f"\n#SAMBA_TOKEN={raw_token}#\n".encode()
+    client = httpx.AsyncClient(follow_redirects=True, timeout=300.0)
+    try:
+        upstream_req = client.build_request("GET", _DAEMON_EXE_URL)
+        upstream = await client.send(upstream_req, stream=True)
+        if upstream.status_code != 200:
+            await upstream.aclose()
+            await client.aclose()
+            raise HTTPException(
+                502, f"self-update 다운로드 실패: {upstream.status_code}"
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        await client.aclose()
+        raise HTTPException(502, f"self-update 다운로드 실패: {exc}")
+
+    async def _stream():
+        try:
+            async for chunk in upstream.aiter_bytes(1 << 16):
+                yield chunk
+            yield token_marker
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
+    headers = {"Content-Disposition": 'attachment; filename="samba.exe"'}
+    _clen = upstream.headers.get("content-length")
+    if _clen:
+        headers["Content-Length"] = str(int(_clen) + len(token_marker))
+    return StreamingResponse(
+        _stream(), media_type="application/octet-stream", headers=headers
+    )
 
 
 class _ExchangeRequest(BaseModel):
