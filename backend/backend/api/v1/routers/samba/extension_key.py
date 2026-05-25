@@ -176,17 +176,35 @@ async def daemon_installer(
     ctx: _UserCtx = Depends(_get_user_ctx),
     session: AsyncSession = Depends(get_write_session_dependency),
 ):
-    """데몬 설치 exe 다운로드 (JWT 필요).
+    """데몬 설치 exe 다운로드 (JWT 필요) — 자동 등록형.
 
-    단일 파일 `samba.exe` — 토큰/PC명 임베드 없음. 어떤 PC에서도 동일 파일 사용 가능.
-    데몬 인증용 API 키는 별도 엔드포인트(`/extension-keys/daemon-key/issue`)에서 발급받아
-    데몬 첫 실행 시 입력하거나 `%APPDATA%\\samba-autotune-daemon\\api_key.txt` 에 저장.
+    SaaS 1클릭 자동화 (2026-05-25): 다운로드 시 1시간 짜리 install-token 발급 → 토큰
+    마커를 exe 파일 끝에 append (`#SAMBA_TOKEN=<token>#`). 데몬 첫 실행 시 자기 exe
+    파일 끝을 읽어 토큰 추출 → `/exchange` 호출해 long-lived 키 받고 캐시. 사용자
+    수동 키 입력·붙여넣기 불필요.
     """
-    _ = ctx, session  # 인증 게이트용 (실제 사용 X, 로그인 사용자만 다운로드 허용)
-    fname = "samba.exe"
+    _ = request
+    now = datetime.now(_UTC)
+    # 1) install-token 발급
+    raw_token = secrets.token_hex(32)
+    install_record = SambaExtensionKey(
+        id=_new_ulid(),
+        key_hash=_hash_key(raw_token),
+        tenant_id=ctx.tenant_id,
+        user_id=ctx.user_id,
+        label="install-token",
+        device_id=None,
+        is_install_token=True,
+        created_at=now,
+        expires_at=now + _install_token_ttl(),
+    )
+    session.add(install_record)
+    await session.commit()
 
-    # 350MB exe 를 메모리에 통째로 올리지 않고 청크 스트리밍 — 메모리 안전 + 즉시 응답 시작.
-    # (r.content 통짜 로드 시 fetch+로드 동안 응답이 안 와 브라우저 다운로드가 멈춤)
+    fname = "samba.exe"
+    # 토큰 마커 — 데몬이 exe 파일 마지막에서 찾는다. 충돌 회피용 prefix/suffix.
+    token_marker = f"\n#SAMBA_TOKEN={raw_token}#\n".encode()
+
     client = httpx.AsyncClient(follow_redirects=True, timeout=300.0)
     try:
         req = client.build_request("GET", _DAEMON_EXE_URL)
@@ -207,17 +225,26 @@ async def daemon_installer(
         try:
             async for chunk in upstream.aiter_bytes(1 << 16):
                 yield chunk
+            # exe 끝에 토큰 마커 append — 데몬이 자기 exe 끝에서 추출
+            yield token_marker
         finally:
             await upstream.aclose()
             await client.aclose()
 
     headers = {"Content-Disposition": f'attachment; filename="{fname}"'}
+    # 토큰 append 로 길이 늘어남 — 원본 content-length 사용 시 truncate 발생
     _clen = upstream.headers.get("content-length")
     if _clen:
-        headers["Content-Length"] = _clen
+        headers["Content-Length"] = str(int(_clen) + len(token_marker))
     return StreamingResponse(
         _stream(), media_type="application/octet-stream", headers=headers
     )
+
+
+def _install_token_ttl():
+    from datetime import timedelta
+
+    return timedelta(hours=1)
 
 
 # ── 데몬 API 키 발급 (v1.3.0+) ──────────────────────────────────────────

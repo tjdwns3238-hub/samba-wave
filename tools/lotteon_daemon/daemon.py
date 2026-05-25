@@ -78,7 +78,7 @@ except ImportError:
 # ====================================================================
 # 데몬 버전 — build.ps1 가 갱신. 자동 업데이트 비교 기준.
 # ====================================================================
-DAEMON_VERSION = "1.3.0"
+DAEMON_VERSION = "1.4.1"
 
 
 # ====================================================================
@@ -510,11 +510,28 @@ def _extract_did_from_argv_or_exename() -> str | None:
 
 
 def _extract_install_token() -> str:
-    """파일명/argv 에서 install-token(`_it-<hex>`) 추출.
+    """install-token 추출 — 우선순위: 자기 exe tail 마커 > 파일명/argv `_it-<hex>`.
 
-    다운로드 프록시가 exe 파일명에 `_it-<token>.exe` 형식으로 박는다('=' 회피).
-    데몬 첫 실행 시 이 토큰을 long-lived 키와 교환(exchange)한다.
+    1. SaaS 자동등록 (v1.3.1+): 백엔드 `/daemon-installer` 가 exe 파일 끝에 마커
+       `#SAMBA_TOKEN=<hex>#` append → 데몬이 자기 exe 마지막 8KB 에서 정규식 추출.
+       파일명/PC명 노출 0, 사용자 입력 0. Datadog Agent 패턴.
+    2. 레거시 (v1.2.x 이하): 파일명에 `_it-<token>.exe` 박혀있던 시기 호환.
     """
+    # 1. 자기 exe tail 마커
+    try:
+        exe_path = Path(sys.executable)
+        if exe_path.exists() and exe_path.is_file():
+            with open(exe_path, "rb") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                f.seek(max(0, size - 8192))
+                tail = f.read().decode("utf-8", errors="ignore")
+            m = re.search(r"#SAMBA_TOKEN=([0-9a-f]{32,})#", tail)
+            if m:
+                return m.group(1)
+    except Exception:
+        pass
+    # 2. 레거시 파일명/argv `_it-<hex>`
     candidates: list[str] = []
     try:
         candidates.append(Path(sys.executable).name)
@@ -1487,6 +1504,201 @@ async def fetch_autotune_concurrency(
     return {}, None
 
 
+async def post_cancel_result(
+    client: httpx.AsyncClient,
+    backend_url: str,
+    request_id: str,
+    data: dict[str, Any],
+    api_key: str,
+) -> bool:
+    """발주취소 결과를 /sourcing/cancel-result 로 전송.
+
+    body = {requestId, success, cancelled, alreadyShipped, reason, error}
+    """
+    url = f"{backend_url}/api/v1/samba/proxy/sourcing/cancel-result"
+    body = {
+        "requestId": request_id,
+        "success": bool(data.get("success")),
+        "cancelled": bool(data.get("cancelled")),
+        "alreadyShipped": bool(data.get("alreadyShipped")),
+        "reason": data.get("reason") or "",
+        "error": data.get("error") or "",
+    }
+    headers = {"X-Api-Key": api_key}
+    for attempt in range(len(_RETRY_DELAYS) + 1):
+        try:
+            r = await client.post(url, json=body, headers=headers, timeout=15.0)
+        except Exception as exc:
+            if attempt < len(_RETRY_DELAYS):
+                await asyncio.sleep(_RETRY_DELAYS[attempt])
+                continue
+            logger.warning("취소 결과전송 예외 (포기): %s", exc)
+            return False
+        if r.is_success:
+            return True
+        if r.status_code in _RETRY_STATUSES and attempt < len(_RETRY_DELAYS):
+            await asyncio.sleep(_RETRY_DELAYS[attempt])
+            continue
+        logger.warning(
+            "취소 결과전송 실패 status=%s body=%s", r.status_code, r.text[:200]
+        )
+        return False
+    return False
+
+
+async def extract_cancel(
+    page: Page, url: str, handler: SiteHandler
+) -> dict[str, Any]:
+    """주문상세/취소 페이지 진입 + 취소 실행 → {success, cancelled, alreadyShipped, ...}.
+
+    단일 페이지: goto → cancel_js evaluate.
+    2단계: goto → cancel_click_js → 네비 대기 → cancel_js.
+    """
+    if not handler.cancel_js:
+        return {"success": False, "error": f"{handler.site} cancel_js 미정의"}
+    try:
+        await page.goto(url, wait_until="domcontentloaded", timeout=20_000)
+    except Exception as exc:
+        return {"success": False, "error": f"cancel goto 예외: {str(exc)[:120]}"}
+
+    if handler.cancel_two_hop:
+        try:
+            click_res = await page.evaluate(handler.cancel_click_js)
+        except Exception as exc:
+            return {"success": False, "error": f"cancel click 예외: {str(exc)[:120]}"}
+        if isinstance(click_res, dict) and click_res.get("alreadyShipped"):
+            return {
+                "success": True,
+                "cancelled": False,
+                "alreadyShipped": True,
+                "reason": "이미 발송 — 취소 불가",
+            }
+        try:
+            if handler.cancel_trace_url_glob:
+                await page.wait_for_url(handler.cancel_trace_url_glob, timeout=20_000)
+            else:
+                await page.wait_for_load_state("domcontentloaded", timeout=20_000)
+        except Exception as exc:
+            return {"success": False, "error": f"cancel 네비 대기 예외: {str(exc)[:120]}"}
+
+    try:
+        data = await page.evaluate(handler.cancel_js)
+    except Exception as exc:
+        return {"success": False, "error": f"cancel evaluate 예외: {str(exc)[:120]}"}
+
+    return (
+        data
+        if isinstance(data, dict)
+        else {"success": False, "error": "cancel evaluate 결과 비dict"}
+    )
+
+
+async def process_cancel_order_job(
+    page: Page,
+    client: httpx.AsyncClient,
+    backend_url: str,
+    job: dict[str, Any],
+    state: DaemonState,
+    api_key: str,
+    device_id: str,
+) -> None:
+    """발주취소 잡 1개 처리 — 계정 로그인 → 취소 페이지 진입 → 취소 실행 → 회신."""
+    request_id = job.get("requestId", "")
+    site = job.get("site", "")
+    url = job.get("url", "")
+    account_id = job.get("sourcingAccountId", "") or ""
+    sourcing_order_number = job.get("sourcingOrderNumber", "") or ""
+
+    _ALIAS = {"ABCMART": "ABCmart", "GRANDSTAGE": "GrandStage"}
+    handler_key = _ALIAS.get(site.upper(), site)
+    handler = SITE_HANDLERS.get(handler_key)
+
+    if not handler or not handler.cancel_js:
+        await post_cancel_result(
+            client,
+            backend_url,
+            request_id,
+            {"success": False, "error": f"daemon cancel 미지원: {site}"},
+            api_key,
+        )
+        state.record_failure()
+        return
+
+    if not url and handler.cancel_url_template:
+        url = handler.cancel_url_template.replace("{ord_no}", sourcing_order_number)
+    if not url:
+        await post_cancel_result(
+            client,
+            backend_url,
+            request_id,
+            {
+                "success": False,
+                "error": f"cancel url 미정 (ord={sourcing_order_number})",
+            },
+            api_key,
+        )
+        state.record_failure()
+        return
+
+    logger.info(
+        "[취소] 처리 시작 site=%s req=%s acc=%s ord=%s",
+        site,
+        request_id,
+        account_id or "-",
+        sourcing_order_number,
+    )
+    t0 = time.time()
+
+    if handler.cancel_requires_login:
+        login_ok = await ensure_logged_in_as_account(
+            page, client, backend_url, device_id, api_key, handler, account_id
+        )
+        if not login_ok:
+            await post_cancel_result(
+                client,
+                backend_url,
+                request_id,
+                {
+                    "success": False,
+                    "error": f"{site} 계정 로그인 실패 (acc={account_id})",
+                },
+                api_key,
+            )
+            state.record_failure()
+            return
+
+    try:
+        data = await asyncio.wait_for(extract_cancel(page, url, handler), timeout=90.0)
+    except asyncio.TimeoutError:
+        data = {"success": False, "error": "daemon 취소 추출 타임아웃"}
+    except Exception as exc:
+        data = {"success": False, "error": f"daemon 취소 예외: {str(exc)[:120]}"}
+
+    await post_cancel_result(client, backend_url, request_id, data, api_key)
+    dt = time.time() - t0
+    if data.get("cancelled"):
+        logger.info(
+            "[취소] 완료 req=%s ord=%s (%.1fs)",
+            request_id,
+            sourcing_order_number,
+            dt,
+        )
+        state.record_success()
+    elif data.get("alreadyShipped"):
+        logger.info(
+            "[취소] 이미발송 req=%s ord=%s (%.1fs)",
+            request_id,
+            sourcing_order_number,
+            dt,
+        )
+        state.record_success()
+    else:
+        logger.info(
+            "[취소] 실패 req=%s err=%s (%.1fs)", request_id, data.get("error"), dt
+        )
+        state.record_failure()
+
+
 async def process_job(
     page: Page,
     client: httpx.AsyncClient,
@@ -1509,6 +1721,13 @@ async def process_job(
     # 송장(tracking) 잡 — 별도 흐름 (계정 로그인 + 배송조회 스크랩)
     if jtype == "tracking":
         await process_tracking_job(
+            page, client, backend_url, job, state, api_key, device_id
+        )
+        return None
+
+    # 발주취소(cancel_order) — 계정 로그인 + 주문상세 진입 + 취소 실행
+    if jtype == "cancel_order":
+        await process_cancel_order_job(
             page, client, backend_url, job, state, api_key, device_id
         )
         return None

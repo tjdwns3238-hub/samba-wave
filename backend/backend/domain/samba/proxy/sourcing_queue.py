@@ -22,6 +22,7 @@ _JOB_TTL_SEC: dict[str, int] = {
     "detail": 180,
     "tracking": 3600,
     "reward": 3600,
+    "cancel_order": 1800,
 }
 
 # 적립 액션별 진입 URL — 확장앱이 잡 받으면 이 URL의 탭을 열고 content script 주입.
@@ -377,6 +378,54 @@ class SourcingQueue:
         _owner_tag = f" owner={owner_device_id}" if owner_device_id else ""
         logger.info(
             f"[소싱큐] 적립 추가: {site} action={action} acct={sourcing_account_id} "
+            f"(id={request_id}){_owner_tag}"
+        )
+        return request_id, future
+
+    @classmethod
+    async def add_cancel_order_job(
+        cls,
+        site: str,
+        sourcing_order_number: str,
+        order_id: str,
+        *,
+        sourcing_account_id: str = "",
+        url: str = "",
+        owner_device_id: str | None = None,
+    ) -> tuple[str, asyncio.Future[Any]]:
+        """소싱처 발주 취소 작업 큐에 추가 (헤드리스 데몬 처리).
+
+        - tracking 잡과 동일 패턴 — 데몬 우선 라우팅, 없으면 확장앱 폴백.
+        - 결과 라우터: POST /api/v1/samba/proxy/sourcing/cancel-result
+        - 결과 스키마: {success, cancelled, alreadyShipped?, reason?, error?}
+        - 사이트별 cancel_js 미정의면 데몬이 "미지원" 실패 회신 — 부작용 없음.
+        """
+        cls._ensure_accepting_jobs()
+        if not sourcing_order_number:
+            raise ValueError("sourcing_order_number 필수")
+        request_id = str(uuid.uuid4())[:8]
+        loop = asyncio.get_event_loop()
+        future: asyncio.Future[Any] = loop.create_future()
+        if owner_device_id is None:
+            from backend.domain.samba.proxy.daemon_pool import pick_daemon_owner
+
+            owner_device_id = pick_daemon_owner(site) or get_autotune_owner(site)
+
+        job: dict[str, Any] = {
+            "requestId": request_id,
+            "site": site,
+            "type": "cancel_order",
+            "url": url or "",
+            "orderId": order_id,
+            "sourcingOrderNumber": sourcing_order_number,
+            "sourcingAccountId": sourcing_account_id or "",
+            "ownerDeviceId": owner_device_id or "",
+        }
+        cls.resolvers[request_id] = future
+        await _db_insert_job(job, "cancel_order")
+        _owner_tag = f" owner={owner_device_id}" if owner_device_id else ""
+        logger.info(
+            f"[소싱큐] 발주취소 추가: {site} ord={sourcing_order_number} "
             f"(id={request_id}){_owner_tag}"
         )
         return request_id, future

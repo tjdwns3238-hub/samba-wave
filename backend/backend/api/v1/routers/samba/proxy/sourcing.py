@@ -207,10 +207,10 @@ async def sourcing_collect_queue(request: Request) -> Any:
 # ====================================================================
 
 # build/release 시 갱신. 데몬이 시작 시 비교하여 신버전이면 자기 종료(다음 시작 시 갱신).
-AUTOTUNE_DAEMON_LATEST_VERSION = "1.3.0"
+AUTOTUNE_DAEMON_LATEST_VERSION = "1.4.1"
 AUTOTUNE_DAEMON_DOWNLOAD_URL = (
     "https://github.com/sbk0674-web/samba-wave/releases/download/"
-    "samba-daemon-v1.3.0/samba.exe"
+    "samba-daemon-v1.4.1/samba.exe"
 )
 
 
@@ -408,6 +408,128 @@ async def sourcing_tracking_result(body: dict[str, Any]) -> dict[str, Any]:
         dry_run=True,
     )
     return res
+
+
+@sourcing_queue_router.post("/sourcing/cancel-result")
+async def sourcing_cancel_result(body: dict[str, Any]) -> dict[str, Any]:
+    """데몬/확장앱이 발주취소 결과 회신 (인증 불필요, X-Api-Key 사용).
+
+    body = {
+      requestId: str,
+      success: bool,
+      cancelled: bool,
+      alreadyShipped?: bool,
+      reason?: str,
+      error?: str,
+    }
+
+    - cancelled=True  → order.status='cancelled', shipping_status='취소완료'
+    - alreadyShipped=True → notes 에 "소싱처 이미 발송 — 수동 처리 필요" append, status 변경 없음
+    - 그 외(success=False) → notes 에 실패 사유 append, status 변경 없음
+    """
+    from datetime import datetime, timezone
+    from sqlalchemy import update
+    from backend.db.orm import get_write_session
+    from backend.domain.samba.order.model import SambaOrder
+    from backend.domain.samba.proxy.sourcing_queue import SourcingQueue
+    from backend.domain.samba.sourcing_job.model import SambaSourcingJob
+    from backend.utils.logger import logger
+    from fastapi import HTTPException
+
+    request_id = (body.get("requestId") or "").strip()
+    if not request_id:
+        raise HTTPException(status_code=400, detail="requestId 누락")
+
+    success = bool(body.get("success"))
+    cancelled = bool(body.get("cancelled"))
+    already_shipped = bool(body.get("alreadyShipped"))
+    reason = (body.get("reason") or "").strip()
+    error = (body.get("error") or "").strip()
+
+    SourcingQueue.resolve_job(
+        request_id,
+        {
+            "success": success,
+            "cancelled": cancelled,
+            "alreadyShipped": already_shipped,
+            "reason": reason,
+            "error": error,
+        },
+    )
+
+    # 잡 payload 에서 orderId 회수
+    order_id = ""
+    sourcing_order_number = ""
+    site = ""
+    try:
+        async with get_write_session() as _sess:
+            _row = await _sess.get(SambaSourcingJob, request_id)
+            if _row and isinstance(_row.payload, dict):
+                order_id = (_row.payload.get("orderId") or "").strip()
+                sourcing_order_number = (
+                    _row.payload.get("sourcingOrderNumber") or ""
+                ).strip()
+                site = (_row.payload.get("site") or "").strip()
+    except Exception as _e:
+        logger.warning(f"[cancel-result] 잡 조회 실패 req={request_id}: {_e}")
+
+    if not order_id:
+        return {"ok": True, "applied": False, "reason": "orderId 미상"}
+
+    now_kst_tag = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    note_line = ""
+    update_values: dict[str, Any] = {}
+
+    if cancelled:
+        note_line = (
+            f"[{now_kst_tag}] 소싱처 자동취소 완료 ({site} ord={sourcing_order_number})"
+        )
+        update_values = {
+            "status": "cancelled",
+            "shipping_status": "취소완료",
+            "updated_at": datetime.now(timezone.utc),
+        }
+    elif already_shipped:
+        note_line = (
+            f"[{now_kst_tag}] 소싱처 이미 발송 — 자동취소 불가, 수동 처리 필요 "
+            f"({site} ord={sourcing_order_number})"
+        )
+    else:
+        note_line = (
+            f"[{now_kst_tag}] 소싱처 자동취소 실패: {error or reason or 'unknown'} "
+            f"({site} ord={sourcing_order_number})"
+        )
+
+    try:
+        async with get_write_session() as sess:
+            ord_row = await sess.get(SambaOrder, order_id)
+            if not ord_row:
+                return {"ok": True, "applied": False, "reason": "order 없음"}
+            prev_notes = ord_row.notes or ""
+            new_notes = (
+                (prev_notes + "\n" + note_line).strip() if prev_notes else note_line
+            )
+            update_values["notes"] = new_notes
+            await sess.execute(
+                update(SambaOrder)
+                .where(SambaOrder.id == order_id)
+                .values(**update_values)
+            )
+            await sess.commit()
+    except Exception as e:
+        logger.warning(f"[cancel-result] order 업데이트 실패 id={order_id}: {e}")
+        return {"ok": False, "error": str(e)}
+
+    logger.info(
+        f"[cancel-result] req={request_id} order={order_id} cancelled={cancelled} "
+        f"alreadyShipped={already_shipped}"
+    )
+    return {
+        "ok": True,
+        "applied": True,
+        "cancelled": cancelled,
+        "alreadyShipped": already_shipped,
+    }
 
 
 @sourcing_queue_router.get("/autotune/concurrency")

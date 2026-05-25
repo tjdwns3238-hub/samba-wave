@@ -48,6 +48,18 @@ class SiteHandler:
     tracking_trace_url_glob: str = ""
     # 가격수집(detail) 지원 여부. False 면 송장 전용 — 기본 active_sites/startup 로그인에서 제외.
     detail_supported: bool = True
+    # ── 발주취소(cancel_order) 전용 ──
+    # 주문상세/취소 페이지 URL 템플릿 — {ord_no} 치환. 비어있으면 job.url 그대로 사용.
+    cancel_url_template: str = ""
+    # 취소 실행 IIFE. 반환: {success, cancelled, alreadyShipped?, reason?, error?}.
+    # 사이트별 실제 UX 는 웨일 CDP 실측 후 작성 필수 (추측 금지).
+    # 빈 값이면 데몬이 "미지원" 회신 — 부작용 없음.
+    cancel_js: str = ""
+    cancel_requires_login: bool = True
+    # 2단계 취소(주문상세→취소버튼 클릭→확인 페이지→최종 확인).
+    cancel_two_hop: bool = False
+    cancel_click_js: str = ""
+    cancel_trace_url_glob: str = ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────

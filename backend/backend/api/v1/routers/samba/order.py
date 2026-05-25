@@ -2219,6 +2219,60 @@ async def approve_cancel(
 
 
 # ══════════════════════════════════════════════
+# 소싱처 발주 자동취소 (헤드리스 데몬)
+# ══════════════════════════════════════════════
+
+
+@router.post("/{order_id}/sourcing-cancel")
+async def sourcing_cancel_order(
+    order_id: str,
+    session: AsyncSession = Depends(get_write_session_dependency),
+):
+    """소싱처 발주 헤드리스 자동취소 — 운영자 수동 트리거.
+
+    가드:
+      - sourcing_order_number 있어야 함 (실제 발주 완료된 주문)
+      - shipping_status가 '배송중'/'배송완료' 면 차단 (이미 발송)
+    동작:
+      - SourcingQueue 에 cancel_order 잡 enqueue → 데몬 처리 → cancel-result 콜백
+      - 결과는 비동기. 즉시 {jobId, accepted: True} 반환.
+    """
+    from backend.domain.samba.order.service import SambaOrderService
+    from backend.domain.samba.proxy.sourcing_queue import SourcingQueue
+
+    svc = SambaOrderService(session)
+    order = await svc.get_order(order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="주문 없음")
+    if not (order.sourcing_order_number or "").strip():
+        raise HTTPException(
+            status_code=400, detail="소싱처 발주번호 없음 — 발주 안 된 주문"
+        )
+    blocked_shipping = ("배송중", "배송완료", "출고완료", "구매확정")
+    if (order.shipping_status or "").strip() in blocked_shipping:
+        raise HTTPException(
+            status_code=400,
+            detail=f"이미 발송 단계({order.shipping_status}) — 소싱처 자동취소 불가",
+        )
+
+    site = (order.source_site or "").strip()
+    if not site:
+        raise HTTPException(status_code=400, detail="source_site 미상")
+
+    request_id, _future = await SourcingQueue.add_cancel_order_job(
+        site=site,
+        sourcing_order_number=order.sourcing_order_number,
+        order_id=order_id,
+        sourcing_account_id=order.sourcing_account_id or "",
+    )
+    logger.info(
+        f"[소싱취소] 잡 enqueue order={order_id} site={site} "
+        f"ord={order.sourcing_order_number} req={request_id}"
+    )
+    return {"accepted": True, "jobId": request_id, "site": site}
+
+
+# ══════════════════════════════════════════════
 # 판매자 주도 취소 (재고부족, 가격변동 등)
 # ══════════════════════════════════════════════
 
