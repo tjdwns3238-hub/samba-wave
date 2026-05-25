@@ -1217,7 +1217,56 @@ async def apply_ai_tags(
             # 개별 상품 (그룹 없는 경우)
 
         # SEO 키워드: 프론트에서 수정한 값 우선, 없으면 자동 추출 (태그와 중복 방지)
-        seo_kws: list[str] = group.get("seo_keywords", [])
+        seo_kws: list[str] = list(group.get("seo_keywords", []) or [])
+
+        # 브랜드/소싱처 금지어 필터 — 프론트 우회·구버전 preview 값으로
+        # 경쟁 브랜드명("나이키","뉴발란스" 등)이 SEO에 섞이는 사고 방지.
+        # 사용자 정의 스마트스토어 금지태그(ss_banned)+DB 등록 브랜드도 함께 차단.
+        try:
+            _ss_banned_set, _db_brands = await _load_tag_filter_data(session)
+        except Exception:
+            _ss_banned_set, _db_brands = set(), set()
+        _self_brand_lower = ""
+        try:
+            for _p in products:
+                _b = getattr(_p, "brand", None)
+                if _b:
+                    _self_brand_lower = str(_b).lower().replace(" ", "")
+                    break
+        except Exception:
+            pass
+        _brand_block_lower = {b.lower().replace(" ", "") for b in _BRAND_BANNED}
+        _site_block_lower = {s.lower().replace(" ", "") for s in _SOURCING_SITE_BANNED}
+        _db_brand_block_lower = {b.lower().replace(" ", "") for b in _db_brands if b}
+        _blocked_lower = (
+            _brand_block_lower
+            | _site_block_lower
+            | _ss_banned_set
+            | _db_brand_block_lower
+        )
+        # 자기 브랜드는 차단 대상에서 제외 (자기 브랜드 SEO는 정상 허용)
+        if _self_brand_lower:
+            _blocked_lower.discard(_self_brand_lower)
+
+        def _seo_allowed(word: str) -> bool:
+            wl = (word or "").lower().replace(" ", "")
+            if not wl:
+                return False
+            if wl in _blocked_lower:
+                return False
+            # 부분일치 차단 (예: "나이키신발" 같은 결합어) — 자기 브랜드 토큰은 허용
+            for token in _BRAND_PARTIAL_MATCH:
+                tl = token.lower().replace(" ", "")
+                if not tl:
+                    continue
+                if _self_brand_lower and tl == _self_brand_lower:
+                    continue
+                if tl in wl:
+                    return False
+            return True
+
+        seo_kws = [w for w in seo_kws if _seo_allowed(w)]
+
         if not seo_kws:
             tag_lower_set = {t.lower().replace(" ", "") for t in tags}
             ordered = list(tags[10:]) + list(tags[:10])
@@ -1225,7 +1274,12 @@ async def apply_ai_tags(
                 for word in kw.split():
                     w = word.strip()
                     wl = w.lower().replace(" ", "")
-                    if len(w) >= 2 and wl not in tag_lower_set and w not in seo_kws:
+                    if (
+                        len(w) >= 2
+                        and wl not in tag_lower_set
+                        and w not in seo_kws
+                        and _seo_allowed(w)
+                    ):
                         seo_kws.append(w)
                         if len(seo_kws) >= 2:
                             break
