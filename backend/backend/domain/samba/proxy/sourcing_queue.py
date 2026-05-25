@@ -518,6 +518,103 @@ class SourcingQueue:
         return request_id, future
 
     @classmethod
+    async def maybe_trigger_auto_cancel(
+        cls,
+        *,
+        order_id: str,
+        source_site: str | None,
+        sourcing_order_number: str | None,
+        sourcing_account_id: str | None,
+        new_status: str | None,
+        shipping_status: str | None,
+        prev_status: str | None = None,
+    ) -> bool:
+        """마켓 상태가 cancel_requested 로 진입하면 소싱처 자동 취소 잡 발행.
+
+        호출 지점: 마켓 폴러/동기화 코드에서 order.status 가 cancel_requested 로
+        갱신된 직후. 다음 가드를 모두 통과해야 잡 발행:
+
+        - new_status 가 cancel_requested 또는 cancelling
+        - prev_status 가 new_status 와 동일하면 skip (중복 트리거 방지)
+        - source_site / sourcing_order_number 미존재 시 skip (아직 발주 안 된 주문)
+        - shipping_status 가 배송 진행 키워드 포함 시 skip (이미 발송됨 → 자동 취소 불가)
+        - 같은 (source_site, sourcing_order_number) 의 pending/dispatched cancel_order
+          잡이 이미 존재하면 skip (멱등성)
+
+        반환: True = 잡 발행됨, False = skip.
+        """
+        from backend.domain.samba.order.model import (
+            SHIPPED_SHIPPING_STATUS_KEYWORDS,
+        )
+
+        normalized = (new_status or "").strip().lower()
+        if normalized not in {"cancel_requested", "cancelling"}:
+            return False
+        if prev_status and prev_status.strip().lower() == normalized:
+            return False
+        site = (source_site or "").strip()
+        ord_no = (sourcing_order_number or "").strip()
+        if not site or not ord_no:
+            return False
+
+        ship = shipping_status or ""
+        for kw in SHIPPED_SHIPPING_STATUS_KEYWORDS:
+            if kw in ship:
+                logger.info(
+                    f"[자동취소] order={order_id} 배송단계({ship!r}) — 자동 취소 skip"
+                )
+                return False
+
+        # 중복 가드: 동일 (site, ord_no) cancel_order 잡 in-flight 검사
+        from sqlalchemy import and_, or_, select
+
+        try:
+            async with get_write_session() as session:
+                stmt = (
+                    select(SambaSourcingJob.request_id)
+                    .where(
+                        and_(
+                            SambaSourcingJob.job_type == "cancel_order",
+                            SambaSourcingJob.site == site,
+                            or_(
+                                SambaSourcingJob.status == "pending",
+                                SambaSourcingJob.status == "dispatched",
+                            ),
+                            SambaSourcingJob.payload["sourcingOrderNumber"].astext
+                            == ord_no,
+                        )
+                    )
+                    .limit(1)
+                )
+                existing = (await session.execute(stmt)).scalar_one_or_none()
+                if existing is not None:
+                    logger.info(
+                        f"[자동취소] order={order_id} 잡 이미 존재({existing}) — skip"
+                    )
+                    return False
+        except Exception as exc:
+            logger.warning(f"[자동취소] 중복 가드 조회 실패 (계속): {exc}")
+
+        try:
+            await cls.add_cancel_order_job(
+                site=site,
+                sourcing_order_number=ord_no,
+                order_id=order_id,
+                sourcing_account_id=sourcing_account_id or "",
+            )
+            logger.info(
+                f"[자동취소] order={order_id} site={site} ord={ord_no} 잡 발행 완료"
+            )
+            return True
+        except RuntimeError as exc:
+            # 데몬 미등록 / 확장앱 미연결 — 운영자 수동 처리 필요
+            logger.warning(f"[자동취소] order={order_id} 발행 실패: {exc}")
+            return False
+        except Exception as exc:
+            logger.exception(f"[자동취소] order={order_id} 예외: {exc}")
+            return False
+
+    @classmethod
     async def get_next_job(
         cls,
         device_id: str | None = None,

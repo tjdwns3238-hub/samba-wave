@@ -3375,6 +3375,59 @@ class AutotuneStartRequest(BaseModel):
     device_id: Optional[str] = None
 
 
+async def _add_running_device(dev: str) -> None:
+    """배포/재시작 시 자동 복원용 — 실행 중 PC device set 에 dev 추가 (멀티 PC).
+
+    legacy autotune_owner_device_id 는 단일 PC만 저장 → 멀티 PC 환경에서
+    배포 후 1개 PC 만 자동 시작되고 나머지는 stop 상태로 SSG/ABC 분담 owner=None →
+    "데몬 미등록" 잡 발행 실패. set 으로 저장해 모든 PC 복원.
+    """
+    import json
+    from backend.db.orm import get_write_session
+    from backend.api.v1.routers.samba.proxy import _get_setting, _set_setting
+
+    try:
+        async with get_write_session() as session:
+            raw = (await _get_setting(session, "autotune_running_devices")) or "[]"
+            try:
+                current = set(json.loads(raw)) if isinstance(raw, str) else set()
+            except Exception:
+                current = set()
+            current.add(dev)
+            await _set_setting(
+                session,
+                "autotune_running_devices",
+                json.dumps(sorted(current)),
+            )
+            await session.commit()
+    except Exception as e:
+        logger.warning(f"[오토튠] running_devices 추가 실패 dev={dev}: {e}")
+
+
+async def _remove_running_device(dev: str) -> None:
+    """실행 중 PC device set 에서 dev 제거 (정지 시)."""
+    import json
+    from backend.db.orm import get_write_session
+    from backend.api.v1.routers.samba.proxy import _get_setting, _set_setting
+
+    try:
+        async with get_write_session() as session:
+            raw = (await _get_setting(session, "autotune_running_devices")) or "[]"
+            try:
+                current = set(json.loads(raw)) if isinstance(raw, str) else set()
+            except Exception:
+                current = set()
+            current.discard(dev)
+            await _set_setting(
+                session,
+                "autotune_running_devices",
+                json.dumps(sorted(current)),
+            )
+            await session.commit()
+    except Exception as e:
+        logger.warning(f"[오토튠] running_devices 제거 실패 dev={dev}: {e}")
+
+
 async def _save_autotune_state(enabled: bool, device_id: str = ""):
     """DB에 오토튠 ON/OFF 상태 + 소유자 deviceId 저장.
 
@@ -3497,23 +3550,49 @@ async def auto_start_if_enabled():
 
             from backend.domain.samba.collector.refresher import clear_bulk_cancel
 
-            if not _is_pc_running(saved_device_id):
-                _site_empty_skip_until.clear()
-                clear_bulk_cancel("autotune")
-                clear_bulk_cancel("transmit")
-                ev = _get_pc_event(saved_device_id)
+            # 멀티 PC 복원 — autotune_running_devices set 의 모든 PC 자동 재시작
+            # (legacy saved_device_id 1개만 시작하면 다른 PC SSG/ABC owner=None →
+            # "데몬 미등록" 잡 발행 실패. 2026-05-26 SSG 800건 실패 사고 차단.)
+            import json as _json
+
+            async with get_read_session() as _ds:
+                _raw_devs = await _get_setting(_ds, "autotune_running_devices") or "[]"
+            try:
+                _running_devs = (
+                    set(_json.loads(_raw_devs)) if isinstance(_raw_devs, str) else set()
+                )
+            except Exception:
+                _running_devs = set()
+            # legacy 단일 device 도 포함
+            _running_devs.add(saved_device_id)
+
+            _site_empty_skip_until.clear()
+            clear_bulk_cancel("autotune")
+            clear_bulk_cancel("transmit")
+            _started_count = 0
+            for _dev in sorted(_running_devs):
+                _dev = (_dev or "").strip()
+                if not _dev:
+                    continue
+                if _is_pc_running(_dev):
+                    continue
+                ev = _get_pc_event(_dev)
                 ev.set()
-                _pc_cycle_count[saved_device_id] = 0
-                _pc_restart_count[saved_device_id] = 0
-                _pc_main_task[saved_device_id] = asyncio.create_task(
-                    _autotune_loop(saved_device_id),
-                    name=f"autotune-main-{saved_device_id[:8]}",
+                _pc_cycle_count[_dev] = 0
+                _pc_restart_count[_dev] = 0
+                _pc_main_task[_dev] = asyncio.create_task(
+                    _autotune_loop(_dev),
+                    name=f"autotune-main-{_dev[:8]}",
                 )
+                _started_count += 1
+                logger.info("[오토튠] 서버 시작 — 자동 재개 (dev=%s)", _dev[:8])
+            if _started_count:
                 _autotune_enabled_flag = True
-                logger.info(
-                    "[오토튠] 서버 시작 — DB 설정에 따라 자동 시작 (owner=%s)",
-                    saved_device_id[:8],
-                )
+            logger.info(
+                "[오토튠] 자동 복원 완료 — %d PC 재개 (목록 %s)",
+                _started_count,
+                ",".join(d[:8] for d in sorted(_running_devs) if d),
+            )
     except Exception as e:
         logger.warning(f"[오토튠] 자동 시작 실패: {e}")
 
@@ -3757,6 +3836,8 @@ async def autotune_start(
     if not body.target_product_no:
         # 서버 재시작 후 자동 복원 — 한 PC라도 켜져 있었다는 사실 + 마지막 owner deviceId 저장
         await _save_autotune_state(True, dev)
+        # 멀티 PC 복원용 — 실행 중 PC set 에 추가 (배포 후 모든 PC 자동 재시작)
+        await _add_running_device(dev)
     return {"ok": True, "status": "started", "target": "registered"}
 
 
@@ -3805,6 +3886,9 @@ async def autotune_stop(body: AutotuneStopRequest = AutotuneStopRequest()):
         _main.cancel()
     _pc_main_task.pop(dev, None)
     _cleanup_pc_instance(dev)
+
+    # 실행 중 PC set 에서 제거 (배포 후 이 PC 자동 재시작 차단)
+    await _remove_running_device(dev)
 
     # 다른 PC가 한 대도 안 돌고 있으면만 전역 enabled=False (재시작 차단)
     other_running = {d for d, ev in _pc_running.items() if d != dev and ev.is_set()}
