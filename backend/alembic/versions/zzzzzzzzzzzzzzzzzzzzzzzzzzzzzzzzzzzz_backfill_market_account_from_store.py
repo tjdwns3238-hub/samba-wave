@@ -87,7 +87,7 @@ def _build_insert_sql(
     # bare 'store_*' 면 NULL.
     tenant_expr = (
         f"CASE WHEN s.key = '{store_key}' THEN s.tenant_id "
-        f"ELSE COALESCE(s.tenant_id, split_part(s.key, ':', 1)) END"
+        f"ELSE COALESCE(s.tenant_id, split_part(s.key, chr(58), 1)) END"
     )
 
     # md5(random + key + clock) 로 충돌 가능성 낮은 ID 생성 (27자 + 'ma_' prefix = 30자 한계)
@@ -114,7 +114,7 @@ def _build_insert_sql(
         NOW(),
         NOW()
     FROM samba_settings s
-    WHERE (s.key = '{store_key}' OR s.key LIKE '%:{store_key}')
+    WHERE (s.key = '{store_key}' OR s.key LIKE '%' || chr(58) || '{store_key}')
       AND s.value IS NOT NULL
       AND s.value::text NOT IN ('null', '{{}}', '""')
       AND NOT EXISTS (
