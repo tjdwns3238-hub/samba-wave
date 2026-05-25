@@ -61,9 +61,20 @@ def upgrade() -> None:
         """
     )
 
-    # 2) DROP / CREATE INDEX 는 CONCURRENTLY (hot 테이블 AccessExclusiveLock 회피).
-    #    transaction 외부에서 실행 필요 → 명시적 COMMIT.
+    # 2) 인덱스 존재 사전 체크 — pg 의 CREATE INDEX CONCURRENTLY IF NOT EXISTS 는
+    #    이미 있어도 SHARE UPDATE EXCLUSIVE lock 을 시도하여 활성 트랜잭션과 lock_timeout
+    #    충돌. pg_indexes 조회로 컬럼 구성이 이미 새 형태(channel_id 없음)면 SKIP.
+    idx_row = conn.exec_driver_sql(
+        "SELECT indexdef FROM pg_indexes "
+        "WHERE indexname = 'ix_samba_order_lotteon_line'"
+    ).fetchone()
+    if idx_row and "channel_id" not in (idx_row[0] or ""):
+        # 새 컬럼 구성 이미 적용됨 — SKIP
+        return
+
+    # CONCURRENTLY 는 transaction 외부 필요 → 명시적 COMMIT + lock_timeout 무한대기
     conn.exec_driver_sql("COMMIT")
+    conn.exec_driver_sql("SET lock_timeout = 0")
     conn.exec_driver_sql(
         "DROP INDEX CONCURRENTLY IF EXISTS ix_samba_order_lotteon_line"
     )
