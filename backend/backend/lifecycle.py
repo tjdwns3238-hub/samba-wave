@@ -930,7 +930,10 @@ async def _start_elevenst_ghost_reconciler() -> None:
 # 컨테이너 재시작 후 filters 캐시 cold → 첫 호출 100초 → 프론트 fetch 타임아웃 →
 # 체크박스 빈 채로 뜨던 문제. startup 시 백그라운드로 미리 워밍업.
 async def _warmup_filters_cache() -> None:
-    """autotune_get_filters 캐시 백그라운드 워밍업 (2026-05-25, 사용자 요청)."""
+    """autotune_get_filters 캐시 백그라운드 워밍업 (2026-05-25, 사용자 요청).
+
+    + warroom dashboard 캐시도 같이 워밍업 — 페이지 첫 진입 cold start 83초 블로킹 차단.
+    """
     _log = logging.getLogger("backend.lifecycle")
     try:
         from backend.api.v1.routers.samba.collector_autotune import autotune_get_filters
@@ -939,6 +942,18 @@ async def _warmup_filters_cache() -> None:
         _log.info("[lifecycle] filters 캐시 워밍업 완료")
     except Exception as exc:
         _log.warning("[lifecycle] filters 캐시 워밍업 실패(무시): %s", exc)
+
+    # warroom dashboard 캐시 — 사용자 첫 진입 시 빈 구조 대신 실제 데이터 즉시 노출
+    try:
+        from backend.domain.samba.warroom.service import SambaMonitorService
+        from backend.db.orm import get_read_session
+
+        async with get_read_session() as sess:
+            svc = SambaMonitorService(sess)
+            await svc._compute_dashboard_now()
+        _log.info("[lifecycle] warroom dashboard 캐시 워밍업 완료")
+    except Exception as exc:
+        _log.warning("[lifecycle] warroom dashboard 캐시 워밍업 실패(무시): %s", exc)
 
 
 _filters_warmup_task: asyncio.Task | None = None

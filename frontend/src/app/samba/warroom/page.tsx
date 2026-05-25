@@ -722,12 +722,12 @@ export default function WarroomPage() {
   const load = useCallback(async () => {
     // 각 API를 독립 발사 — 도착하는 대로 setState (Promise.all 블로킹 제거).
     // 이벤트 타임라인 3개 (recentEvents/siteChanges/marketChanges) 는 30분 폴링용 별도 useEffect 로 분리.
-    // dashboard 만 도착하면 setLoading(false) → 가장 무거운 API 에 묶이지 않고
-    // 화면이 즉시 표시되고, 나머지 영역은 자기 데이터가 도착하는 대로 채워진다.
+    // setLoading(false) 는 dashboard fetch 와 무관하게 즉시 — 페이지 골격 우선 표시.
+    // dashboard 빈 구조(_warming:true) 도착 시 stats 영역은 자체 폴링으로 데이터 채워짐.
+    setLoading(false)
     monitorApi.dashboard()
       .then(d => { if (d) setStats(d) })
       .catch(() => { /* ignore */ })
-      .finally(() => setLoading(false))
 
     ;(async () => {
       const { getDeviceId } = await import('@/lib/samba/deviceId')
