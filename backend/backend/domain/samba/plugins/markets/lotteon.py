@@ -1247,6 +1247,7 @@ class LotteonPlugin(MarketPlugin):
         _account_extras_snapshot: dict[str, Any] = {}
         _account_api_key_snapshot: str = ""
         _account_tenant_id_snapshot: Optional[str] = None
+        _account_id_snapshot: Optional[str] = None
         if account:
             try:
                 _account_extras_snapshot = (
@@ -1262,6 +1263,10 @@ class LotteonPlugin(MarketPlugin):
                 _account_tenant_id_snapshot = getattr(account, "tenant_id", None)
             except Exception:
                 _account_tenant_id_snapshot = None
+            try:
+                _account_id_snapshot = getattr(account, "id", None)
+            except Exception:
+                _account_id_snapshot = None
 
         api_key = creds.get("apiKey", "")
 
@@ -1664,7 +1669,8 @@ class LotteonPlugin(MarketPlugin):
 
         # 글로벌 설정을 항상 base로 읽고, 계정 설정으로 오버라이드
         # (owhpNo 유무와 무관하게 shippingType 등 발송 설정도 반영되어야 함)
-        # (2026-05-25) store_lotteon 직접 SQL → resolver. tenant_id 는 진입 시점 snapshot 사용.
+        # (2026-05-25) store_lotteon 직접 SQL → resolver. account_id 명시로 그 계정만 해석.
+        # default 계정 폴백 금지: 테트리스/정책으로 결정된 account 의 발송설정만 base 로 사용.
         from backend.domain.samba.account.resolver import resolve_market_creds
 
         _lotteon_setting_val = await resolve_market_creds(
@@ -1672,6 +1678,7 @@ class LotteonPlugin(MarketPlugin):
             _account_tenant_id_snapshot,
             market_type="lotteon",
             store_key="store_lotteon",
+            account_id=_account_id_snapshot,
         )
         try:
             await session.commit()

@@ -80,10 +80,16 @@ async def _send_lotteon(order, account, courier, tracking, session):
         (account.additional_fields or {}).get("apiKey", "") or account.api_key or ""
     )
     if not lo_api_key:
-        # (2026-05-25) store_lotteon 직접 조회 → resolver. account.tenant_id 자동 추출.
+        # (2026-05-25) resolver 위임 — account_id 명시로 그 계정 자격증명만 해석.
+        # default 계정 폴백 금지: 테트리스/정책으로 정해진 계정 결정을 덮어선 안 됨.
         _tid = getattr(account, "tenant_id", None) if account else None
+        _aid = getattr(account, "id", None) if account else None
         _creds = await resolve_market_creds(
-            session, _tid, market_type="lotteon", store_key="store_lotteon"
+            session,
+            _tid,
+            market_type="lotteon",
+            store_key="store_lotteon",
+            account_id=_aid,
         )
         if _creds:
             lo_api_key = _creds.get("apiKey", "")
@@ -113,13 +119,16 @@ async def _send_smartstore(order, account, courier, tracking, session):
     cid = _extras.get("clientId", "") or account.api_key or ""
     csecret = _extras.get("clientSecret", "") or account.api_secret or ""
     if not cid or not csecret:
-        # (2026-05-25) store_smartstore 직접 조회 → resolver. account.tenant_id 자동 추출.
+        # (2026-05-25) resolver 위임 — account_id 명시로 그 계정 자격증명만 해석.
+        # default 계정 폴백 금지: 테트리스/정책으로 정해진 계정 결정을 덮어선 안 됨.
         _tid = getattr(account, "tenant_id", None) if account else None
+        _aid = getattr(account, "id", None) if account else None
         _creds = await resolve_market_creds(
             session,
             _tid,
             market_type="smartstore",
             store_key="store_smartstore",
+            account_id=_aid,
         )
         if _creds:
             cid = cid or _creds.get("clientId", "")
