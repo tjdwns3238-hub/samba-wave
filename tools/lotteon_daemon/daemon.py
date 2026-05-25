@@ -78,7 +78,7 @@ except ImportError:
 # ====================================================================
 # 데몬 버전 — build.ps1 가 갱신. 자동 업데이트 비교 기준.
 # ====================================================================
-DAEMON_VERSION = "1.4.2"
+DAEMON_VERSION = "1.4.3"
 
 
 # ====================================================================
@@ -613,15 +613,65 @@ def _extract_backend_from_argv_or_exename() -> str | None:
 
 
 def _default_device_id() -> str:
-    host = socket.gethostname() or ""
-    sanitized = re.sub(r"[^a-zA-Z0-9-]", "-", host).strip("-").lower()
-    if not sanitized or sanitized == "unknown":
-        # hostname 추출 실패(빈값/한글전용/특수문자) → MAC 기반 고유 ID 폴백.
-        # "samba-daemon-unknown" 으로 여러 PC 데몬이 충돌하던 문제 방지.
+    """PC 마다 고유한 device_id 생성 + 캐시 재사용.
+
+    1순위: %APPDATA%\\samba-autotune-daemon\\device_id.txt 캐시 (재사용 = 안정 ID)
+    2순위: Windows MachineGuid (HKLM\\SOFTWARE\\Microsoft\\Cryptography) — PC 고유
+    3순위: MAC 주소 hash
+    4순위: 새 UUID 생성 + 캐시 저장
+
+    hostname 의존 제거 (2026-05-25): 같은 hostname (예: DESKTOP-KDESNDM) 두 PC가
+    같은 device_id 박혀 잡 충돌하던 SaaS 사고 차단.
+    """
+    # 1. 캐시 재사용
+    try:
+        cache_path = _install_dir() / "device_id.txt"
+        if cache_path.exists():
+            cached = cache_path.read_text(encoding="utf-8").strip()
+            if cached.startswith("samba-daemon-") and len(cached) > 20:
+                return cached
+    except Exception:
+        cache_path = None
+
+    # 2. Windows MachineGuid (PC 고유, 재설치해도 동일)
+    sanitized = ""
+    try:
+        if os.name == "nt":
+            import winreg
+
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography"
+            ) as k:
+                guid, _ = winreg.QueryValueEx(k, "MachineGuid")
+                sanitized = guid.replace("-", "").lower()[:16]
+    except Exception:
+        sanitized = ""
+
+    # 3. MAC 주소 hash
+    if not sanitized:
+        try:
+            import uuid as _uuid
+
+            sanitized = format(_uuid.getnode(), "012x")
+        except Exception:
+            sanitized = ""
+
+    # 4. 새 UUID
+    if not sanitized:
         import uuid as _uuid
 
-        sanitized = format(_uuid.getnode(), "012x")
-    return f"samba-daemon-{sanitized}"
+        sanitized = _uuid.uuid4().hex[:16]
+
+    did = f"samba-daemon-{sanitized}"
+
+    # 캐시 저장 (다음 실행에 재사용)
+    try:
+        if cache_path:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(did, encoding="utf-8")
+    except Exception:
+        pass
+    return did
 
 
 # ====================================================================

@@ -228,3 +228,37 @@ class SambaAccountService:
             if market["id"] == market_type:
                 return market
         return None
+
+    async def set_default(
+        self, account_id: str, tenant_id: Optional[str] = None
+    ) -> Optional[SambaMarketAccount]:
+        """기본 계정 지정 — 같은 (tenant_id, market_type) 의 다른 계정은 is_default=false 강제.
+
+        라디오 동작 (market_type 당 1개만 true). store_* 단일 키 폴백을 대체하는
+        진실의 출처 마킹.
+        """
+        from datetime import datetime, timezone
+        from sqlalchemy import update as sa_update
+
+        account = await self.repo.get_async(account_id)
+        if not account:
+            return None
+
+        stmt = (
+            sa_update(SambaMarketAccount)
+            .where(SambaMarketAccount.market_type == account.market_type)
+            .where(SambaMarketAccount.id != account_id)
+        )
+        if tenant_id is not None:
+            stmt = stmt.where(SambaMarketAccount.tenant_id == tenant_id)
+        else:
+            stmt = stmt.where(SambaMarketAccount.tenant_id.is_(None))
+        stmt = stmt.values(is_default=False, updated_at=datetime.now(timezone.utc))
+        await self.repo.session.execute(stmt)
+        return await self.repo.update_async(account_id, is_default=True)
+
+    async def find_default_for(
+        self, market_type: str, tenant_id: Optional[str]
+    ) -> Optional[SambaMarketAccount]:
+        """market_type+tenant 의 fallback 계정 조회 (is_default 우선, 없으면 최근 활성)."""
+        return await self.repo.find_default(market_type, tenant_id)

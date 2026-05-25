@@ -49,7 +49,19 @@ class SambaMarketAccount(SQLModel, table=True):
         default=None, sa_column=Column(Text, nullable=True)
     )
 
-    # 추가 설정 (JSON)
+    # OAuth 토큰 (cafe24, ebay, amazon 등) — 만료/갱신 추적용 별도 컬럼.
+    # additional_fields JSON 에 두면 만료 임박 토큰 일괄 갱신 쿼리 부하 큼.
+    oauth_access_token: Optional[str] = Field(
+        default=None, sa_column=Column(Text, nullable=True)
+    )
+    oauth_refresh_token: Optional[str] = Field(
+        default=None, sa_column=Column(Text, nullable=True)
+    )
+    oauth_expires_at: Optional[datetime] = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+
+    # 추가 설정 (JSON) — 마켓별 표준 키는 backend/domain/samba/account/credentials.py 참조
     additional_fields: Optional[Any] = Field(
         default=None, sa_column=Column(JSON, nullable=True)
     )
@@ -57,6 +69,12 @@ class SambaMarketAccount(SQLModel, table=True):
     is_active: bool = Field(
         default=True,
         sa_column=Column(Boolean, nullable=False, server_default="true", index=True),
+    )
+
+    # 다중 계정 중 fallback 우선순위 (market_type + tenant 당 1개만 true)
+    is_default: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default="false", index=True),
     )
 
     # Timestamps
