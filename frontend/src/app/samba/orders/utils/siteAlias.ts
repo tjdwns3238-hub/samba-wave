@@ -17,6 +17,10 @@ export function formatSourceSiteLabel(sourceSite: string | null | undefined, sit
   if (!siteName || !siteCode) return normalizeSourceSiteName(site)
 
   const normalizedName = normalizeSourceSiteName(siteName)
+  // 쿠팡은 별칭 대신 스토어 ID(siteCode) 원본 노출
+  if (/^쿠팡$/i.test(normalizedName) || /^coupang$/i.test(normalizedName)) {
+    return `${normalizedName}(${siteCode})`
+  }
   const alias = siteAliasMap[normalizePlayautoAliasCode(siteCode)] || siteAliasMap[siteCode]
   // 괄호 안 코드(고경/캐논/가디/마놀 등)는 플레이오토 판매계정 식별자 — 보존 필수
   return `${normalizedName}(${alias || siteCode})`
