@@ -119,41 +119,26 @@ async def sourcing_collect_queue(request: Request) -> Any:
     except Exception:
         pass
 
-    # PC 분담 last_seen 갱신 + allowed_sites 동기화
-    # 서버 재시작 후엔 startup 단계에서 DB로 복원되며, 폴링 헤더로도 보조 동기화.
+    # PC 분담 갱신 = UI 체크박스 저장 endpoint 만 (POST /pc-allowed-sites authoritative).
+    # 폴링 헤더 X-Allowed-Sites 로 분담 union 합산 금지 (2026-05-25 사용자 룰).
+    # 여기서는 last_seen 갱신만 — 데몬 등록 흐름 외 분담 자동 부여 절대 없음.
     try:
         from backend.api.v1.routers.samba.collector_autotune import (
             persist_pc_allowed_sites,
-            register_pc_allowed_sites,
             touch_daemon_presence,
             update_pc_last_seen,
         )
 
         update_pc_last_seen(device_id)
-        _is_daemon = device_id.startswith("samba-daemon-")
-        if _is_daemon:
-            # 데몬 = 등록(touch_daemon_presence)만. 사이트 분담은 사용자가 UI 에서
-            # 직접 박는다 (강제 자동 할당 금지, 2026-05-25 사용자 재요청).
+        if device_id.startswith("samba-daemon-"):
+            # 데몬 = 등록(touch_daemon_presence)만. 사이트 분담은 사용자가 UI 에서 박는다.
             if touch_daemon_presence(device_id):
                 from backend.db.orm import get_write_session
 
                 async with get_write_session() as _persist_sess:
                     await persist_pc_allowed_sites(_persist_sess)
                     await _persist_sess.commit()
-        else:
-            # 확장앱: 기존 동작 — 폴링 헤더로 union 등록(같은 deviceId flip-flop 방지)
-            raw_sites_for_reg = request.headers.get("X-Allowed-Sites")
-            if device_id and raw_sites_for_reg is not None:
-                sites_for_reg = [
-                    s.strip() for s in raw_sites_for_reg.split(",") if s.strip()
-                ]
-                # 변경 발생 시에만 DB 영속화 — 매 폴링 write 부담 회피
-                if register_pc_allowed_sites(device_id, sites_for_reg):
-                    from backend.db.orm import get_write_session
-
-                    async with get_write_session() as _persist_sess:
-                        await persist_pc_allowed_sites(_persist_sess)
-                        await _persist_sess.commit()
+        # 확장앱: 분담 자동 갱신 폐기 — UI 체크박스 저장만 분담 갱신 권한.
     except Exception:
         pass
     # X-Allowed-Sites 헤더 의미:

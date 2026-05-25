@@ -54,16 +54,15 @@ def _daemon_only_for_job(job_type: str) -> set[str]:
 
 
 def _resolve_job_owner(site: str, job_type: str) -> str | None:
-    """잡 타입별 owner 선택. 데몬 우선 → DAEMON_ONLY_JOB_SITES[job_type] 포함 시 skip → 확장앱."""
-    from backend.domain.samba.proxy.daemon_pool import pick_daemon_owner
+    """잡 owner = PC 체크박스 단일 룰 (2026-05-25 정리).
 
-    d = pick_daemon_owner(site)
-    if d:
-        return d
-    daemon_only = _daemon_only_for_job(job_type)
-    if (site or "").upper() in {s.upper() for s in daemon_only}:
-        return None  # 데몬 매칭 없음 → 잡 발행 skip
-    return get_autotune_owner(site)
+    데몬 우선 → 확장앱 폴백. 둘 다 매칭 없으면 잡 발행 skip (None).
+    `current_pc_owner` contextvar 의존 폐기 — 분담 무시 사고 차단.
+    daemon_only 정책도 폐기 — 체크박스 있으면 그 PC 가 처리.
+    """
+    from backend.domain.samba.proxy.daemon_pool import pick_any_owner
+
+    return pick_any_owner(site)
 
 
 # 하위호환 wrapper — 기존 호출처 보존.
