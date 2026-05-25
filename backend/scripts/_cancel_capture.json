@@ -1,0 +1,72 @@
+﻿HOOK: already
+BTN1: clicked:�ֹ� ��� @669,516
+REASON: label-clicked:�ܼ� ���� (��ǰ�� �ʿ� ������)
+FINAL: final-clicked:��� ��û�ϱ� (1��)
+
+=== CANCEL CANDIDATE CALLS ===
+[
+  {
+    "url": "https://order.musinsa.com/api2/order/v1/order-items/425942207/status",
+    "method": "GET",
+    "body": "",
+    "ts": 1779752329030,
+    "kind": "xhr",
+    "status": 200,
+    "respBody": "{\"meta\":{\"result\":\"SUCCESS\",\"errorCode\":null,\"message\":null},\"data\":{\"code\":10,\"status\":\"�����Ϸ�\"}}"
+  },
+  {
+    "url": "https://capi.madup.com/events/5d152fa23be69bf392f6ffa6a65279deede6dd3b38128016f29cd6e5b2fb224d",
+    "method": "POST",
+    "body": "{\"event_name\":\"PageView\",\"fb.dynamic_product_ads\":{},\"custom_data\":{},\"event_id\":\"ob3_plugin-set_0626076c912d05d37726fefed7b6acc5853c4e2f887806fbbbaf17ba289d27e7\",\"fb.pixel_id\":\"240753852943871\",\"fb.advanced_matching\":{\"country\":\"d5647005d31dcbb66ff531c5e097544a03558bc538b9c65ee2539594886ffbc0\",\"em\":\"a21a14a803720bd38e038250225c7c0c18dfa5034917877cf5d4dee5653c191a\",\"ge\":\"252f10c83610ebca1a059c0bae8255eba2f95be4d1d7bcfa89d7248a82d9f111\"},\"website_context\":{\"location\":\"https://www.musinsa.com/order/claim/order-cancel/202605260834580001/425942207?orderCancelType=IS_AFTER_PAYMENT\",\"referrer\":\"https://www.musinsa.com/order/result/202605260834580001\",\"isInIFrame\":false},\"fb.fbp\":\"fb.1.1778742591130.3919492745426677\",\"event_meta_info\":{\"experiment_detail\":{\"name\":\"cbsdk_primary_timeout_exp\",\"is_exposed\":true,\"is_in_control\":true,\"is_in_treatment\":false}}}",
+    "headers": {},
+    "ts": 1779752329138,
+    "kind": "fetch",
+    "status": 200,
+    "respBody": ""
+  },
+  {
+    "url": "https://api.musinsa.com/api2/claim/store/mypage/order/refund/202605260834580001/425942207",
+    "method": "GET",
+    "body": "",
+    "ts": 1779752329203,
+    "kind": "xhr",
+    "status": 200,
+    "respBody": "{\"success\":true,\"data\":{\"orderNo\":\"202605260834580001\",\"orderOptionNo\":425942207,\"payKind\":\"���Ż�Ӵ�\",\"payKindName\":\"���Ż�Ӵ�\",\"payMethod\":\"\",\"cardQuota\":\"\",\"orderOptionCount\":1,\"isPickup\":false,\"isTicket\":false,\"isPlusDelivery\":false,\"isShowRefundAccount\":false,\"isUnionPoint\":false,\"isCartCouponFeatureFlagOn\":true,\"hasNewMemberEventProduct\":false,\"orderState\":\"SHIPPING_REQUESTED\",\"pickupLocation\":\"\",\"pickupMethod\":\"\",\"orderOptionList\":[{\"orderOptionNo\":425942207,\"quantity\":1,\"goodsOption\":\"04(M)\",\"additionalGoodsOptionList\":[],\"orderAmount\":36270,\"orderOptionAmount\":0,\"unitGoodsPrice\":0,\"unitSalePrice\":0,\"goodsImageUrl\":\"//image.msscdn.net/images/goods_img/20260121/5919347/5919347_17689613563151_500.jpg\",\"goodsName\":\"POP Ʈ������ ���� ���� ���� Ƽ����_A/GREEN\",\"goodsNo\":5919347,\"goodsOptionNo\":28427555,\"brandName\":\"���̴�\",\"orderState\":10,\"orderStateDescription\":\"SHIPPING_REQUESTED\",\"claimState\":0,\"isShowPlusDeliveryLabel\":false,\"isLastPlusDeliveryOption\":false,\"goodsDetailUrl\":\"//www.musinsa.com/products/5919347\",\"brandDetailUrl\":\"//www.musinsa.com/brand/eider\",\"storeCode\":[\"player\"],\"isGoodsUsed\":false,\"usedConditionGrade\":null}],\"giftList\":[],\"claimReasonList\":[{\"claimReasonCode\":\"1\",\"claimReasonDescription\":\"�ܼ� ���� (��ǰ�� �ʿ� ������)\",\"isSellerFault\":false,\"isNeedDescription\":false},{\"claimReasonCode\":\"2\",\"claimReasonDescription\":\"�ֹ� �Ǽ� (��ǰ �Ǵ� ���� �߸� ����, �߰� ���ֹ�)\",\"isSellerFault\":false,\"isNeedDescription\":false},{\"claimReasonCode\":\"21\",\"claimReasonDescription\":\"�ٸ� ���� �������� ����\",\"isSellerFault\":false,\"isNeedDescription\":false},{\"claimReasonCode\":\"11\",\"claimReasonDescription\":\"��Ÿ\",\"isSellerFault\":false,\"isNeedDescription\":true}],\"refundAccountInfo\":{\"maskedRefundDepositor\":\"��*��\",\"refundBank\":\"��������\",\"refundAccount\":\"********5168\",\"isAccountVerified\":true,\"refundDepositor\":\"�Ӽ���\",\"bankCodeList\":[{\"bankCode\":\"BK11\",\"bankName\":\"�����߾�ȸ\"},{\"bankCode\":\"BK20\",\"bankName\":\"�츮����\"},{\"bankCode\":\"BK88\",\"bankName\":\"��������\"},{\"bankCode\":\"BK03\",\"bankName\":\"�������\"},{\"bankCode\":\"BK31\",\"bankName\":\"�뱸����\"},{\"bankCode\":\"B"
+  },
+  {
+    "url": "https://cart.musinsa.com/api/v1/cart/count",
+    "method": "GET",
+    "body": "",
+    "ts": 1779752329207,
+    "kind": "xhr",
+    "status": 200,
+    "respBody": "{\"data\":{\"count\":2}}"
+  },
+  {
+    "url": "https://my.musinsa.com/api/member/v1/login-status",
+    "method": "GET",
+    "body": "",
+    "ts": 1779752329208,
+    "kind": "xhr",
+    "status": 200,
+    "respBody": "{\"data\":{\"loggedIn\":true,\"memberInfo\":{\"level\":9,\"levelText\":\"LV.9\",\"nickName\":\"�Ӽ���1\",\"profileImageUrl\":\"https://image.msscdn.net/mfile_s01/_simbols/_basic/basic.png\"},\"authTokenInfo\":{\"accessToken\":\"5rBr37i7WXdvmAPHdVYYNHAE83ourk8%2FFL2W%2B9Xs%2BKkEji%2Fc6%2B%2FAjHB1rmFfIDjBMv7YUNbQfag14CYeJyhuvh4OvpcIK7rXDXK%2F%2BkTw1wF%2FHlQVVJ5oLAA3dcYzPjlcFz4Oy0rWauK2VweuJM9j78KsNQrgXJCBNE914zxGihO5fVZr%2BDpZ53FBhKkUB9p%2FYLIIetwpf3HBZJfXcDeYgGSWeEsF%2FZ%2BaDy%2B%2BELZDibzVYs9ba%2FjJDp2VTmcjQfHQ1ISMY2nojHXUWfLiREjmKKUmQXxVa%2F5jQBmZSqt%2Bi%2FW%2FaQ1bLSkhehvRUFr9o94xF85%2BjLDGqI3YgJ04gFby3jcH7dE8MrgnQqHHs66HVytoxGJen9Rd%2BYLGHPT7iq8f5H4zAvbnGqjdeIBKH0yuwe1vWrU2bJuX6C8B46uMT21CXGKYr8uFWgJFa3ohL0FG0oPVfN2nVyPiSuim7ioeAmHAMslD%2F33E6xRX8f0OasHOGVhuoBrZoQMtRXLWB2W6ukbTd0RiJnbhPFFtaVgNoT%2FS8pe6b%2FJ5uUJv7nCcHEN%2BeNeKkMKloJjfgNolR%2Fh9bINCAuBZHnzWkisjYiP2RxAmcaweGTgdJJOsZBZV%2BmdvDGoBgZebq1UVVcLIhJ%2F1Zj1xHSKCBmuCZ8anFPHSOJWLhg%2BWkuvl97kH54frOjCiBHwhnG9jEWeiz2wUqSnCR4u88EwsMygWGRzyOKELT7cLbXAitoCBM5QrdYoTFbmPxZKg08lJ0QtX4NP%2Bboye5kbezXPR0PjjonzhohrgBg%3D%3D\",\"refreshToken\":\"9279ffcfbed568886b8bc83f885dbde7fc3b48fe\"}}}"
+  },
+  {
+    "url": "https://api.musinsa.com/api2/claim/store/mypage/order/refund/202605260834580001/425942207",
+    "method": "GET",
+    "body": "",
+    "ts": 1779752329382,
+    "kind": "xhr",
+    "status": 200,
+    "respBody": "{\"success\":true,\"data\":{\"orderNo\":\"202605260834580001\",\"orderOptionNo\":425942207,\"payKind\":\"���Ż�Ӵ�\",\"payKindName\":\"���Ż�Ӵ�\",\"payMethod\":\"\",\"cardQuota\":\"\",\"orderOptionCount\":1,\"isPickup\":false,\"isTicket\":false,\"isPlusDelivery\":false,\"isShowRefundAccount\":false,\"isUnionPoint\":false,\"isCartCouponFeatureFlagOn\":true,\"hasNewMemberEventProduct\":false,\"orderState\":\"SHIPPING_REQUESTED\",\"pickupLocation\":\"\",\"pickupMethod\":\"\",\"orderOptionList\":[{\"orderOptionNo\":425942207,\"quantity\":1,\"goodsOption\":\"04(M)\",\"additionalGoodsOptionList\":[],\"orderAmount\":36270,\"orderOptionAmount\":0,\"unitGoodsPrice\":0,\"unitSalePrice\":0,\"goodsImageUrl\":\"//image.msscdn.net/images/goods_img/20260121/5919347/5919347_17689613563151_500.jpg\",\"goodsName\":\"POP Ʈ������ ���� ���� ���� Ƽ����_A/GREEN\",\"goodsNo\":5919347,\"goodsOptionNo\":28427555,\"brandName\":\"���̴�\",\"orderState\":10,\"orderStateDescription\":\"SHIPPING_REQUESTED\",\"claimState\":0,\"isShowPlusDeliveryLabel\":false,\"isLastPlusDeliveryOption\":false,\"goodsDetailUrl\":\"//www.musinsa.com/products/5919347\",\"brandDetailUrl\":\"//www.musinsa.com/brand/eider\",\"storeCode\":[\"player\"],\"isGoodsUsed\":false,\"usedConditionGrade\":null}],\"giftList\":[],\"claimReasonList\":[{\"claimReasonCode\":\"1\",\"claimReasonDescription\":\"�ܼ� ���� (��ǰ�� �ʿ� ������)\",\"isSellerFault\":false,\"isNeedDescription\":false},{\"claimReasonCode\":\"2\",\"claimReasonDescription\":\"�ֹ� �Ǽ� (��ǰ �Ǵ� ���� �߸� ����, �߰� ���ֹ�)\",\"isSellerFault\":false,\"isNeedDescription\":false},{\"claimReasonCode\":\"21\",\"claimReasonDescription\":\"�ٸ� ���� �������� ����\",\"isSellerFault\":false,\"isNeedDescription\":false},{\"claimReasonCode\":\"11\",\"claimReasonDescription\":\"��Ÿ\",\"isSellerFault\":false,\"isNeedDescription\":true}],\"refundAccountInfo\":{\"maskedRefundDepositor\":\"��*��\",\"refundBank\":\"��������\",\"refundAccount\":\"********5168\",\"isAccountVerified\":true,\"refundDepositor\":\"�Ӽ���\",\"bankCodeList\":[{\"bankCode\":\"BK11\",\"bankName\":\"�����߾�ȸ\"},{\"bankCode\":\"BK20\",\"bankName\":\"�츮����\"},{\"bankCode\":\"BK88\",\"bankName\":\"��������\"},{\"bankCode\":\"BK03\",\"bankName\":\"�������\"},{\"bankCode\":\"BK31\",\"bankName\":\"�뱸����\"},{\"bankCode\":\"B"
+  },
+  {
+    "url": "https://api.musinsa.com/api2/claim/store/mypage/refund/payment/calculator",
+    "method": "POST",
+    "body": "{\"orderNo\":\"202605260834580001\",\"returnDeliveryZipcode\":\"\",\"selectedOrderList\":[{\"orderOptionNo\":425942207,\"quantity\":1}]}",
+    "ts": 1779752329389,
+    "kind": "xhr",
+    "status": 200,
+    "respBody": "{\"success\":true,\"data\":{\"customerFault\":{\"cancellationFee\":0,\"orderAmount\":36270,\"cartCouponAmount\":0,\"cartDcAmount\":0,\"couponAmount\":0,\"dcAmount\":0,\"deliveryAmount\":0,\"groupDcAmount\":0,\"normalPrice\":65000,\"paymentFee\":0,\"pointAmount\":2730,\"prePointAmount\":0,\"price\":39000,\"priceWithSale\":39000,\"quantity\":1,\"saleAmount\":26000,\"expectedRefundAmount\":36270,\"expectedRefundNormalDeliveryAmount\":0,\"expectedRefundAdditionalDeliveryAmount\":0,\"paymentMethod\":\"���Ż�Ӵ�\",\"paymentMethodDescription\":\"\",\"cardQuota\":\"\",\"isGiftReturn\":false,\"isGiftReturnList\":[],\"returnPaymentCalculateResponse\":{\"returnDeliveryAmount\":0,\"normalReturnDeliveryAmount\":0,\"additionalReturnDeliveryAmount\":0,\"oneWayDeliveryAmount\":0,\"normalOneWayDeliveryAmount\":0,\"additionalOneWayDeliveryAmount\":0,\"totalDeliveryAmount\":0,\"isDeliveryReturnAmountDeductAvailable\":false},\"cartCouponPolicyResponse\":{\"willViolate\":false,\"isAlreadyViolate\":false,\"isLessThanCouponPrice\":false,\"cartCouponName\":\"\",\"withdrawCartCouponAmount\":0,\"returnCartCouponAmount\":0,\"cartCouponBenefitText\":\"\"}},\"sellerFault\":{\"cancellationFee\":0,\"orderAmount\":36270,\"cartCouponAmount\":0,\"cartDcAmount\":0,\"couponAmount\":0,\"dcAmount\":0,\"deliveryAmount\":0,\"groupDcAmount\":0,\"normalPrice\":65000,\"paymentFee\":0,\"pointAmount\":2730,\"prePointAmount\":0,\"price\":39000,\"priceWithSale\":39000,\"quantity\":1,\"saleAmount\":26000,\"expectedRefundAmount\":36270,\"expectedRefundNormalDeliveryAmount\":0,\"expectedRefundAdditionalDeliveryAmount\":0,\"paymentMethod\":\"���Ż�Ӵ�\",\"paymentMethodDescription\":\"\",\"cardQuota\":\"\",\"isGiftReturn\":false,\"isGiftReturnList\":[],\"returnPaymentCalculateResponse\":{\"returnDeliveryAmount\":0,\"normalReturnDeliveryAmount\":0,\"additionalReturnDeliveryAmount\":0,\"oneWayDeliveryAmount\":0,\"normalOneWayDeliveryAmount\":0,\"additionalOneWayDeliveryAmount\":0,\"totalDeliveryAmount\":0,\"isDeliveryReturnAmountDeductAvailable\":false},\"cartCouponPolicyResponse\":{\"willViolate\":false,\"isAlreadyViolate\":false,\"isLessThanCouponPrice\":false,\"cartCouponName\":\"\",\"withdrawCartCouponAm"
+  }
+]
