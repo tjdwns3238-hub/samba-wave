@@ -99,7 +99,9 @@ def test_sourcing_queue_cancel_all_fails_waiters():
             "backend.domain.samba.proxy.sourcing_queue._db_insert_job",
             new_callable=lambda: lambda *a, **kw: asyncio.sleep(0),
         ):
-            _, future = SourcingQueue.add_detail_job("ABCmart", "12345")
+            _, future = SourcingQueue.add_detail_job(
+                "ABCmart", "12345", owner_device_id="test-device"
+            )
 
         SourcingQueue.cancel_all("shutdown for deploy")
 

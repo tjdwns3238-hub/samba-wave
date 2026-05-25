@@ -475,8 +475,17 @@ export default function WarroomPage() {
   // 그래서 초기값은 null로 두고, 마운트 직후 useEffect에서 sessionStorage를 읽어 복원한다.
   const [filterSources, setFilterSources] = useState<string[] | null>(null)
   const [filterMarkets, setFilterMarkets] = useState<string[] | null>(null) // null=전체
-  const [availSources, setAvailSources] = useState<string[]>([])
-  const [availMarkets, setAvailMarkets] = useState<string[]>([])
+  // fetch 실패/지연 시에도 체크박스가 항상 보이도록 default 리스트로 즉시 초기화.
+  // 백엔드 filters fetch 가 100초 걸리거나 실패할 때 페이지가 빈 상태로 보이던
+  // 사고 차단 (2026-05-25 포크 유저도 동일 UX 보장).
+  const _DEFAULT_AVAIL_SOURCES = [
+    'ABCmart', 'GSShop', 'GrandStage', 'LOTTEON', 'MUSINSA', 'SSG',
+  ]
+  const _DEFAULT_AVAIL_MARKETS = [
+    '11번가', '옥션', '쿠팡', '롯데홈쇼핑', '롯데ON', '플레이오토', '스마트스토어', 'SSG', 'G마켓',
+  ]
+  const [availSources, setAvailSources] = useState<string[]>(_DEFAULT_AVAIL_SOURCES)
+  const [availMarkets, setAvailMarkets] = useState<string[]>(_DEFAULT_AVAIL_MARKETS)
   const filterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // load() 폴링 closure stale 방지 — 최신값 ref 동기화
