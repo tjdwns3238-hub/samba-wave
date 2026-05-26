@@ -4164,6 +4164,7 @@ async def autotune_active_cycles():
 
     사용자 visibility — 어느 PC 의 어느 사이트 사이클이 도는지 한눈에. 인지 못 한
     좀비 사이클 발견 + 개별 cancel 가능 (POST /autotune/cancel-cycle).
+    avg_sec_per_item — 현 사이클 시작 후 (now - started_at) / idx 평균 처리 시간.
     """
     cycles = []
     now_ts = time.time()
@@ -4180,6 +4181,22 @@ async def autotune_active_cycles():
             last_tick = _pc_site_last_ticks.get(dev, {}).get(site, "")
             hb = _pc_site_heartbeats.get(dev, {}).get(site, 0)
             hb_ago = int(now_ts - hb) if hb else None
+            # 현 사이클 시작 시각 기반 건당 평균 처리 시간
+            avg_sec: Optional[float] = None
+            try:
+                _cstats = _autotune_cycle_stats.get(gkey) or {}
+                _started_iso = _cstats.get("started_at")
+                if _started_iso and idx > 0:
+                    _started_dt = datetime.fromisoformat(
+                        str(_started_iso).replace("Z", "+00:00")
+                    )
+                    _elapsed = (
+                        datetime.now(timezone.utc) - _started_dt
+                    ).total_seconds()
+                    if _elapsed > 0:
+                        avg_sec = round(_elapsed / idx, 2)
+            except Exception:
+                avg_sec = None
             cycles.append(
                 {
                     "device_id": dev,
@@ -4189,6 +4206,7 @@ async def autotune_active_cycles():
                     "cycle_count": cycle_count,
                     "last_tick": last_tick,
                     "heartbeat_ago_sec": hb_ago,
+                    "avg_sec_per_item": avg_sec,
                 }
             )
     cycles.sort(key=lambda c: (c["device_id"], c["site"]))

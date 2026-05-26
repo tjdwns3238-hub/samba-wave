@@ -357,6 +357,7 @@ interface ActiveCycle {
   cycle_count: number
   last_tick: string
   heartbeat_ago_sec: number | null
+  avg_sec_per_item: number | null
 }
 
 function ActiveCyclesPanel(): React.ReactElement {
@@ -417,6 +418,7 @@ function ActiveCyclesPanel(): React.ReactElement {
               <th style={{ textAlign: 'left', padding: '0.4rem' }}>PC (device)</th>
               <th style={{ textAlign: 'left', padding: '0.4rem' }}>사이트</th>
               <th style={{ textAlign: 'right', padding: '0.4rem' }}>진행</th>
+              <th style={{ textAlign: 'right', padding: '0.4rem' }}>처리속도</th>
               <th style={{ textAlign: 'right', padding: '0.4rem' }}>사이클#</th>
               <th style={{ textAlign: 'right', padding: '0.4rem' }}>최근 활동</th>
               <th style={{ textAlign: 'center', padding: '0.4rem' }}>중단</th>
@@ -426,11 +428,15 @@ function ActiveCyclesPanel(): React.ReactElement {
             {cycles.map(c => {
               const k = `${c.device_id}|${c.site}`
               const hbStr = c.heartbeat_ago_sec === null ? '-' : `${fmtNum(c.heartbeat_ago_sec)}초 전`
+              const avgStr = c.avg_sec_per_item === null || c.avg_sec_per_item === undefined
+                ? '-'
+                : `${c.avg_sec_per_item.toFixed(1)}초/1건`
               return (
                 <tr key={k} style={{ borderBottom: '1px solid #2A2A2A' }}>
                   <td style={{ padding: '0.4rem', fontFamily: 'monospace', fontSize: '0.75rem' }}>{c.device_id.slice(0, 28)}</td>
                   <td style={{ padding: '0.4rem' }}>{c.site}</td>
                   <td style={{ padding: '0.4rem', textAlign: 'right' }}>{fmtNum(c.idx)} / {fmtNum(c.total)}</td>
+                  <td style={{ padding: '0.4rem', textAlign: 'right', color: '#FFB84D' }}>{avgStr}</td>
                   <td style={{ padding: '0.4rem', textAlign: 'right' }}>{fmtNum(c.cycle_count)}</td>
                   <td style={{ padding: '0.4rem', textAlign: 'right', color: '#888' }}>{hbStr}</td>
                   <td style={{ padding: '0.4rem', textAlign: 'center' }}>
