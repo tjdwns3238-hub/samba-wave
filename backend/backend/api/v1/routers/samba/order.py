@@ -6515,6 +6515,14 @@ async def sync_orders_from_markets(
                         update_fields["shipment_id"] = order_data["shipment_id"]
                     if order_data.get("ord_prd_seq") and not existing.ord_prd_seq:
                         update_fields["ord_prd_seq"] = order_data["ord_prd_seq"]
+                    # 쿠팡 vendor_item_id 백필 — 컬럼 추가(2026-05-26) 이전 수집된 기존 주문은
+                    # NULL 이므로 재수집 시 보충해줘야 송장업로드 가능
+                    if (
+                        order_data.get("source") == "coupang"
+                        and order_data.get("vendor_item_id")
+                        and not (existing.vendor_item_id or "")
+                    ):
+                        update_fields["vendor_item_id"] = order_data["vendor_item_id"]
                     # 결제일 갱신: 기존이 NULL이거나 더 이른 값일 때만 채택
                     # (고객 결제시각은 변하지 않음 — 더 늦은 값은 마켓이 sync/처리시각을 결제칸으로 돌려준 케이스로 간주하고 무시)
                     # tz-aware/naive 혼재 방지: 비교 직전 양쪽을 UTC tz-aware로 normalize
