@@ -143,6 +143,10 @@ def _is_stale_conn_error(exc: BaseException) -> bool:
 
     Cloud SQL idle_in_transaction_session_timeout으로 끊긴 세션을 재사용할 때
     SQLAlchemy/asyncpg가 던지는 대표 메시지/예외 이름을 모아서 판정한다.
+
+    NOTE: "session is in 'prepared' state" 는 SQLAlchemy SessionTransaction 상태 머신
+    에러로, 근본 원인 미파악(begin_nested 명시 호출 없음 — collector/service.py 외).
+    단발 발생에 대한 retry 가드 — 빈번 발생 시 별도 추적 필요.
     """
     msg = str(exc)
     name = type(exc).__name__
@@ -156,6 +160,7 @@ def _is_stale_conn_error(exc: BaseException) -> bool:
         or "connection is closed" in msg.lower()
         or "ssl connection has been closed" in msg.lower()
         or "terminating connection due to" in msg.lower()
+        or "session is in 'prepared' state" in msg.lower()
     )
 
 
