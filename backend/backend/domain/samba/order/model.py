@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Index, String, text
+from sqlalchemy import BigInteger, Index, String, text
 from sqlmodel import Column, DateTime, Field, SQLModel, Text
 
 from ulid import ULID
@@ -214,6 +214,38 @@ class SambaOrder(SQLModel, table=True):
     # 쿠팡 옵션 ID (송장업로드 /orders/invoices 본문 필수 파라미터)
     vendor_item_id: Optional[str] = Field(
         default=None, sa_column=Column(Text, nullable=True)
+    )
+
+    # 쿠팡 취소/반품 사유 (이슈 #246 — returnRequests API 응답 매핑)
+    # receiptId: 후속 승인/거부 API 호출 핵심 ID
+    # faultByType: CUSTOMER/VENDOR/COUPANG/WMS/GENERAL
+    # releaseStatus: Y(출고됨)/N(미출고)/S(출고중지됨)/A(이미출고)
+    cancel_reason_code: Optional[str] = Field(
+        default=None, sa_column=Column(Text, nullable=True)
+    )
+    cancel_reason_text: Optional[str] = Field(
+        default=None, sa_column=Column(Text, nullable=True)
+    )
+    cancel_reason_category1: Optional[str] = Field(
+        default=None, sa_column=Column(Text, nullable=True)
+    )
+    cancel_reason_category2: Optional[str] = Field(
+        default=None, sa_column=Column(Text, nullable=True)
+    )
+    cancel_fault_by: Optional[str] = Field(
+        default=None, sa_column=Column(Text, nullable=True)
+    )
+    cancel_receipt_id: Optional[int] = Field(
+        default=None, sa_column=Column(BigInteger, nullable=True)
+    )
+    cancel_release_status: Optional[str] = Field(
+        default=None, sa_column=Column(Text, nullable=True)
+    )
+    cancel_release_stop_status: Optional[str] = Field(
+        default=None, sa_column=Column(Text, nullable=True)
+    )
+    cancel_requested_at: Optional[datetime] = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
 
     # 출처
