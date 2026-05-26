@@ -244,6 +244,7 @@ def _new_cycle_stats() -> dict:
         "total": 0,
         "price_pids": set(),
         "stock_pids": set(),
+        "deleted_pids": set(),  # 품절 unique 상품 수 (1 상품 N 마켓삭제 = 1)
         "synced": 0,
         "deleted": 0,
         "batches": 0,
@@ -1036,6 +1037,8 @@ async def _site_autotune_loop(device_id: str, site: str):
 
                         retransmitted = 0
                         deleted_count = 0
+                        # 품절 unique 상품 수 — 1 상품 N 마켓삭제해도 +1 (2026-05-26 사용자 룰)
+                        _all_delete_pids: set[str] = set()
                         price_changed_count = 0
                         _all_price_pids: set[str] = set()
                         _price_tx_items: list[dict] = []
@@ -1527,6 +1530,7 @@ async def _site_autotune_loop(device_id: str, site: str):
                                                     "soldout_fallback"
                                                 ):
                                                     deleted_count += 1
+                                                    _all_delete_pids.add(r.product_id)
                                                     _ok_del_ids.append(_del_acc_id)
                                                     _log_line(
                                                         site,
@@ -2687,6 +2691,7 @@ async def _site_autotune_loop(device_id: str, site: str):
                         _cstats["total"] += len(results)
                         _cstats["price_pids"].update(_all_price_pids)
                         _cstats["stock_pids"].update(_all_stock_pids)
+                        _cstats["deleted_pids"].update(_all_delete_pids)
                         _cstats["synced"] += _synced_count
                         _cstats["deleted"] += deleted_count
                         _cstats["batches"] += 1
@@ -2924,6 +2929,7 @@ async def _site_autotune_loop(device_id: str, site: str):
                                                 "soldout_fallback"
                                             ):
                                                 deleted_count += 1
+                                                _all_delete_pids.add(_sp.id)
                                                 _sp_deleted_ids.append(_del_acc_id)
                                                 _sp_site_tag = (
                                                     f"[{_sp.source_site}] "
@@ -4209,7 +4215,8 @@ async def autotune_active_cycles():
                         avg_sec = round(_elapsed / idx, 2)
                 price_count = len(_cstats.get("price_pids") or set())
                 stock_count = len(_cstats.get("stock_pids") or set())
-                soldout_count = int(_cstats.get("deleted") or 0)
+                # 품절 = unique 상품 수 (1 상품 N 마켓삭제 = +1)
+                soldout_count = len(_cstats.get("deleted_pids") or set())
             except Exception:
                 pass
             cycles.append(
