@@ -2505,6 +2505,67 @@ async def approve_cancel(
         logger.info(f"[취소승인] eBay {order.order_number} 취소완료 동기화")
         return {"ok": True, "message": "eBay 취소완료 처리"}
 
+    elif account.market_type == "coupang":
+        # 쿠팡 취소승인 — returnRequests v6 stoppedShipment (미출고 케이스만 자동) (#246 PR-4)
+        # - release_status='N' (미출고)   → stopped_shipment 호출 → 출고중지완료 처리
+        # - release_status='A' (이미출고) → 별도 엔드포인트 /approve-cancel-with-shipment
+        #                                    (운영자 송장 정보 입력 필요)
+        # - release_status='Y'/'S'/None  → 처리 불가/이미 처리됨 → 400
+        from backend.domain.samba.proxy.coupang import CoupangApiError, CoupangClient
+
+        if not order.cancel_receipt_id:
+            raise HTTPException(
+                status_code=400,
+                detail="쿠팡 취소 receiptId 미수집 — 주문 동기화 후 다시 시도",
+            )
+
+        rls = (order.cancel_release_status or "").upper()
+        if rls == "A":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "이미출고 상태 — /orders/{id}/approve-cancel-with-shipment 로 "
+                    "택배사·송장번호 함께 호출 필요"
+                ),
+            )
+        if rls and rls not in ("N",):
+            raise HTTPException(
+                status_code=400,
+                detail=f"쿠팡 release_status={rls} — 처리 불가 또는 이미 처리됨",
+            )
+
+        extras = account.additional_fields or {}
+        access_key = extras.get("accessKey", "") or account.api_key or ""
+        secret_key = extras.get("secretKey", "") or account.api_secret or ""
+        vendor_id = extras.get("vendorId", "") or account.seller_id or ""
+        if not all([access_key, secret_key, vendor_id]):
+            raise HTTPException(
+                status_code=400,
+                detail="쿠팡 인증정보 없음 (accessKey/secretKey/vendorId)",
+            )
+
+        client = CoupangClient(access_key, secret_key, vendor_id)
+        cancel_count = int(order.quantity or 1)
+        try:
+            await client.stopped_shipment(
+                receipt_id=int(order.cancel_receipt_id),
+                cancel_count=cancel_count,
+            )
+        except CoupangApiError as e:
+            raise HTTPException(status_code=500, detail=f"쿠팡 취소승인 실패: {e}")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"쿠팡 취소승인 실패: {e}")
+
+        await svc.update_order(
+            order_id,
+            {"shipping_status": "취소완료", "status": "cancelled"},
+        )
+        logger.info(
+            f"[취소승인] 쿠팡 {order.order_number} stoppedShipment 완료 "
+            f"(receiptId={order.cancel_receipt_id}, count={cancel_count})"
+        )
+        return {"ok": True, "message": "쿠팡 취소승인 완료 (출고중지)"}
+
     else:
         raise HTTPException(
             status_code=400, detail=f"{account.market_type} 취소승인 미지원"
@@ -2801,8 +2862,195 @@ async def seller_cancel(
         )
         return {"ok": True, "message": "11번가 판매불가처리 완료"}
 
+    elif account.market_type == "coupang":
+        # 쿠팡 판매자 능동 취소 — POST .../orders/{orderId}/cancel (#246 PR-4)
+        # 판매자 귀책 사유코드만 사용 가능 → 판매자 점수 하락 주의
+        from backend.domain.samba.proxy.coupang import CoupangApiError, CoupangClient
+
+        # SambaOrder reason_code → 쿠팡 middleCancelCode 매핑
+        #   111(품절)     → CCTTER 재고 연동 오류
+        #   132(가격오등록)→ CCPRER 가격등재오류
+        #   133(리셀러)   → CCPNER 제휴사이트 오류
+        #   135(고객변심) → CCTTER (판매자 능동에는 고객 귀책 코드 불가 → 재고 fallback)
+        #   137(택배불가) → CCPNER 배송지 문제
+        coupang_reason_map = {
+            "111": "CCTTER",
+            "132": "CCPRER",
+            "133": "CCPNER",
+            "135": "CCTTER",
+            "137": "CCPNER",
+        }
+        middle_code = coupang_reason_map.get(body.reason_code, "CCTTER")
+
+        extras = account.additional_fields or {}
+        access_key = extras.get("accessKey", "") or account.api_key or ""
+        secret_key = extras.get("secretKey", "") or account.api_secret or ""
+        vendor_id = extras.get("vendorId", "") or account.seller_id or ""
+        if not all([access_key, secret_key, vendor_id]):
+            raise HTTPException(
+                status_code=400,
+                detail="쿠팡 인증정보 없음 (accessKey/secretKey/vendorId)",
+            )
+        if not order.shipment_id:
+            raise HTTPException(
+                status_code=400,
+                detail="쿠팡 orderId(shipment_id) 미수집 — 동기화 후 재시도",
+            )
+        if not order.vendor_item_id:
+            raise HTTPException(
+                status_code=400,
+                detail="쿠팡 vendorItemId 미수집 — 동기화 후 재시도",
+            )
+
+        # userId: 쿠팡 공식 명세상 의미 미확정 (wing 로그인 ID 추정).
+        # extras["coupangUserId"] 우선 → 없으면 vendor_id fallback. 운영 실측 후 보정.
+        coupang_user_id = extras.get("coupangUserId") or vendor_id
+
+        client = CoupangClient(access_key, secret_key, vendor_id)
+        try:
+            await client.seller_cancel_order(
+                order_id=int(order.shipment_id),
+                vendor_item_ids=[int(order.vendor_item_id)],
+                receipt_counts=[int(order.quantity or 1)],
+                middle_cancel_code=middle_code,
+                user_id=str(coupang_user_id),
+            )
+        except CoupangApiError as e:
+            raise HTTPException(status_code=500, detail=f"쿠팡 판매자 취소 실패: {e}")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"쿠팡 판매자 취소 실패: {e}")
+
+        await svc.update_order(
+            order_id,
+            {"shipping_status": "취소완료", "status": "cancelled"},
+        )
+        logger.info(
+            f"[판매자취소] 쿠팡 {order.order_number} cancel 완료 "
+            f"(reason={body.reason_code}/{middle_code})"
+        )
+        return {"ok": True, "message": "쿠팡 판매자 취소 완료"}
+
     raise HTTPException(
         status_code=400, detail=f"{account.market_type} 판매자 취소 미지원"
+    )
+
+
+class ApproveCancelWithShipmentBody(BaseModel):
+    """쿠팡 이미출고 케이스 — 운영자 송장 정보 입력 (#246 PR-4)."""
+
+    delivery_company_code: str
+    invoice_number: str
+
+
+@router.post("/{order_id}/approve-cancel-with-shipment")
+async def approve_cancel_with_shipment(
+    order_id: str,
+    body: ApproveCancelWithShipmentBody,
+    session: AsyncSession = Depends(get_write_session_dependency),
+):
+    """쿠팡 이미출고 취소승인 — completedShipment 처리 (#246 PR-4).
+
+    조건: order.cancel_release_status == 'A'.
+    운영자가 실제 발송한 택배사·송장번호를 입력해야 호출 가능.
+    주의: 왕복 배송비 판매자 부담.
+    """
+    from backend.domain.samba.account.repository import SambaMarketAccountRepository
+    from backend.domain.samba.proxy.coupang import CoupangApiError, CoupangClient
+
+    svc = _write_service(session)
+    order = await svc.get_order(order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="주문을 찾을 수 없습니다")
+    if not order.channel_id:
+        raise HTTPException(status_code=400, detail="마켓 계정 정보가 없습니다")
+    if not order.cancel_receipt_id:
+        raise HTTPException(status_code=400, detail="쿠팡 취소 receiptId 미수집")
+    if (order.cancel_release_status or "").upper() != "A":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"release_status={order.cancel_release_status or 'None'} — "
+                "이미출고(A) 케이스만 이 엔드포인트 사용. 미출고는 /approve-cancel 호출"
+            ),
+        )
+
+    account_repo = SambaMarketAccountRepository(session)
+    account = await account_repo.get_async(order.channel_id)
+    if not account or account.market_type != "coupang":
+        raise HTTPException(status_code=400, detail="쿠팡 계정에만 사용 가능")
+
+    extras = account.additional_fields or {}
+    access_key = extras.get("accessKey", "") or account.api_key or ""
+    secret_key = extras.get("secretKey", "") or account.api_secret or ""
+    vendor_id = extras.get("vendorId", "") or account.seller_id or ""
+    if not all([access_key, secret_key, vendor_id]):
+        raise HTTPException(status_code=400, detail="쿠팡 인증정보 없음")
+
+    client = CoupangClient(access_key, secret_key, vendor_id)
+    try:
+        await client.confirm_completed_shipment(
+            receipt_id=int(order.cancel_receipt_id),
+            delivery_company_code=body.delivery_company_code,
+            invoice_number=body.invoice_number,
+        )
+    except CoupangApiError as e:
+        raise HTTPException(status_code=500, detail=f"쿠팡 이미출고 처리 실패: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"쿠팡 이미출고 처리 실패: {e}")
+
+    await svc.update_order(
+        order_id,
+        {"shipping_status": "취소완료(이미출고)", "status": "cancelled"},
+    )
+    logger.info(
+        f"[취소승인] 쿠팡 {order.order_number} completedShipment 완료 "
+        f"(receiptId={order.cancel_receipt_id}, company={body.delivery_company_code}, "
+        f"invoice={body.invoice_number})"
+    )
+    return {"ok": True, "message": "쿠팡 이미출고 취소승인 완료"}
+
+
+@router.post("/{order_id}/reject-cancel")
+async def reject_cancel(
+    order_id: str,
+    session: AsyncSession = Depends(get_write_session_dependency),
+):
+    """취소 거부 — 내부 상태만 cancel_reject_pending 으로 표시 (#246 PR-4).
+
+    쿠팡: 거부 전용 공식 API 없음 → 운영자에게 Wing 화면에서 수동 처리 안내.
+    프론트는 응답 후 토스트로 안내 표시.
+    """
+    from backend.domain.samba.account.repository import SambaMarketAccountRepository
+
+    svc = _write_service(session)
+    order = await svc.get_order(order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="주문을 찾을 수 없습니다")
+    if not order.channel_id:
+        raise HTTPException(status_code=400, detail="마켓 계정 정보가 없습니다")
+
+    account_repo = SambaMarketAccountRepository(session)
+    account = await account_repo.get_async(order.channel_id)
+    if not account:
+        raise HTTPException(status_code=400, detail="마켓 계정을 찾을 수 없습니다")
+
+    if account.market_type == "coupang":
+        await svc.update_order(
+            order_id,
+            {"status": "cancel_reject_pending"},
+        )
+        logger.info(
+            f"[취소거부] 쿠팡 {order.order_number} 내부 pending 처리 "
+            "(Wing 수동 처리 필요)"
+        )
+        return {
+            "ok": True,
+            "message": "쿠팡 취소거부 — Wing 화면에서 수동 처리해주세요",
+            "manual_required": True,
+        }
+
+    raise HTTPException(
+        status_code=400, detail=f"{account.market_type} 취소 거부 미지원"
     )
 
 
