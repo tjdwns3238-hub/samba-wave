@@ -78,7 +78,7 @@ except ImportError:
 # ====================================================================
 # 데몬 버전 — build.ps1 가 갱신. 자동 업데이트 비교 기준.
 # ====================================================================
-DAEMON_VERSION = "1.4.7"
+DAEMON_VERSION = "1.4.8"
 
 
 # ====================================================================
@@ -455,6 +455,120 @@ LOTTEON_MARKER_JS = r"""
 """
 
 
+# LOTTEON 발주취소 — 분석 결과(2026-05-26 CDP 9223 실측):
+#  · 취소 페이지: /p/order/claim/cancellation/orderCancellationAccept?odNo={ord_no}&odSeq=1&procSeq=1
+#  · 사유 dropdown: Vue v-select (div.v-select)
+#  · 동의 체크박스 5개: claimAgree/paymentAgree/checkbox_fnclTx/
+#    checkbox_indivisualInfoCollection/checkbox_indivisualInfoConsignment
+#  · 최종 '취소요청' 클릭 → JS confirm "선택한 1개 상품을 취소할까요?"
+#  · confirm accept → POST pbf.lotteon.com/order/claim/v1/cancellation/processOrderCancellation
+#  · 사전조회: POST /order/claim/v1/payment/getMultiClaimRefundInfo (성공 확인용 아님)
+#  · 응답 SUCCESS = returnCode "200" + message "SUCCESS"
+#  · dialog 는 daemon.py page.on('dialog') auto-accept (위 2110번 라인)
+LOTTEON_CANCEL_JS = r"""
+(async () => {
+  // window.confirm 폴백 override — Playwright dialog handler 와 이중 안전망.
+  try { window.confirm = () => true; window.alert = () => {}; } catch(_) {}
+
+  // 1. v-select 사유 dropdown 렌더 대기 (최대 8초)
+  let vs = null
+  for (let i = 0; i < 40; i++) {
+    vs = document.querySelector('div.v-select')
+    if (vs) break
+    await new Promise(r => setTimeout(r, 200))
+  }
+  if (!vs) return {success: false, error: 'v-select 사유 dropdown 미발견'}
+
+  // 2. dropdown 열기 — Vue v-select 는 click() 무시. mousedown 이벤트로 활성화.
+  const opener = vs.querySelector('.vs__selected-options') || vs
+  opener.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, button: 0}))
+  opener.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, button: 0}))
+  opener.click()
+  await new Promise(r => setTimeout(r, 800))
+
+  // 3. '구매 의사 없어짐' 옵션 클릭 — vs__dropdown-option 직접 매칭
+  let selected = false
+  for (const el of document.querySelectorAll('ul.vs__dropdown-menu li[role=option], .vs__dropdown-option')) {
+    const t = (el.innerText || el.textContent || '').trim()
+    if (t === '구매 의사 없어짐' || t === '구매의사 없어짐') {
+      el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, button: 0}))
+      el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, button: 0}))
+      el.click()
+      selected = true
+      break
+    }
+  }
+  if (!selected) return {success: false, error: '사유 옵션(구매 의사 없어짐) 미발견'}
+  await new Promise(r => setTimeout(r, 500))
+
+  // 4. 동의 체크박스 5개 강제 체크
+  const agreeIds = [
+    'claimAgree', 'paymentAgree', 'checkbox_fnclTx',
+    'checkbox_indivisualInfoCollection', 'checkbox_indivisualInfoConsignment',
+  ]
+  for (const id of agreeIds) {
+    const el = document.getElementById(id)
+    if (el && !el.checked) el.click()
+  }
+  await new Promise(r => setTimeout(r, 500))
+
+  // 5. processOrderCancellation 응답 캡처 — fetch + XHR 동시 hook (LOTTEON axios/XHR 모두 대응)
+  let cancelResp = null
+  const origFetch = window.fetch.bind(window)
+  window.fetch = async function(input, init) {
+    const url = typeof input === 'string' ? input : (input && input.url) || ''
+    const res = await origFetch(input, init)
+    if (/processOrderCancellation/.test(url)) {
+      try { const cl = res.clone(); cancelResp = JSON.parse(await cl.text()) } catch(_) {}
+    }
+    return res
+  }
+  const _xhrOpen = XMLHttpRequest.prototype.open
+  const _xhrSend = XMLHttpRequest.prototype.send
+  XMLHttpRequest.prototype.open = function(method, url) { this.__sambaURL = url; return _xhrOpen.apply(this, arguments) }
+  XMLHttpRequest.prototype.send = function(body) {
+    this.addEventListener('load', () => {
+      try {
+        if (/processOrderCancellation/.test(this.__sambaURL || '')) {
+          cancelResp = JSON.parse(this.responseText)
+        }
+      } catch(_) {}
+    })
+    return _xhrSend.apply(this, arguments)
+  }
+
+  // 6. '취소요청' 빨간 버튼 클릭 → confirm dialog 자동 accept → POST 발사
+  let clicked = false
+  for (const el of document.querySelectorAll('button')) {
+    const t = (el.innerText || '').trim()
+    if (t === '취소요청' && !el.disabled) { el.click(); clicked = true; break }
+  }
+  if (!clicked) return {success: false, error: '취소요청 버튼 미발견'}
+
+  // 7. 응답 대기 (최대 20초)
+  const start = Date.now()
+  while (Date.now() - start < 20000) {
+    if (cancelResp !== null) break
+    await new Promise(r => setTimeout(r, 300))
+  }
+  if (!cancelResp) return {success: false, error: 'processOrderCancellation 응답 timeout'}
+
+  // 8. 결과 판정 — LOTTEON SUCCESS = returnCode "200"
+  const code = (cancelResp.returnCode || cancelResp.code || '').toString()
+  const msg = cancelResp.message || cancelResp.msg || ''
+  const ok = code === '200' || /SUCCESS/i.test(msg)
+
+  return {
+    success: ok,
+    cancelled: ok,
+    alreadyShipped: /이미\s*발송|이미\s*취소|배송\s*시작/.test(msg),
+    reason: ok ? 'LOTTEON 발주취소 완료' : (msg || `returnCode=${code}`),
+    response: cancelResp,
+  }
+})()
+"""
+
+
 # LOTTEON 핸들러 등록 — 본 파일 내부 상수 사용.
 SITE_HANDLERS["LOTTEON"] = SiteHandler(
     site="LOTTEON",
@@ -471,6 +585,14 @@ SITE_HANDLERS["LOTTEON"] = SiteHandler(
     extract_retry_field="best_benefit_price",
     tracking_js=_LOTTEON_TRACKING_JS,
     logout_url=LOTTEON_LOGOUT_URL,
+    # 발주취소 — cancellation 페이지 직접 진입 + cancel_js 자동화.
+    # odSeq/procSeq 는 대부분 단일옵션이라 1 고정. 다옵션 주문은 추후 잡 payload 확장 필요.
+    cancel_url_template=(
+        "https://www.lotteon.com/p/order/claim/cancellation/"
+        "orderCancellationAccept?odNo={ord_no}&odSeq=1&procSeq=1"
+    ),
+    cancel_js=LOTTEON_CANCEL_JS,
+    cancel_requires_login=True,
 )
 
 

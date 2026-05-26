@@ -341,6 +341,29 @@ def _register_auto_cancel_trigger() -> None:
 
     _TRIGGER_STATUSES = {"cancel_requested", "cancelling"}
 
+    # 한글 shipping_status → 내부 status enum 매핑.
+    # status='pending'(주문접수) 인데 마켓 shipping_status 가 취소단계로 넘어온 경우
+    # status 도 자동 동기화. (전송로직/대시보드/오토튠이 status 기준으로 동작하므로 필수)
+    _PENDING_AUTO_FIX_MAP = {
+        "취소완료": "cancelled",
+        "취소요청": "cancel_requested",
+    }
+
+    @event.listens_for(Session, "before_flush")
+    def _normalize_pending_cancel(session, flush_context, instances) -> None:  # noqa: ARG001
+        for obj in list(session.new) + list(session.dirty):
+            if not isinstance(obj, SambaOrder):
+                continue
+            cur_status = (obj.status or "").strip().lower()
+            if cur_status != "pending":
+                continue
+            ship = (obj.shipping_status or "").strip()
+            new_status = _PENDING_AUTO_FIX_MAP.get(ship)
+            if not new_status:
+                continue
+            obj.status = new_status
+            obj.updated_at = datetime.now(tz=timezone.utc)
+
     @event.listens_for(Session, "after_flush")
     def _on_session_flush(session, flush_context) -> None:  # noqa: ARG001
         for obj in session.dirty:
