@@ -362,18 +362,24 @@ _filters_avail_lock = asyncio.Lock()
 # OOM 일으키지 않도록 상한. 너무 낮으면 backlog, 너무 높으면 메모리 폭주.
 # 정책 변경 직후 폭주 시 backlog는 이벤트 루프가 자연스럽게 흡수 (백프레셔).
 _AUTOTUNE_TRANSMIT_MAX_CONCURRENCY = int(
-    os.environ.get("AUTOTUNE_TRANSMIT_MAX_CONCURRENCY", "5")
+    os.environ.get("AUTOTUNE_TRANSMIT_MAX_CONCURRENCY", "3")
 )
-# PC 별 transmit 세마포어 — 한 PC 의 transmit 점유가 다른 PC starvation 일으키지
-# 않도록 device_id 단위 분리 (2026-05-26 ABC starvation 사고).
-# 옛 글로벌 단일 세마포어 = MUSINSA 등 transmit 많은 사이트가 5건 점유 시 ABC
-# cycle 의 transmit task 가 같은 슬롯 대기 → ABC cycle blocked.
-_autotune_transmit_sems: dict[str, asyncio.Semaphore] = {}
+# PC × 사이트별 transmit 세마포어 — (device_id, site) 단위 분리.
+# 사이트별 3 슬롯. PC 가 N 사이트 담당하면 그 PC 총 동시 transmit = N × 3.
+# 예: PC1 (무신사+GS+ABC) = 9, PC2 (SSG) = 3, PC3 (LOTTE) = 3.
+# DB write pool 50 한도 내 안전 (PC 5개 × 5 사이트 × 3 = 75 까지 가능하지만
+# 일반적 분담 시 30~40 슬롯 수준).
+# 옛 글로벌 단일 세마포어 = MUSINSA transmit 점유 시 ABC cycle blocked 사고
+# (2026-05-26 ABC starvation).
+_autotune_transmit_sems: dict[tuple[str, str], asyncio.Semaphore] = {}
 
 
-def _get_transmit_sem(device_id: str = "") -> asyncio.Semaphore:
-    """PC 별 세마포어 lazy init — 한 PC 의 transmit 가 다른 PC 영향 X."""
-    key = (device_id or "").strip() or "_default"
+def _get_transmit_sem(device_id: str = "", site: str = "") -> asyncio.Semaphore:
+    """PC × 사이트별 세마포어 lazy init.
+
+    한 PC 의 한 사이트 transmit 점유가 다른 사이트/다른 PC 영향 X.
+    """
+    key = ((device_id or "").strip() or "_default", (site or "").strip() or "_any")
     sem = _autotune_transmit_sems.get(key)
     if sem is None:
         sem = asyncio.Semaphore(_AUTOTUNE_TRANSMIT_MAX_CONCURRENCY)
@@ -381,12 +387,12 @@ def _get_transmit_sem(device_id: str = "") -> asyncio.Semaphore:
     return sem
 
 
-async def _run_transmit_in_background(coro_factory):
-    """fire-and-forget으로 전송 실행 — PC 별 세마포어로 동시 실행 제한.
+async def _run_transmit_in_background(coro_factory, site: str = ""):
+    """fire-and-forget으로 전송 실행 — PC × 사이트별 세마포어로 동시 실행 제한.
 
     coro_factory: 호출 시 코루틴을 반환하는 callable.
+    site: 발행 사이트명 (PC × 사이트 슬롯 분리용).
     예외는 로그로만 남김 (refresher 본 흐름에 영향 없음).
-    PC 별 분리 (current_pc_owner ContextVar) — 한 PC 의 transmit 가 다른 PC 영향 X.
     """
     from backend.domain.samba.collector.refresher import is_bulk_cancelled
 
@@ -395,7 +401,7 @@ async def _run_transmit_in_background(coro_factory):
         _dev = current_pc_owner.get()
     except LookupError:
         _dev = ""
-    sem = _get_transmit_sem(_dev)
+    sem = _get_transmit_sem(_dev, site)
     async with sem:
         if is_bulk_cancelled("transmit"):
             return
@@ -2545,7 +2551,9 @@ async def _site_autotune_loop(device_id: str, site: str):
                                 # 정책 변경 직후 폭주(수천 건)에서도 refresher가 await에 막혀
                                 # throughput이 1/min으로 떨어지던 문제 해결.
                                 asyncio.create_task(
-                                    _run_transmit_in_background(_fire_transmit_group)
+                                    _run_transmit_in_background(
+                                        _fire_transmit_group, site=site
+                                    )
                                 )
 
                         # ③ 소싱처별 병렬 갱신 + 결과 즉시 처리 (콜백)
