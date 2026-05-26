@@ -1248,7 +1248,7 @@ async function handleCancelOrderJob(job) {
 
   try {
     if (site === 'MUSINSA') {
-      result = await _cancelMusinsa(ordNo)
+      result = await _cancelMusinsa(ordNo, sourcingAccountId)
     } else {
       result.reason = `확장앱 cancel 미구현(site=${site})`
     }
@@ -1261,6 +1261,181 @@ async function handleCancelOrderJob(job) {
     await postResult('sourcing/cancel-result', { requestId, ...result })
   } catch (err) {
     console.warn(`[발주취소] 결과 전송 실패 req=${requestId}:`, err)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _offscreenFetch — debugger API + declarativeNetRequest 패턴.
+//
+// 배경: MV3 ServiceWorker fetch + offscreen fetch 모두 무신사 HTTPOnly 세션쿠키
+// 자동 첨부 못 함. chrome.cookies API 도 first-party context 의 진짜 세션 쿠키
+// 안 보여줌(분석 쿠키 5개만 노출).
+//
+// 해결: chrome.debugger.attach 로 무신사 탭에 attach → Network.getCookies 로
+// HTTPOnly 포함 진짜 세션 쿠키 추출 → declarativeNetRequest session rule 로
+// Cookie 헤더 set → SW fetch → rule 제거 → debugger detach.
+//
+// 무신사 탭이 없으면 chrome.tabs.create({active:false}) 로 임시 생성 후 닫음.
+// ─────────────────────────────────────────────────────────────────────────────
+const _MUSINSA_DNR_RULE_ID = 99001  // 일시 룰 ID
+
+async function _attachDebugger(tabId) {
+  return new Promise((resolve, reject) => {
+    chrome.debugger.attach({tabId}, '1.3', () => {
+      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message))
+      else resolve()
+    })
+  })
+}
+
+async function _detachDebugger(tabId) {
+  return new Promise((resolve) => {
+    chrome.debugger.detach({tabId}, () => { void chrome.runtime.lastError; resolve() })
+  })
+}
+
+async function _sendDebuggerCmd(tabId, method, params) {
+  return new Promise((resolve, reject) => {
+    chrome.debugger.sendCommand({tabId}, method, params || {}, (result) => {
+      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message))
+      else resolve(result)
+    })
+  })
+}
+
+async function _waitForTabComplete(tabId, timeoutMs = 15000) {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    const t = await chrome.tabs.get(tabId)
+    if (t.status === 'complete') return true
+    await new Promise(r => setTimeout(r, 200))
+  }
+  return false
+}
+
+async function _getOrCreateMusinsaTab() {
+  // 1. 기존 musinsa 탭 우선
+  const tabs = await chrome.tabs.query({url: 'https://*.musinsa.com/*'})
+  if (tabs && tabs.length > 0) {
+    return { tabId: tabs[0].id, ephemeral: false }
+  }
+  // 2. 백그라운드 탭 임시 생성
+  const tab = await chrome.tabs.create({url: 'https://www.musinsa.com/', active: false})
+  await _waitForTabComplete(tab.id, 15000)
+  return { tabId: tab.id, ephemeral: true }
+}
+
+async function _extractMusinsaCookieHeader(tabId) {
+  // 모든 musinsa 관련 URL의 cookies 수집
+  const urls = [
+    'https://www.musinsa.com/',
+    'https://api.musinsa.com/',
+    'https://order.musinsa.com/',
+    'https://my.musinsa.com/',
+  ]
+  const res = await _sendDebuggerCmd(tabId, 'Network.getCookies', { urls })
+  const cookies = res?.cookies || []
+  // name=value 형식으로 join. path/domain match 신경 X — 한 도메인 그룹.
+  const seen = new Set()
+  const parts = []
+  for (const c of cookies) {
+    const key = c.name
+    if (seen.has(key)) continue
+    seen.add(key)
+    parts.push(`${c.name}=${c.value}`)
+  }
+  return { header: parts.join('; '), count: parts.length }
+}
+
+async function _installDNRCookieRule(cookieHeader) {
+  await chrome.declarativeNetRequest.updateSessionRules({
+    removeRuleIds: [_MUSINSA_DNR_RULE_ID],
+    addRules: [{
+      id: _MUSINSA_DNR_RULE_ID,
+      priority: 1,
+      action: {
+        type: 'modifyHeaders',
+        requestHeaders: [
+          { header: 'Cookie', operation: 'set', value: cookieHeader },
+          { header: 'Origin', operation: 'set', value: 'https://www.musinsa.com' },
+          { header: 'Referer', operation: 'set', value: 'https://www.musinsa.com/' },
+        ],
+      },
+      condition: {
+        urlFilter: '||musinsa.com/',
+        resourceTypes: ['xmlhttprequest', 'sub_frame', 'main_frame', 'other'],
+      },
+    }],
+  })
+}
+
+async function _removeDNRCookieRule() {
+  try {
+    await chrome.declarativeNetRequest.updateSessionRules({
+      removeRuleIds: [_MUSINSA_DNR_RULE_ID],
+      addRules: [],
+    })
+  } catch (_) {}
+}
+
+// 세션 캐시 — 1회 cancel 호출 안에서 cookies 재추출 비용 절감
+let _musinsaCookieCache = { header: '', at: 0 }
+const _COOKIE_CACHE_TTL_MS = 60 * 1000  // 1분
+
+async function _prepareMusinsaCookies() {
+  if (_musinsaCookieCache.header && (Date.now() - _musinsaCookieCache.at < _COOKIE_CACHE_TTL_MS)) {
+    await _installDNRCookieRule(_musinsaCookieCache.header)
+    return { count: _musinsaCookieCache.header.split('; ').length, cached: true }
+  }
+  const ctx = await _getOrCreateMusinsaTab()
+  try {
+    await _attachDebugger(ctx.tabId)
+    try {
+      const { header, count } = await _extractMusinsaCookieHeader(ctx.tabId)
+      _musinsaCookieCache = { header, at: Date.now() }
+      await _installDNRCookieRule(header)
+      return { count, cached: false }
+    } finally {
+      await _detachDebugger(ctx.tabId)
+    }
+  } finally {
+    if (ctx.ephemeral) {
+      try { await chrome.tabs.remove(ctx.tabId) } catch (_) {}
+    }
+  }
+}
+
+async function _offscreenFetch({url, method = 'GET', formFields = null, body = null, isJson = false, headers = {}}) {
+  // 1. cookies 준비 (debugger + DNR rule)
+  let cookieInfo
+  try {
+    cookieInfo = await _prepareMusinsaCookies()
+  } catch (e) {
+    return { ok: false, error: `cookies prepare 실패: ${e.message || e}` }
+  }
+  // 2. SW fetch
+  try {
+    const init = { method, credentials: 'include', headers: { ...headers } }
+    if (formFields) {
+      const fd = new FormData()
+      for (const [k, v] of Object.entries(formFields)) fd.append(k, v == null ? '' : String(v))
+      init.body = fd
+    } else if (isJson && body) {
+      init.body = JSON.stringify(body)
+      init.headers['Content-Type'] = 'application/json'
+    }
+    const r = await fetch(url, init)
+    const txt = await r.text()
+    return {
+      ok: true, status: r.status, body: txt,
+      headers: Object.fromEntries(r.headers.entries()),
+      cookieInfo,
+    }
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) }
+  } finally {
+    // DNR rule 제거 — 다른 사이트 영향 방지. cookies 캐시는 유지.
+    await _removeDNRCookieRule()
   }
 }
 
@@ -1278,26 +1453,95 @@ async function handleCancelOrderJob(job) {
 // 라인아이템 여러 개일 수 있음 — orderOptionList 순회하며 각각 호출.
 // 무신사머니 결제는 refund_* 빈값 OK. 카드/계좌 결제 필요 시 추후 확장.
 // ─────────────────────────────────────────────────────────────────────────────
-async function _cancelMusinsa(ordNo) {
+async function _cancelMusinsa(ordNo, expectedAccountId) {
   if (!ordNo) return { success: false, cancelled: false, error: 'ordNo empty' }
 
-  // 1. 주문 정보 조회 → orderOptionList
+  // 1. 주문 정보 조회 → orderOptionList + 현재 로그인 계정 검증
   let view
   try {
-    const r = await fetch(`https://www.musinsa.com/order-service/my/order/get_order_view/${ordNo}`, {
-      credentials: 'include',
+    const r = await _offscreenFetch({
+      url: `https://www.musinsa.com/order-service/my/order/get_order_view/${ordNo}`,
+      method: 'GET',
       headers: { 'Accept': 'application/json' },
     })
+    if (!r.ok) return { success: false, cancelled: false, error: `get_order_view 실패: ${r.error}` }
     if (r.status === 401 || r.status === 403) {
       return { success: false, cancelled: false, error: '무신사 로그인 만료 — 운영자 재로그인 필요' }
     }
-    view = await r.json()
+    try { view = JSON.parse(r.body) } catch (e) {
+      return { success: false, cancelled: false, error: `get_order_view JSON parse 실패: ${(r.body||'').slice(0,200)}` }
+    }
   } catch (e) {
     return { success: false, cancelled: false, error: `get_order_view 실패: ${e.message || e}` }
   }
-  const items = ((view && view.orderList && view.orderList.orderOptionList) || []).filter(Boolean)
-  if (!items.length) {
-    return { success: false, cancelled: false, error: 'orderOptionList 비어있음' }
+  let items = ((view && view.orderList && view.orderList.orderOptionList) || []).filter(Boolean)
+  // items 비어있어도 expectedAccountId 있으면 계정 mismatch 가능성 → 일단 스왑 시도 후 재조회.
+  // 즉시 abort 금지.
+
+  // 사전 계정 검증 — view.orderInfo.user_id 로 현재 무신사 로그인 username 추출.
+  // 송장수집과 동일 패턴: find-by-username 으로 백엔드 accountId 매핑 → expectedAccountId 비교.
+  // 불일치 시 → ensureLoggedIn 강제(캐시 무효화) → view 재조회 + 재검증 → 그래도 다르면 abort.
+  const _resolveAccountByUsername = async (username) => {
+    if (!username) return null
+    try {
+      const stored = await chrome.storage.local.get('proxyUrl')
+      const proxyUrl = stored.proxyUrl || ''
+      const apiFetch = globalThis.SambaBackgroundCore?.apiFetch
+      if (!apiFetch) return null
+      const res = await apiFetch(
+        `${proxyUrl}/api/v1/samba/sourcing-accounts/find-by-username?site_name=MUSINSA&username=${encodeURIComponent(username)}`,
+        { method: 'GET' }
+      )
+      if (!res.ok) return null
+      const j = await res.json()
+      return j?.id || null
+    } catch (_) { return null }
+  }
+  const _refreshView = async () => {
+    try {
+      const r = await _offscreenFetch({
+        url: `https://www.musinsa.com/order-service/my/order/get_order_view/${ordNo}`,
+        method: 'GET', headers: {'Accept':'application/json'},
+      })
+      if (!r.ok) return null
+      try { return JSON.parse(r.body) } catch (_) { return null }
+    } catch (_) { return null }
+  }
+
+  if (expectedAccountId) {
+    let currentUserId = (view?.orderInfo?.user_id) || ''
+    let currentAccId = await _resolveAccountByUsername(currentUserId)
+    if (currentAccId !== expectedAccountId) {
+      console.log(`[발주취소-무신사] 계정 불일치 (현재=${currentUserId}/${currentAccId} vs 잡=${expectedAccountId}) — 강제 스왑 시도`)
+      // 캐시 무효화 후 ensureLoggedIn 강제
+      try { if (globalThis._lastAutoLoginSuccessAt?.musinsa) delete globalThis._lastAutoLoginSuccessAt.musinsa[expectedAccountId] } catch (_) {}
+      try { if (globalThis._lastAutoLoginSuccessAt?.musinsa) delete globalThis._lastAutoLoginSuccessAt.musinsa['_default'] } catch (_) {}
+      if (typeof globalThis.ensureLoggedIn !== 'function') {
+        return { success: false, cancelled: false, error: '계정 스왑 불가 — ensureLoggedIn 미정의' }
+      }
+      const swapOk = await globalThis.ensureLoggedIn('musinsa', { accountId: expectedAccountId })
+      if (!swapOk) {
+        return { success: false, cancelled: false, error: `계정 스왑 실패 (현재=${currentUserId}, 목표 acct=${expectedAccountId}). 운영자 수동 처리 필요` }
+      }
+      // 스왑 성공 — cookies 캐시 무효화 (옛 세션 cookies 폐기). 다음 _offscreenFetch 가 재추출.
+      _musinsaCookieCache = { header: '', at: 0 }
+      // 안정화 대기 — 로그인 직후 cookies 반영 지연 가능
+      await new Promise(r => setTimeout(r, 1500))
+      // 재검증
+      view = await _refreshView()
+      const reItems = (view?.orderList?.orderOptionList || [])
+      if (!reItems.length) {
+        return { success: false, cancelled: false, error: `스왑 후에도 주문 접근 불가 (현재=${(view?.orderInfo?.user_id)||'unknown'}, 목표 acct=${expectedAccountId})` }
+      }
+      currentUserId = view?.orderInfo?.user_id || ''
+      currentAccId = await _resolveAccountByUsername(currentUserId)
+      if (currentAccId !== expectedAccountId) {
+        return { success: false, cancelled: false, error: `스왑 후에도 계정 불일치 (현재=${currentUserId}/${currentAccId} vs 잡=${expectedAccountId})` }
+      }
+      console.log(`[발주취소-무신사] 스왑 성공 → ${currentUserId}`)
+      // 재검증 통과 — items 재설정
+      items = reItems
+    }
   }
 
   const results = []
@@ -1328,12 +1572,14 @@ async function _cancelMusinsa(ordNo) {
     // 2. status 가용성 체크 — code 10/20만 취소 허용
     let code = it.orderState
     try {
-      const rs = await fetch(`https://order.musinsa.com/api2/order/v1/order-items/${optNo}/status`, {
-        credentials: 'include',
-        headers: { 'Accept': 'application/json' },
+      const rs = await _offscreenFetch({
+        url: `https://order.musinsa.com/api2/order/v1/order-items/${optNo}/status`,
+        method: 'GET', headers: { 'Accept': 'application/json' },
       })
-      const sj = await rs.json()
-      if (sj && sj.data && typeof sj.data.code === 'number') code = sj.data.code
+      if (rs.ok && rs.body) {
+        const sj = JSON.parse(rs.body)
+        if (sj && sj.data && typeof sj.data.code === 'number') code = sj.data.code
+      }
     } catch (_) { /* status 실패 시 orderState 그대로 사용 */ }
 
     if (code >= 30) {
@@ -1352,30 +1598,65 @@ async function _cancelMusinsa(ordNo) {
     }
 
     // 3. cancel POST (multipart) — claim_reason=1 (단순변심)
-    try {
-      const fd = new FormData()
-      fd.append('ord_no', ordNo)
-      fd.append('ord_opt_nos', optNo)
-      fd.append('refund_bank', '')
-      fd.append('refund_account', '')
-      fd.append('refund_nm', '')
-      fd.append('claim_reason', '1')
-      fd.append('cancel_content', '')
-      const r = await fetch('https://api.musinsa.com/api2/claim/command/mypage/order_cancel_cmd/refund', {
-        method: 'POST',
-        body: fd,
-        credentials: 'include',
+    const _formFields = {
+      ord_no: ordNo, ord_opt_nos: optNo,
+      refund_bank: '', refund_account: '', refund_nm: '',
+      claim_reason: '1', cancel_content: '',
+    }
+    const _doCancel = async () => {
+      const r = await _offscreenFetch({
+        url: 'https://api.musinsa.com/api2/claim/command/mypage/order_cancel_cmd/refund',
+        method: 'POST', formFields: _formFields,
       })
-      const txt = await r.text()
+      if (!r.ok) return { status: 0, ok: false, body: r.error || 'offscreen fetch fail' }
+      const txt = r.body || ''
+      // 실측(2026-05-26): 권한거부 시 HTTP 200 + {code:999, message:"Invalid Access", meta:{result:"SUCCESS"}}.
+      // meta.result 는 신뢰 못함. code===1 만 진짜 성공. errorCode 있으면 무조건 실패.
       let ok = false
-      try {
-        const j = JSON.parse(txt)
-        // 무신사 응답 패턴: {code:1, message:"SUCCESS"} 또는 {meta:{result:"SUCCESS"}}
-        ok = j && (j.code === 1 || j.cd === 1 || (j.meta && j.meta.result === 'SUCCESS') || j.message === 'SUCCESS' || j.msg === 'SUCCESS')
-      } catch (_) { ok = r.status === 200 && /SUCCESS/i.test(txt) }
-      results.push({ optNo, status: r.status, ok, body: txt.slice(0, 300) })
-      if (ok) newlyCancelledCount++
-      if (!ok) allCancelled = false
+      let bodyJson = null
+      try { bodyJson = JSON.parse(txt) } catch (_) {}
+      if (bodyJson) {
+        const code = bodyJson.code ?? bodyJson.cd
+        const errorCode = bodyJson?.meta?.errorCode
+        ok = (code === 1) && !errorCode
+      } else {
+        ok = r.status === 200 && /SUCCESS/i.test(txt) && !/Invalid Access|errorCode/i.test(txt)
+      }
+      return { status: r.status, ok, body: txt.slice(0, 300) }
+    }
+    try {
+      let res = await _doCancel()
+      if (!res.ok && (res.status === 401 || res.status === 403) && expectedAccountId
+          && typeof globalThis.ensureLoggedIn === 'function') {
+        // 강제 재로그인 — 캐시 TTL 무시. ensureLoggedIn 캐시 초기화.
+        try { if (globalThis._lastAutoLoginSuccessAt?.musinsa) delete globalThis._lastAutoLoginSuccessAt.musinsa[expectedAccountId] } catch (_) {}
+        const swapOk = await globalThis.ensureLoggedIn('musinsa', { accountId: expectedAccountId })
+        if (swapOk) {
+          // 재로그인 성공 후 — view 다시 조회해서 user_id 재검증
+          try {
+            const vr = await fetch(`https://www.musinsa.com/order-service/my/order/get_order_view/${ordNo}`, {credentials: 'include', headers: {'Accept':'application/json'}})
+            const vj = await vr.json()
+            const reUser = (vj?.orderInfo?.user_id || '').toLowerCase()
+            // 매핑 다시
+            try {
+              const mr = await postResult('sourcing/musinsa-account-username', {accountId: expectedAccountId})
+              const expUser = (mr?.username || '').toLowerCase()
+              if (expUser && reUser && expUser !== reUser) {
+                results.push({ optNo, status: res.status, ok: false, body: `403 후 재로그인했으나 계정 여전히 불일치(${reUser} vs ${expUser})` })
+                allCancelled = false
+                continue
+              }
+            } catch (_) {}
+          } catch (_) {}
+          res = await _doCancel()
+          res.retried = true
+        } else {
+          res.retried = 'swap_failed'
+        }
+      }
+      results.push({ optNo, ...res })
+      if (res.ok) newlyCancelledCount++
+      if (!res.ok) allCancelled = false
     } catch (e) {
       results.push({ optNo, error: e.message || String(e) })
       allCancelled = false
