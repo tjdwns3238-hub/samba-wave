@@ -3252,10 +3252,17 @@ async def _autotune_loop(device_id: str):
                     active_sites = await _get_active_sites_cached()
 
                     # 이 PC가 처리할 사이트만 — _pc_allowed_sites 기준
-                    # 미등록(None) → 이 PC가 모든 사이트 처리 (단일 PC 운영)
+                    # 미등록(None) → 사이클 발행 차단 (2026-05-26 사고: 옛 owner_device_id
+                    # 자동 시작 시 그 device 분담 미등록 → 모든 사이트 spawn → 사용자 정지 무효).
                     # 등록됨 → 그 사이트만
                     my_sites = get_pc_allowed_sites(device_id)
-                    if my_sites is not None:
+                    if my_sites is None:
+                        log.warning(
+                            "[오토튠][%s] 미등록 device — 사이클 발행 차단 (분담 mapping 없음)",
+                            _dev_tag,
+                        )
+                        active_sites = []
+                    else:
                         active_sites = [s for s in active_sites if s in my_sites]
 
                     # 서킷브레이커 제외
