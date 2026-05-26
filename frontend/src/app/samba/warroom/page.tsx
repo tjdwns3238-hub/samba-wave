@@ -463,7 +463,12 @@ function ActiveCyclesPanel(): React.ReactElement {
               }
               return (
                 <tr key={k} style={{ borderBottom: '1px solid #2A2A2A' }}>
-                  <td style={{ padding: '0.4rem', fontFamily: 'monospace', fontSize: '0.75rem' }}>{c.device_id.slice(0, 28)}</td>
+                  <td style={{ padding: '0.4rem', fontFamily: 'monospace', fontSize: '0.75rem' }}>
+                    {c.device_id.slice(0, 28)}
+                    <span style={{ marginLeft: '0.3rem', fontSize: '0.7rem', color: c.device_id.startsWith('samba-daemon-') ? '#4C9AFF' : '#FFB84D' }}>
+                      ({c.device_id.startsWith('samba-daemon-') ? '데몬' : '확장앱'})
+                    </span>
+                  </td>
                   <td style={{ padding: '0.4rem' }}>{c.site}</td>
                   <td style={{ padding: '0.4rem', textAlign: 'right' }}>{fmtNum(c.idx)} / {fmtNum(c.total)}</td>
                   <td style={{ padding: '0.4rem', textAlign: 'right', color: '#FFB84D' }}>{avgStr}</td>
