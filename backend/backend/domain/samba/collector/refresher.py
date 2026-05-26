@@ -468,7 +468,13 @@ def _log_refresh(
     prefix = f"[{idx:,}/{total:,}] " if idx and total else ""
     site_tag = f"[{site}] " if site else ""
     name_label = f"{product_name[:80]}: " if product_name else ""
-    full_msg = f"[{ts_str}] {prefix}{site_tag}{name_label}{message}"
+    # MUSINSA 인터벌 표시 — 사용자 요청 (2026-05-26): 차단 시 인터벌 증가 추적용.
+    # 0(설정 base) → 차단 → 2배씩 → 30s 상한 → 성공 시 점진 복원.
+    interval_tag = ""
+    if site == "MUSINSA":
+        _cur_int = _site_intervals.get("MUSINSA", 1.0)
+        interval_tag = f"[int={_cur_int:.1f}s] "
+    full_msg = f"[{ts_str}] {prefix}{site_tag}{interval_tag}{name_label}{message}"
     _refresh_log_buffer.append(
         {
             "ts": now.isoformat(),
