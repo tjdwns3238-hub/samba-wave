@@ -13,21 +13,15 @@ interface ErrorProps {
 
 export default function Error({ error, reset }: ErrorProps) {
   useEffect(() => {
-    // 배포 직후 chunk 로딩 실패 (옛 chunk hash reference) 자동 1회 reload.
-    // 30초 내 중복 reload 방지 — 실제 에러 무한 loop 차단.
-    const msg = error?.message || "";
-    const isChunkError =
-      msg.includes("Loading chunk") ||
-      msg.includes("ChunkLoadError") ||
-      msg.includes("Failed to fetch dynamically imported module") ||
-      msg.includes("Importing a module script failed") ||
-      msg.includes("error loading dynamically imported module") ||
-      error?.name === "ChunkLoadError";
-    if (isChunkError && typeof window !== "undefined") {
+    // 배포 직후 chunk hash 불일치 / SSR mismatch / 일시적 fetch 실패 등
+    // 모든 에러에 대해 자동 1회 reload 시도 (60초 가드로 무한 loop 차단).
+    // chunk error 한정 검사 폐기: 실측에서 사용자가 보는 "오류 화면" 대부분이
+    // chunk 패턴 미매칭 (SSR boundary 또는 dynamic import 외) → reload 무조건 시도.
+    if (typeof window !== "undefined") {
       try {
-        const key = "samba.chunkReloadAt";
+        const key = "samba.errorReloadAt";
         const last = Number(window.sessionStorage.getItem(key) || "0");
-        if (Date.now() - last > 30_000) {
+        if (Date.now() - last > 60_000) {
           window.sessionStorage.setItem(key, String(Date.now()));
           window.location.reload();
           return;
