@@ -472,6 +472,7 @@ class SourcingQueue:
         sourcing_account_id: str = "",
         url: str = "",
         owner_device_id: str | None = None,
+        prev_status: str = "",
     ) -> tuple[str, asyncio.Future[Any]]:
         """소싱처 발주 취소 작업 큐에 추가 (헤드리스 데몬 처리).
 
@@ -507,6 +508,8 @@ class SourcingQueue:
             "sourcingOrderNumber": sourcing_order_number,
             "sourcingAccountId": sourcing_account_id or "",
             "ownerDeviceId": owner_device_id or "",
+            # 실패 시 status 롤백용 — cancel-result router 에서 사용.
+            "prevStatus": prev_status or "",
         }
         cls.resolvers[request_id] = future
         await _db_insert_job(job, "cancel_order")
@@ -565,11 +568,17 @@ class SourcingQueue:
                 )
                 return False
 
-        # 중복 가드: 동일 (site, ord_no) cancel_order 잡 in-flight 검사
+        # 중복 가드 + cooldown
+        # - in-flight (pending/dispatched) 잡 존재 시 skip
+        # - 최근 N분 내 실패 잡 존재 시 skip (마켓 폴러 재발행 무한루프 차단)
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
         from sqlalchemy import and_, or_, select
+
+        _COOLDOWN_MIN = 30  # 실패 후 재시도 cooldown(분)
 
         try:
             async with get_write_session() as session:
+                # in-flight
                 stmt = (
                     select(SambaSourcingJob.request_id)
                     .where(
@@ -589,7 +598,30 @@ class SourcingQueue:
                 existing = (await session.execute(stmt)).scalar_one_or_none()
                 if existing is not None:
                     logger.info(
-                        f"[자동취소] order={order_id} 잡 이미 존재({existing}) — skip"
+                        f"[자동취소] order={order_id} 잡 in-flight({existing}) — skip"
+                    )
+                    return False
+                # cooldown — 최근 실패 잡
+                since = _dt.now(_tz.utc) - _td(minutes=_COOLDOWN_MIN)
+                stmt2 = (
+                    select(SambaSourcingJob.request_id)
+                    .where(
+                        and_(
+                            SambaSourcingJob.job_type == "cancel_order",
+                            SambaSourcingJob.site == site,
+                            SambaSourcingJob.status == "failed",
+                            SambaSourcingJob.payload["sourcingOrderNumber"].astext
+                            == ord_no,
+                            SambaSourcingJob.completed_at >= since,
+                        )
+                    )
+                    .limit(1)
+                )
+                recent_fail = (await session.execute(stmt2)).scalar_one_or_none()
+                if recent_fail is not None:
+                    logger.info(
+                        f"[자동취소] order={order_id} 최근 실패({recent_fail}) — "
+                        f"{_COOLDOWN_MIN}분 cooldown skip"
                     )
                     return False
         except Exception as exc:
@@ -601,6 +633,7 @@ class SourcingQueue:
                 sourcing_order_number=ord_no,
                 order_id=order_id,
                 sourcing_account_id=sourcing_account_id or "",
+                prev_status=prev_status or "",
             )
             logger.info(
                 f"[자동취소] order={order_id} site={site} ord={ord_no} 잡 발행 완료"

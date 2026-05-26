@@ -446,10 +446,11 @@ async def sourcing_cancel_result(body: dict[str, Any]) -> dict[str, Any]:
         },
     )
 
-    # 잡 payload 에서 orderId 회수
+    # 잡 payload 에서 orderId + prev_status (롤백용) 회수
     order_id = ""
     sourcing_order_number = ""
     site = ""
+    prev_status = ""
     try:
         async with get_write_session() as _sess:
             _row = await _sess.get(SambaSourcingJob, request_id)
@@ -459,6 +460,7 @@ async def sourcing_cancel_result(body: dict[str, Any]) -> dict[str, Any]:
                     _row.payload.get("sourcingOrderNumber") or ""
                 ).strip()
                 site = (_row.payload.get("site") or "").strip()
+                prev_status = (_row.payload.get("prevStatus") or "").strip()
     except Exception as _e:
         logger.warning(f"[cancel-result] 잡 조회 실패 req={request_id}: {_e}")
 
@@ -474,21 +476,29 @@ async def sourcing_cancel_result(body: dict[str, Any]) -> dict[str, Any]:
     update_values: dict[str, Any] = {}
 
     if cancelled:
+        # 성공 → '취소중'(cancelling) 으로 advance. 추후 마켓 폴러가 '취소완료' 확정 시 cancelled 로.
         note_line = (
-            f"[{now_kst_tag}] 소싱처 자동취소 완료 ({site} ord={sourcing_order_number})"
+            f"[{now_kst_tag}] 소싱처 자동취소 성공 → 취소중 "
+            f"({site} ord={sourcing_order_number})"
         )
         update_values = {
-            "status": "cancelled",
-            "shipping_status": "취소완료",
+            "status": "cancelling",
             "updated_at": datetime.now(timezone.utc),
         }
     elif already_shipped:
+        # 이미 발송 — status 그대로 + 수동 처리 안내. 단, cancel_requested 로 박혀있으면
+        # 사용자 오해 유발 → prev_status 가 있으면 그 값으로 롤백.
         note_line = (
             f"[{now_kst_tag}] 소싱처 이미 발송 — 자동취소 불가, 수동 처리 필요 "
             f"({site} ord={sourcing_order_number})"
         )
+        if prev_status:
+            update_values = {
+                "status": prev_status,
+                "updated_at": datetime.now(timezone.utc),
+            }
     else:
-        # details (확장앱이 반환한 라인아이템별 결과) 첨부 — 실패 원인 즉시 확인용
+        # 실패 → status 를 prev_status 로 롤백. payload 에 없으면 노트만.
         details = body.get("details")
         details_str = ""
         if details:
@@ -504,6 +514,11 @@ async def sourcing_cancel_result(body: dict[str, Any]) -> dict[str, Any]:
             f"[{now_kst_tag}] 소싱처 자동취소 실패: {error or reason or 'unknown'} "
             f"({site} ord={sourcing_order_number}){details_str}"
         )
+        if prev_status:
+            update_values = {
+                "status": prev_status,
+                "updated_at": datetime.now(timezone.utc),
+            }
 
     try:
         async with get_write_session() as sess:
