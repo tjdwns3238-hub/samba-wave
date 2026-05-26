@@ -167,7 +167,7 @@ export default function RewardsPage() {
       <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.75rem', marginBottom: '1rem' }}>
         <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#E5E5E5' }}>적립금</h1>
         <span style={{ fontSize: '0.85rem', color: '#888' }}>
-          소싱처 계정별 무신사 머니 / 적립금 / ABC마트 스탬프 / 리뷰 현황. 24시간 1회 자동 실행.
+          계정별 적립금 및 리뷰 현황을 24시간마다 자동으로 동기화합니다.
         </span>
       </div>
 
