@@ -77,7 +77,7 @@ except ImportError:
 # ====================================================================
 # 데몬 버전 — build.ps1 가 갱신. 자동 업데이트 비교 기준.
 # ====================================================================
-DAEMON_VERSION = "1.4.9"
+DAEMON_VERSION = "1.4.10"
 
 
 # ====================================================================
@@ -188,9 +188,11 @@ def _perform_self_update(api_key: str = "") -> bool:
     bat = install_dir / "_self_update.bat"
     bat_content = (
         "@echo off\r\n"
-        ":wait\r\n"
-        'tasklist /FI "IMAGENAME eq daemon.exe" 2>nul | find /I "daemon.exe" >nul '
-        "&& (timeout /t 1 >nul & goto wait)\r\n"
+        # 옛 wait loop 폐기 — supervisor + worker + Run 키 자동시작된 daemon.exe 가
+        # 안 죽으면 무한 대기 → swap 실패 → daemon.exe.new 잔존 사고 (2026-05-26 사용자 보고).
+        # 즉시 모든 daemon.exe 강제 종료 후 swap.
+        "taskkill /F /IM daemon.exe >nul 2>&1\r\n"
+        "timeout /t 2 >nul\r\n"
         f'move /Y "{new_path}" "{exe_path}" >nul\r\n'
         f'start "" "{exe_path}" {_args}\r\n'
         'del "%~f0"\r\n'

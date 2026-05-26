@@ -190,7 +190,7 @@ async def sourcing_collect_queue(request: Request) -> Any:
 # ====================================================================
 
 # build/release 시 갱신. 데몬이 시작 시 비교하여 신버전이면 자기 종료(다음 시작 시 갱신).
-AUTOTUNE_DAEMON_LATEST_VERSION = "1.4.9"
+AUTOTUNE_DAEMON_LATEST_VERSION = "1.4.10"
 AUTOTUNE_DAEMON_DOWNLOAD_URL = (
     "https://github.com/sbk0674-web/samba-wave/releases/download/"
     "samba-daemon-v1.4.8/samba.exe"
