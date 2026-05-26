@@ -1435,63 +1435,27 @@ class CoupangClient:
         status: str = "",
         max_per_page: int = 50,
     ) -> list[dict[str, Any]]:
-        """취소·반품 요청 통합 조회 (#246).
+        """취소·반품 요청 통합 조회 (#246 PR-2).
 
-        get_return_requests 와 동일 엔드포인트(returnRequests)이나 receiptType 필드를
-        호출자가 사용할 수 있도록 원본 응답을 그대로 반환. CANCEL 과 RETURN 모두 포함.
-
-        쿠팡 Wing API: GET /v2/.../vendors/{vendorId}/returnRequests
-        status 미지정 시 4개 상태(RU/CC/PR/UC) 합산 조회.
+        기존 `get_return_requests` 가 이미 동일 엔드포인트(returnRequests)에서 원본 dict
+        를 그대로 반환하므로 그대로 위임. CANCEL/RETURN 분기는 호출자가 `receiptType`
+        필드로 판별. 별도 함수로 유지하는 이유는 호출 의도 명확화(취소·반품 통합 동기화
+        흐름에서 사용)와 receiptType 카운트 로그 부가.
         """
-        now = datetime.now(timezone.utc)
-        since = now - timedelta(days=days)
-
-        statuses = [status] if status else ["RU", "CC", "PR", "UC"]
-        all_items: list[dict[str, Any]] = []
-
-        for st in statuses:
-            next_token = ""
-            for _ in range(100):
-                params: dict[str, str] = {
-                    "createdAtFrom": since.strftime("%Y-%m-%d"),
-                    "createdAtTo": now.strftime("%Y-%m-%d"),
-                    "maxPerPage": str(max_per_page),
-                    "status": st,
-                }
-                if next_token:
-                    params["nextToken"] = next_token
-
-                path = (
-                    f"/v2/providers/openapi/apis/api/v4/vendors/{self.vendor_id}/"
-                    f"returnRequests"
-                )
-                result = await self._call_api("GET", path, params=params)
-
-                data = result.get("data", []) if isinstance(result, dict) else []
-                if isinstance(data, list):
-                    all_items.extend(data)
-                elif isinstance(data, dict):
-                    items = data.get("returnRequests", data.get("content", []))
-                    if isinstance(items, list):
-                        all_items.extend(items)
-
-                next_token = (
-                    result.get("nextToken", "") if isinstance(result, dict) else ""
-                )
-                if not next_token:
-                    break
-
+        items = await self.get_return_requests(
+            days=days, status=status, max_per_page=max_per_page
+        )
         cancel_cnt = sum(
-            1 for r in all_items if (r.get("receiptType") or "").upper() == "CANCEL"
+            1 for r in items if (r.get("receiptType") or "").upper() == "CANCEL"
         )
         return_cnt = sum(
-            1 for r in all_items if (r.get("receiptType") or "").upper() == "RETURN"
+            1 for r in items if (r.get("receiptType") or "").upper() == "RETURN"
         )
         logger.info(
-            f"[쿠팡] 취소·반품 통합 조회 완료: {len(all_items)}건 "
+            f"[쿠팡] 취소·반품 통합 조회: {len(items)}건 "
             f"(CANCEL={cancel_cnt}, RETURN={return_cnt}, 최근 {days}일)"
         )
-        return all_items
+        return items
 
     async def confirm_completed_shipment(
         self,
