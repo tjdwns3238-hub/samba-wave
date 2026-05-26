@@ -310,3 +310,76 @@ def assert_order_dispatchable(order: "SambaOrder") -> None:
         raise OrderCancelledError(
             order.id, order.status or "", order.shipping_status or ""
         )
+
+
+# ---------------------------------------------------------------------------
+# 자동 발주취소 트리거 — SQLAlchemy event listener
+# ---------------------------------------------------------------------------
+# 마켓 폴러/동기화 코드에서 order.status 가 'cancel_requested' 또는 'cancelling' 로
+# 변경되는 순간 자동 캐치 → 소싱처 발주취소 잡 발행.
+#
+# 폴러별 wiring (쿠팡/eBay/SSG/PlayAuto/스마트스토어 등 6+곳) 누락 위험을
+# 단일 listener 로 해소. status 변경 모두 commit 직전 hook 으로 트리거.
+#
+# 가드 (helper 내부 4중):
+#  - 새 status 가 취소요청/취소중 인지
+#  - prev_status 가 동일하지 않은지 (실제 진입 시점만)
+#  - source_site / sourcing_order_number 존재
+#  - shipping_status 배송키워드 미포함 (배송 후 자동취소 차단)
+#  - 동일 (site, ord_no) cancel_order 잡 in-flight 미존재 (멱등성)
+#
+# fire-and-forget asyncio.create_task — DB 트랜잭션과 분리.
+def _register_auto_cancel_trigger() -> None:
+    """앱 부팅 시 1회 호출. SQLAlchemy after_flush event 등록."""
+    import asyncio
+
+    from sqlalchemy import event
+    from sqlalchemy.orm import Session
+    from sqlalchemy.orm.attributes import get_history
+
+    from backend.utils.logger import logger as _log
+
+    _TRIGGER_STATUSES = {"cancel_requested", "cancelling"}
+
+    @event.listens_for(Session, "after_flush")
+    def _on_session_flush(session, flush_context) -> None:  # noqa: ARG001
+        for obj in session.dirty:
+            if not isinstance(obj, SambaOrder):
+                continue
+            try:
+                hist = get_history(obj, "status")
+            except Exception:
+                continue
+            if not hist.has_changes():
+                continue
+            new_status = (obj.status or "").strip().lower()
+            if new_status not in _TRIGGER_STATUSES:
+                continue
+            prev_list = hist.deleted or []
+            prev_status = (prev_list[0] if prev_list else "") or ""
+            if (prev_status or "").strip().lower() == new_status:
+                continue
+            if not obj.source_site or not obj.sourcing_order_number:
+                continue
+            # async task 발행 — 현재 loop 없으면 skip (대부분 FastAPI async 컨텍스트)
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                _log.debug(f"[자동취소] order={obj.id} async loop 없음 — skip")
+                continue
+            # lazy import — 순환 회피
+            from backend.domain.samba.proxy.sourcing_queue import (
+                SourcingQueue as _SQ,
+            )
+
+            loop.create_task(
+                _SQ.maybe_trigger_auto_cancel(
+                    order_id=obj.id,
+                    source_site=obj.source_site,
+                    sourcing_order_number=obj.sourcing_order_number,
+                    sourcing_account_id=obj.sourcing_account_id,
+                    new_status=new_status,
+                    shipping_status=obj.shipping_status,
+                    prev_status=prev_status,
+                )
+            )

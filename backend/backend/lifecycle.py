@@ -1178,6 +1178,15 @@ async def lifespan(app: FastAPI):
     await _connect_cache()
     startup_logger = _startup_logger()
     await _apply_startup_schema_fixes(startup_logger)
+
+    # 자동 발주취소 트리거 등록 — SambaOrder.status 변경 감지 → cancel_order 잡 자동 발행
+    try:
+        from backend.domain.samba.order.model import _register_auto_cancel_trigger
+
+        _register_auto_cancel_trigger()
+        startup_logger.info("[startup] 자동 발주취소 트리거 등록 완료")
+    except Exception as e:
+        startup_logger.warning(f"[startup] 자동 발주취소 트리거 등록 실패: {e}")
     asyncio.create_task(_warmup_tetris_board_cache(startup_logger))
     asyncio.create_task(_warmup_filter_tree_counts_cache(startup_logger))
 

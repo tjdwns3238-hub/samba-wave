@@ -1203,22 +1203,176 @@ const _cancelPending = new Map() // requestId → {resolve, timeoutId, tabId}
 
 async function handleCancelOrderJob(job) {
   const requestId = job.requestId
-  const site = job.site || ''
+  const site = (job.site || '').toUpperCase()
   const ordNo = job.sourcingOrderNumber || ''
+  const sourcingAccountId = job.sourcingAccountId || ''
 
-  console.log(`[발주취소] 잡 수신 req=${requestId} site=${site} ord=${ordNo}`)
+  console.log(`[발주취소] 잡 수신 req=${requestId} site=${site} ord=${ordNo} acc=${sourcingAccountId || '-'}`)
 
-  // 사이트별 cancel_js 미작성 — 분석 후 라우팅 추가 예정.
-  // 지금은 즉시 '미지원' 회신해서 잡 큐가 잠기지 않도록 한다.
+  let result = { success: false, cancelled: false, reason: '미지원 사이트' }
+
+  // 계정 스왑 — 잡의 sourcingAccountId 로 ensureLoggedIn (송장 잡과 동일 패턴)
+  // 계정 불일치 상태로 cancel 호출하면 다른 계정 주문에 영향 갈 위험. 무조건 swap 강제.
+  const autoLoginKey = _TRACKING_AUTO_LOGIN_MAP[site]
+  if (autoLoginKey && sourcingAccountId && typeof globalThis.ensureLoggedIn === 'function') {
+    try {
+      const ok = await globalThis.ensureLoggedIn(autoLoginKey, { accountId: sourcingAccountId })
+      if (!ok) {
+        try {
+          await postResult('sourcing/cancel-result', {
+            requestId,
+            success: false,
+            cancelled: false,
+            error: `계정 스왑 실패 (acc=${sourcingAccountId}) — 운영자 수동 처리 필요`,
+          })
+        } catch {}
+        return
+      }
+      // 메모리 캐시 갱신
+      _lastEnsuredTrackingAccount[autoLoginKey] = sourcingAccountId
+    } catch (e) {
+      try {
+        await postResult('sourcing/cancel-result', {
+          requestId,
+          success: false,
+          cancelled: false,
+          error: `계정 스왑 예외: ${e?.message || e}`,
+        })
+      } catch {}
+      return
+    }
+  } else if (sourcingAccountId && !autoLoginKey) {
+    // 자동로그인 매핑 없는 사이트 — sourcingAccountId 검증 불가, 운영자 책임 사용
+    console.warn(`[발주취소] ${site} 자동로그인 매핑 없음 — 현재 세션으로 진행 (acc=${sourcingAccountId})`)
+  }
+
   try {
-    await postResult('sourcing/cancel-result', {
-      requestId,
-      success: false,
-      cancelled: false,
-      reason: `확장앱 cancel_js 미작성(site=${site}) — 분석 후 구현 예정`,
-    })
+    if (site === 'MUSINSA') {
+      result = await _cancelMusinsa(ordNo)
+    } else {
+      result.reason = `확장앱 cancel 미구현(site=${site})`
+    }
+  } catch (err) {
+    result = { success: false, cancelled: false, error: String(err && err.message || err) }
+    console.warn(`[발주취소] 처리 예외 req=${requestId}:`, err)
+  }
+
+  try {
+    await postResult('sourcing/cancel-result', { requestId, ...result })
   } catch (err) {
     console.warn(`[발주취소] 결과 전송 실패 req=${requestId}:`, err)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 무신사 헤드리스 발주취소 — 페이지 진입 없이 fetch 만 사용.
+//
+// 사전 분석(2026-05-26 CDP 9223 실측):
+//  1. GET /order-service/my/order/get_order_view/{ord_no}      → orderOptionNo 추출
+//  2. GET order.musinsa.com/api2/order/v1/order-items/{opt_no}/status
+//       → code 10(결제완료) / 20(상품준비중) 만 자동취소 가능
+//       code >= 30 (배송중/배송완료/취소완료) → alreadyShipped:true
+//  3. POST api.musinsa.com/api2/claim/command/mypage/order_cancel_cmd/refund (multipart)
+//     form: ord_no, ord_opt_nos, claim_reason=1(단순변심), refund_bank/account/nm/cancel_content=''
+//
+// 라인아이템 여러 개일 수 있음 — orderOptionList 순회하며 각각 호출.
+// 무신사머니 결제는 refund_* 빈값 OK. 카드/계좌 결제 필요 시 추후 확장.
+// ─────────────────────────────────────────────────────────────────────────────
+async function _cancelMusinsa(ordNo) {
+  if (!ordNo) return { success: false, cancelled: false, error: 'ordNo empty' }
+
+  // 1. 주문 정보 조회 → orderOptionList
+  let view
+  try {
+    const r = await fetch(`https://www.musinsa.com/order-service/my/order/get_order_view/${ordNo}`, {
+      credentials: 'include',
+      headers: { 'Accept': 'application/json' },
+    })
+    if (r.status === 401 || r.status === 403) {
+      return { success: false, cancelled: false, error: '무신사 로그인 만료 — 운영자 재로그인 필요' }
+    }
+    view = await r.json()
+  } catch (e) {
+    return { success: false, cancelled: false, error: `get_order_view 실패: ${e.message || e}` }
+  }
+  const items = ((view && view.orderList && view.orderList.orderOptionList) || []).filter(Boolean)
+  if (!items.length) {
+    return { success: false, cancelled: false, error: 'orderOptionList 비어있음' }
+  }
+
+  const results = []
+  let allCancelled = true
+  let anyAlreadyShipped = false
+  for (const it of items) {
+    const optNo = String(it.orderOptionNo || '')
+    if (!optNo) continue
+
+    // claimState !== 0 = 이미 취소/반품 진행 중
+    if (it.claimState && it.claimState !== 0) {
+      results.push({ optNo, skipped: true, reason: `claimState=${it.claimState}` })
+      continue
+    }
+
+    // 2. status 가용성 체크 — code 10/20만 취소 허용
+    let code = it.orderState
+    try {
+      const rs = await fetch(`https://order.musinsa.com/api2/order/v1/order-items/${optNo}/status`, {
+        credentials: 'include',
+        headers: { 'Accept': 'application/json' },
+      })
+      const sj = await rs.json()
+      if (sj && sj.data && typeof sj.data.code === 'number') code = sj.data.code
+    } catch (_) { /* status 실패 시 orderState 그대로 사용 */ }
+
+    if (code >= 30) {
+      // 배송중/배송완료/취소완료 등 — 자동취소 불가
+      results.push({ optNo, skipped: true, reason: `code=${code} 배송/완료 단계` })
+      anyAlreadyShipped = true
+      allCancelled = false
+      continue
+    }
+    if (code !== 10 && code !== 20) {
+      results.push({ optNo, skipped: true, reason: `code=${code} 미지원 단계` })
+      allCancelled = false
+      continue
+    }
+
+    // 3. cancel POST (multipart) — claim_reason=1 (단순변심)
+    try {
+      const fd = new FormData()
+      fd.append('ord_no', ordNo)
+      fd.append('ord_opt_nos', optNo)
+      fd.append('refund_bank', '')
+      fd.append('refund_account', '')
+      fd.append('refund_nm', '')
+      fd.append('claim_reason', '1')
+      fd.append('cancel_content', '')
+      const r = await fetch('https://api.musinsa.com/api2/claim/command/mypage/order_cancel_cmd/refund', {
+        method: 'POST',
+        body: fd,
+        credentials: 'include',
+      })
+      const txt = await r.text()
+      let ok = false
+      try {
+        const j = JSON.parse(txt)
+        // 무신사 응답 패턴: {code:1, message:"SUCCESS"} 또는 {meta:{result:"SUCCESS"}}
+        ok = j && (j.code === 1 || j.cd === 1 || (j.meta && j.meta.result === 'SUCCESS') || j.message === 'SUCCESS' || j.msg === 'SUCCESS')
+      } catch (_) { ok = r.status === 200 && /SUCCESS/i.test(txt) }
+      results.push({ optNo, status: r.status, ok, body: txt.slice(0, 300) })
+      if (!ok) allCancelled = false
+    } catch (e) {
+      results.push({ optNo, error: e.message || String(e) })
+      allCancelled = false
+    }
+  }
+
+  return {
+    success: allCancelled,
+    cancelled: allCancelled,
+    alreadyShipped: anyAlreadyShipped,
+    reason: allCancelled ? '무신사 발주취소 완료' : (anyAlreadyShipped ? '일부/전부 배송단계 — 자동취소 불가' : '일부 실패'),
+    details: results,
   }
 }
 
