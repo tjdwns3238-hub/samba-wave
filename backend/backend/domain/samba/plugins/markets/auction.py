@@ -18,6 +18,66 @@ from backend.utils.logger import logger
 # ESM Plus 호스팅 인증정보는 서버 환경변수(ESMPLUS_HOSTING_ID/ESMPLUS_SECRET_KEY)에서 로드
 
 
+def _to_grouped_options(options: list[dict], group_names: list[str]) -> list[dict]:
+    """무신사 flat 옵션 리스트를 register_esm_options용 그룹 구조로 변환.
+
+    이미 grouped 형태(values 키 있음)면 그대로 반환.
+    단일 그룹(0~1개): 모든 옵션값을 해당 그룹 하나로 묶음.
+      - 그룹명 없으면 "사이즈" 기본값.
+    다중 그룹(2개+): "블랙/S" 형태 조합을 축별로 파싱 + 조합재고 맵 포함.
+    """
+    if not options:
+        return []
+    if (
+        options[0].get("values") is not None
+        or options[0].get("option_values") is not None
+    ):
+        return options
+    if len(group_names) <= 1:
+        group_name = group_names[0] if group_names else "사이즈"
+        return [{"name": group_name, "values": options}]
+    return _split_multi_group_options(options, group_names)
+
+
+def _split_multi_group_options(
+    options: list[dict], group_names: list[str]
+) -> list[dict]:
+    """'색상/사이즈' flat 조합 → 축별 그룹 + _combo_stock_map 변환.
+
+    _combo_stock_map은 _build_combination이 per-combination 재고로 활용한다.
+    separator "/"는 maxsplit=n-1 로 처리해 값 내부 "/" 포함 케이스(A/XS 등)를 보존.
+    """
+    n = len(group_names)
+    axis_order: list[list[str]] = [[] for _ in range(n)]
+    axis_seen: list[set] = [set() for _ in range(n)]
+    combo_stock_map: dict[str, dict] = {}
+
+    for opt in options:
+        parts = [p.strip() for p in opt.get("name", "").split("/", n - 1)]
+        if len(parts) != n:
+            continue
+        for i, val in enumerate(parts):
+            if val not in axis_seen[i]:
+                axis_seen[i].add(val)
+                axis_order[i].append(val)
+        stock = int(opt.get("stock") or 0)
+        combo_stock_map["/".join(parts)] = {
+            "stock": stock,
+            "isSoldOut": bool(opt.get("isSoldOut") or stock <= 0),
+        }
+
+    result: list[dict] = []
+    for i, gname in enumerate(group_names):
+        grp: dict = {
+            "name": gname,
+            "values": [{"name": v, "stock": 99} for v in axis_order[i]],
+        }
+        if i == 0:
+            grp["_combo_stock_map"] = combo_stock_map
+        result.append(grp)
+    return result
+
+
 class AuctionPlugin(MarketPlugin):
     """옥션 마켓 플러그인 — ESM Plus siteType=1."""
 
@@ -159,7 +219,10 @@ class AuctionPlugin(MarketPlugin):
         if existing_no:
             return await self._update_product(client, existing_no, data, pending_images)
         else:
-            samba_options = product.get("options") or []
+            samba_options = _to_grouped_options(
+                product.get("options") or [],
+                product.get("option_group_names") or [],
+            )
             return await self._register_product(
                 client,
                 data,
@@ -196,42 +259,60 @@ class AuctionPlugin(MarketPlugin):
                 "_already_registered": True,
             }
 
+        # ESM이 신규 등록 상품을 색인하는 데 시간이 필요하므로 재시도 로직 적용
         if pending_images and goods_no:
-            try:
-                await asyncio.sleep(3)
-                await client.update_images(goods_no, {"imageModel": pending_images})
-                logger.info(f"[옥션] 추가 이미지 설정 완료: goodsNo={goods_no}")
-            except Exception as img_e:
-                logger.warning(f"[옥션] 추가 이미지 설정 실패: {img_e}")
+            for _img_wait in (10, 15, 20):
+                try:
+                    await asyncio.sleep(_img_wait)
+                    await client.update_images(goods_no, {"imageModel": pending_images})
+                    logger.info(f"[옥션] 추가 이미지 설정 완료: goodsNo={goods_no}")
+                    break
+                except Exception as img_e:
+                    logger.warning(
+                        f"[옥션] 추가 이미지 설정 실패 ({_img_wait}s 후 재시도): {img_e}"
+                    )
+            else:
+                logger.warning(f"[옥션] 추가 이미지 설정 최종 실패: goodsNo={goods_no}")
 
         # 추천옵션 등록 — samba options 있고 cat_code 있을 때만.
         # register_esm_options 가 이미지 propagation polling (0/30/60s, 최대 90s) 자체 처리.
+        opt_msg = ""
         if samba_options and goods_no and cat_code:
             try:
+                import asyncio as _asyncio
                 from backend.domain.samba.proxy.esmplus import register_esm_options
 
-                opt_result = await register_esm_options(
-                    client, goods_no, cat_code, samba_options, site="auction"
+                opt_result = await _asyncio.wait_for(
+                    register_esm_options(
+                        client, goods_no, cat_code, samba_options, site="auction"
+                    ),
+                    timeout=120,
                 )
                 if opt_result.get("success"):
+                    opt_msg = f" [옵션 {opt_result.get('matched')}/{opt_result.get('requested')}개 등록]"
                     logger.info(
                         f"[옥션] 옵션 등록 완료: goodsNo={goods_no} matched={opt_result.get('matched')}/{opt_result.get('requested')}"
                     )
                 else:
+                    opt_msg = f" [옵션 등록 실패: {opt_result.get('message', '')[:80]}]"
                     logger.warning(
                         f"[옥션] 옵션 등록 부분 실패: {opt_result.get('message')}"
                     )
-            except Exception as opt_e:
+            except (_asyncio.TimeoutError, Exception) as opt_e:
+                opt_msg = f" [옵션 등록 오류: {str(opt_e)[:60]}]"
                 logger.warning(
                     f"[옥션] 옵션 등록 실패 (상품 등록은 성공 처리): {opt_e}"
                 )
+        elif samba_options and not cat_code:
+            opt_msg = " [옵션 등록 스킵: cat_code 없음]"
 
         return {
             "success": True,
-            "message": "옥션 등록 성공",
+            "message": f"옥션 등록 성공{opt_msg}",
             "data": {
-                "sellerProductId": str(goods_no),
+                "sellerProductId": str(site_goods_no or goods_no),
                 "siteGoodsNo": site_goods_no,
+                "goodsNo": goods_no,
             },
         }
 
@@ -243,13 +324,16 @@ class AuctionPlugin(MarketPlugin):
         pending_images: dict | None,
     ) -> dict[str, Any]:
         """기존 상품 수정."""
+        # PUT 엔드포인트는 isSell을 루트 레벨에 요구함 (POST는 itemAddtionalInfo 안)
+        _is_sell = data.get("itemAddtionalInfo", {}).get("isSell", {"Iac": 1})
+        update_data = {**data, "isSell": _is_sell}
         try:
-            await client.update_product(goods_no, data)
+            await client.update_product(goods_no, update_data)
         except RuntimeError as e:
             err_msg = str(e)
             if "상품이 없습니다" in err_msg or "not exist" in err_msg.lower():
                 logger.warning(f"[옥션] 상품 {goods_no} 없음 → 신규등록 전환")
-                result = await client.register_product(data)
+                result = await client.register_product(update_data)
                 new_goods_no = result.get("goodsNo", "")
                 return {
                     "success": True,
@@ -368,10 +452,12 @@ class AuctionPlugin(MarketPlugin):
 
         policy_id = product.get("applied_policy_id")
         if policy_id:
+            from backend.db.orm import get_write_session
             from backend.domain.samba.policy.repository import SambaPolicyRepository
 
-            policy_repo = SambaPolicyRepository(session)
-            policy = await policy_repo.get_async(policy_id)
+            async with get_write_session() as fresh_session:
+                policy_repo = SambaPolicyRepository(fresh_session)
+                policy = await policy_repo.get_async(policy_id)
             if policy:
                 pr = policy.pricing or {}
                 mp = (policy.market_policies or {}).get("옥션", {})

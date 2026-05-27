@@ -1718,9 +1718,25 @@ async def _build_independent(
                 "manageCode": f"OPT-FREE-{v['text'][:10]}",
             }
         )
+    # recommendedOptValueNo 중복 제거 — 같은 optValueNo가 여러 번 등록되면 ESM 1000 에러
+    seen_val_nos: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for d in details:
+        val_no = d["recommendedOptValueNo"]
+        if val_no == 0:
+            dedup_key = f"0:{d.get('recommendedOptValue', {}).get('koreanText', '')}"
+        else:
+            dedup_key = str(val_no)
+        if dedup_key in seen_val_nos:
+            logger.warning(
+                f"[ESM] 옵션값 중복 제거: recommendedOptValueNo={val_no} (key={dedup_key})"
+            )
+            continue
+        seen_val_nos.add(dedup_key)
+        deduped.append(d)
     return {
         "recommendedOptNo": rec_opt_no,
-        "details": details,
+        "details": deduped,
         "_group_label": group.get("recommendedOptName"),
     }, None
 
@@ -1732,37 +1748,63 @@ async def _build_combination(
     site_key: str,
     stock_per_value: int,
 ) -> tuple[dict[str, Any] | None, int, int, Any]:
-    """type=2/3 조합형 payload.combination 생성. cartesian product."""
+    """type=2/3 조합형 payload.combination 생성. cartesian product.
+
+    그룹 매칭 실패 축은 스킵 — 매칭된 축이 2개 이상이면 조합형 유지.
+    매칭된 축이 1개면 None 반환 (caller 가 type=1 fallback 처리).
+    """
     if len(samba_opts) < 2:
         return None, 0, 0, None
-    # 각 축별 그룹/옵션값 매칭
+    logger.info(
+        f"[ESM] 조합형 시작 cat={cat_code} "
+        f"opts={[o.get('name') or o.get('option_name') for o in samba_opts]}"
+    )
+    # 각 축별 그룹/옵션값 매칭 — 그룹 미발견 축은 스킵 (전체 포기 X)
     axes: list[
         tuple[dict[str, Any], list[dict[str, Any]], list[int | None]]
     ] = []  # (group, samba_values_normalized, resolved_value_nos)
     for opt in samba_opts:
         name, samba_vals = _normalize_samba_option(opt)
         if not name or not samba_vals:
-            return None, 0, 0, None
+            logger.warning(f"[ESM] 조합형 축 스킵(빈값): name='{name}'")
+            continue
         group, pool = await _resolve_esm_group(client, cat_code, name)
         if not group:
-            logger.warning(f"[ESM] 조합형 축 매칭 실패: samba='{name}' cat={cat_code}")
-            return None, 0, 0, None
+            logger.warning(f"[ESM] 조합형 축 스킵(그룹없음): samba='{name}' cat={cat_code}")
+            continue
+        matched_count = sum(1 for v in samba_vals if ESMPlusClient.match_option_value(v["text"], pool))
+        logger.info(
+            f"[ESM] 조합형 축 확정: '{name}' → optNo={group['recommendedOptNo']} "
+            f"vals={len(samba_vals)}개 매칭={matched_count}개"
+        )
         resolved = [
             ESMPlusClient.match_option_value(v["text"], pool) for v in samba_vals
         ]
         axes.append((group, samba_vals, resolved))
 
-    # cartesian product 생성 — 각 축의 매칭된 값만
+    if len(axes) < 2:
+        logger.warning(
+            f"[ESM] 조합형 포기 — 유효 축 {len(axes)}개 (최소 2개 필요) cat={cat_code}"
+        )
+        return None, 0, 0, None
+    # 최대 3축
+    axes = axes[:3]
+
+    # cartesian product 생성 — 매칭 실패 값은 직접입력(recommendedOptValueNo=0) fallback 포함
     import itertools
 
     requested = 1
     for _, vs, _ in axes:
         requested *= len(vs)
 
+    # _combo_stock_map: _split_multi_group_options가 첫 번째 그룹에 심어둔 조합별 재고 맵
+    _combo_stock_map: dict[str, dict] = {}
+    if samba_opts and isinstance(samba_opts[0], dict):
+        _combo_stock_map = samba_opts[0].get("_combo_stock_map") or {}
+
     details: list[dict[str, Any]] = []
-    indices_per_axis = [
-        [i for i, no in enumerate(resolved) if no] for _, _, resolved in axes
-    ]
+    # 매칭 여부와 무관하게 모든 인덱스 포함 (fallback 처리)
+    indices_per_axis = [list(range(len(samba_vals))) for _, samba_vals, _ in axes]
     for combo in itertools.product(*indices_per_axis):
         entry: dict[str, Any] = {
             "qty": {site_key: 0},
@@ -1773,7 +1815,6 @@ async def _build_combination(
         }
         manage_parts: list[str] = []
         any_sold_out = False
-        # 첫 축의 stock 을 조합 stock 으로 사용 (단순화)
         first_axis_idx = combo[0]
         first_qty = axes[0][1][first_axis_idx]["qty"] or stock_per_value
         sum_add_amnt = 0
@@ -1781,21 +1822,62 @@ async def _build_combination(
             val_idx = combo[axis_idx]
             v = samba_vals[val_idx]
             rec_val_no = resolved[val_idx]
-            entry[f"recommendedOptValueNo{axis_idx + 1}"] = rec_val_no
+            if rec_val_no:
+                entry[f"recommendedOptValueNo{axis_idx + 1}"] = rec_val_no
+                manage_parts.append(str(rec_val_no))
+            else:
+                # 직접입력 fallback — ESM 카테고리 권한에 따라 거부 가능
+                entry[f"recommendedOptValueNo{axis_idx + 1}"] = 0
+                entry[f"recommendedOptValue{axis_idx + 1}"] = {
+                    "koreanText": v["text"][:50]
+                }
+                logger.warning(
+                    f"[ESM] 조합형 옵션값 매칭 실패 → 직접입력 fallback: "
+                    f"cat={cat_code} axis={axis_idx + 1} text='{v['text']}'"
+                )
+                manage_parts.append(f"FREE-{v['text'][:10]}")
             if v["sold_out"]:
                 any_sold_out = True
             sum_add_amnt += v["add_amnt"]
-            manage_parts.append(str(rec_val_no))
-        entry["qty"] = {site_key: 0 if any_sold_out else first_qty}
-        entry["isSoldOut"] = any_sold_out
+        # 조합별 재고 맵이 있으면 per-combination 재고 사용, 없으면 첫 축 재고로 fallback
+        _combo_key = "/".join(axes[ai][1][combo[ai]]["text"] for ai in range(len(axes)))
+        _combo_info = _combo_stock_map.get(_combo_key)
+        if _combo_info is not None:
+            _final_qty = int(_combo_info.get("stock") or 0) or stock_per_value
+            _final_sold_out = bool(_combo_info.get("isSoldOut"))
+        else:
+            _final_qty = first_qty
+            _final_sold_out = any_sold_out
+        entry["qty"] = {site_key: 0 if _final_sold_out else _final_qty}
+        entry["isSoldOut"] = _final_sold_out
         entry["addAmnt"] = sum_add_amnt
         entry["manageCode"] = "OPT" + "-".join(manage_parts)
         details.append(entry)
 
+    # 조합형 중복 제거 — (optValueNo1, optValueNo2, ...) 튜플이 동일하면 ESM 1000 에러
+    seen_combos: set[str] = set()
+    deduped_combo: list[dict[str, Any]] = []
+    for d in details:
+        key_parts = []
+        for ai in range(len(axes)):
+            val_no = d.get(f"recommendedOptValueNo{ai + 1}", 0)
+            if val_no == 0:
+                free_text = d.get(f"recommendedOptValue{ai + 1}", {}).get("koreanText", "")
+                key_parts.append(f"0:{free_text}")
+            else:
+                key_parts.append(str(val_no))
+        combo_key = "|".join(key_parts)
+        if combo_key in seen_combos:
+            logger.warning(f"[ESM] 조합형 옵션 중복 제거: key={combo_key}")
+            continue
+        seen_combos.add(combo_key)
+        deduped_combo.append(d)
+    details = deduped_combo
+
     if not details:
         return None, 0, requested, None
 
-    combination_payload: dict[str, Any] = {"details": details}
+    combination_payload: dict[str, Any] = {"details": details, "_axis_count": len(axes)}
     for axis_idx, (group, _, _) in enumerate(axes):
         combination_payload[f"recommendedOptNo{axis_idx + 1}"] = group[
             "recommendedOptNo"
@@ -1838,11 +1920,39 @@ async def _resolve_esm_group(
     cat_code: str,
     samba_opt_name: str,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
-    """samba 옵션 이름 → ESM 그룹 + 옵션값 list (캐시 적용)."""
+    """samba 옵션 이름 → ESM 그룹 + 옵션값 list (캐시 적용).
+
+    이름 매칭 실패 시 사이즈 관련 키워드(사이즈/SIZE/치수/선택)로 재시도,
+    그래도 없으면 첫 번째 유효 그룹(recommendedOptNo > 0) fallback.
+    """
     groups = await client.get_recommended_opt_groups(cat_code)
     g = ESMPlusClient.detect_esm_option_group(samba_opt_name, groups)
     if not g:
-        return None, []
+        # 사이즈 관련 키워드로 재시도
+        _size_keywords = ["사이즈", "size", "치수", "선택"]
+        for kw in _size_keywords:
+            g = ESMPlusClient.detect_esm_option_group(kw, groups)
+            if g:
+                logger.info(
+                    f"[ESM] 옵션그룹 fallback: '{samba_opt_name}' → '{kw}' 매칭 "
+                    f"(optNo={g.get('recommendedOptNo')} cat={cat_code})"
+                )
+                break
+    if not g:
+        # 마지막 fallback — 첫 번째 유효 그룹 사용
+        valid = [gr for gr in groups if gr.get("recommendedOptNo")]
+        if valid:
+            g = valid[0]
+            opt_name = (g.get("recommendedOptName") or {}).get("kor", "")
+            logger.warning(
+                f"[ESM] 옵션그룹 최종 fallback: '{samba_opt_name}' → '{opt_name}' "
+                f"(optNo={g.get('recommendedOptNo')} cat={cat_code})"
+            )
+        else:
+            logger.warning(
+                f"[ESM] 카테고리 {cat_code}에 유효한 추천옵션그룹 없음 (samba='{samba_opt_name}')"
+            )
+            return None, []
     values = await client.get_recommended_opt_values(g["recommendedOptNo"])
     return g, [v for v in values if v.get("recommendedOptValueNo")]
 
@@ -1902,13 +2012,66 @@ async def register_esm_options(
         combination, matched, requested, group_label = await _build_combination(
             client, cat_code, samba_options[:opt_count], site_key, stock_per_value
         )
-        if not combination or not combination.get("details"):
-            return {
-                "success": False,
-                "matched": 0,
-                "requested": requested,
-                "message": f"매칭된 조합 0건 ({opt_type}조합형)",
-            }
+        if combination and combination.get("details"):
+            # 실제 매칭된 축 수로 opt_type 보정 (스킵된 축 있을 수 있음)
+            actual_axes = combination.pop("_axis_count", opt_count)
+            opt_type = max(2, actual_axes)
+        else:
+            # 조합형 완전 실패 → type=1 (선택형) fallback: 첫 번째로 매칭되는 축 사용
+            logger.warning(
+                f"[ESM] 조합형 실패 → type=1 선택형 fallback 시도 (cat={cat_code})"
+            )
+            combination = None
+            opt_type = 1
+            independent = None
+            for fallback_opt in samba_options[:opt_count]:
+                fb_ind, _ = await _build_independent(
+                    client, cat_code, fallback_opt, site_key, stock_per_value
+                )
+                if fb_ind and fb_ind.get("details"):
+                    independent = fb_ind
+                    matched = len(fb_ind["details"])
+                    requested = len(_normalize_samba_option(fallback_opt)[1])
+                    group_label = fb_ind.get("_group_label")
+                    fb_ind.pop("_group_label", None)
+                    logger.info(
+                        f"[ESM] type=1 fallback 성공: "
+                        f"opt='{fallback_opt.get('name') or fallback_opt.get('option_name')}' "
+                        f"matched={matched}/{requested}"
+                    )
+                    break
+            if not independent or not independent.get("details"):
+                return {
+                    "success": False,
+                    "matched": 0,
+                    "requested": requested,
+                    "message": f"조합형 및 선택형 모두 실패 (원본 {opt_count}축)",
+                }
+        if combination:
+            combination.pop("_axis_count", None)
+
+    async def _try_set_options(
+        payload: dict[str, Any],
+    ) -> tuple[bool, str | None]:
+        """set_recommended_options 호출 + 이미지 propagation 재시도. (성공, 에러메시지)"""
+        last_exc: Exception | None = None
+        for wait in (0, 30, 60):
+            if wait > 0:
+                logger.warning(
+                    f"[ESM] 옵션 PUT 이미지 propagation 대기 {wait}s 후 재시도 (goods={goods_no})"
+                )
+                await asyncio.sleep(wait)
+            try:
+                await client.set_recommended_options(goods_no, payload)
+                return True, None
+            except RuntimeError as exc:
+                msg = str(exc)
+                if "잘못된 상품 이미지" in msg or "404" in msg:
+                    last_exc = exc
+                    continue
+                # 이미지 외 에러 — 재시도 없이 즉시 실패로 처리
+                return False, msg
+        return False, f"이미지 propagation 90s 후에도 실패: {last_exc}"
 
     payload = {
         "type": opt_type,
@@ -1916,35 +2079,54 @@ async def register_esm_options(
         "independent": independent,
         "combination": combination,
     }
-    # ESM 이미지 propagation 대기 — 등록 직후 옵션 PUT 시 "잘못된 상품 이미지" 응답.
-    # 점진적 대기 (30s/60s/90s) + 최대 3회 재시도. 운영 환경 real CDN 이미지는 보통 빠르게 propagation.
-    last_exc: Exception | None = None
-    for wait in (0, 30, 60):
-        if wait > 0:
-            logger.warning(
-                f"[ESM] 옵션 PUT 이미지 propagation 대기 {wait}s 후 재시도 (goods={goods_no})"
+    ok, err_msg = await _try_set_options(payload)
+    if ok:
+        return {
+            "success": True,
+            "type": opt_type,
+            "matched": matched,
+            "requested": requested,
+            "group": group_label,
+        }
+
+    # 조합형 실패 시 type=1 선택형으로 재시도
+    if opt_type >= 2 and err_msg:
+        logger.warning(
+            f"[ESM] type={opt_type} 옵션 등록 실패 ({err_msg}) → type=1 선택형 재시도 (goods={goods_no})"
+        )
+        for fallback_opt in samba_options[:opt_count]:
+            fb_ind, _ = await _build_independent(
+                client, cat_code, fallback_opt, site_key, stock_per_value
             )
-            await asyncio.sleep(wait)
-        try:
-            await client.set_recommended_options(goods_no, payload)
-            return {
-                "success": True,
-                "type": opt_type,
-                "matched": matched,
-                "requested": requested,
-                "group": group_label,
+            if not fb_ind or not fb_ind.get("details"):
+                continue
+            fb_ind.pop("_group_label", None)
+            fb_payload = {
+                "type": 1,
+                "isStockManage": True,
+                "independent": fb_ind,
+                "combination": None,
             }
-        except RuntimeError as exc:
-            msg = str(exc)
-            # 이미지 propagation 외 다른 에러는 즉시 재발생
-            if "잘못된 상품 이미지" not in msg and "404" not in msg:
-                raise
-            last_exc = exc
-    # 90s 후에도 propagation 미완료 — 운영자 수동 옵션 등록 안내
+            ok2, err2 = await _try_set_options(fb_payload)
+            if ok2:
+                opt_name = fallback_opt.get("name") or fallback_opt.get("option_name", "")
+                logger.info(
+                    f"[ESM] type=1 fallback 성공: opt='{opt_name}' goods={goods_no}"
+                )
+                return {
+                    "success": True,
+                    "type": 1,
+                    "matched": len(fb_ind["details"]),
+                    "requested": requested,
+                    "group": None,
+                    "note": f"type={opt_type} 실패 후 type=1 fallback",
+                }
+            logger.warning(f"[ESM] type=1 fallback 실패: opt='{fallback_opt.get('name')}' err={err2}")
+
     return {
         "success": False,
         "type": opt_type,
         "matched": 0,
         "requested": requested,
-        "message": f"이미지 propagation 90s 후에도 옵션 등록 실패: {last_exc}",
+        "message": err_msg or "옵션 등록 실패",
     }
