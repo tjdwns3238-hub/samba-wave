@@ -3773,6 +3773,13 @@ async def auto_start_if_enabled():
                 _running_devs = set()
             # legacy 단일 device 도 포함
             _running_devs.add(saved_device_id)
+            # 데몬은 stop UI 없음 — 분담 등록된 데몬은 영구 자동 시작.
+            # autotune_running_devices set 이 어떤 이유 (옛 전역 stop 잔재 등) 로
+            # 비어있어도 분담 DB 에 등록된 samba-daemon-* device 는 모두 자동 spawn.
+            # 사용자 룰 (2026-05-27): 데몬 1개만 살아남고 나머지 죽는 사고 차단.
+            for _dev_polled in list(_pc_allowed_sites.keys()):
+                if _dev_polled.startswith("samba-daemon-"):
+                    _running_devs.add(_dev_polled)
 
             _site_empty_skip_until.clear()
             clear_bulk_cancel("autotune")
