@@ -372,7 +372,7 @@ export default function OrdersPage() {
   }, [])
 
   const { syncing, syncAccountId, setSyncAccountId, handleFetch } = useOrderSync({
-    accounts, period, setLogMessages, showNotification, loadOrders,
+    accounts, period, customStart, customEnd, setLogMessages, showNotification, loadOrders,
   })
 
 

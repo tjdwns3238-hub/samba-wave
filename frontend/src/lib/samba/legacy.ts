@@ -345,9 +345,9 @@ export const orderApi = {
     request<SambaOrder>(`${SAMBA_PREFIX}/orders/${id}/status`, { method: "PUT", body: JSON.stringify({ status }) }),
   delete: (id: string) =>
     request<{ ok: boolean }>(`${SAMBA_PREFIX}/orders/${id}`, { method: "DELETE" }),
-  syncFromMarkets: (days = 7, accountId?: string) =>
+  syncFromMarkets: (days = 7, accountId?: string, startDate?: string, endDate?: string) =>
     request<{ total_synced: number; results: { account: string; status: string; message?: string; fetched?: number; synced?: number }[] }>(
-      `${SAMBA_PREFIX}/orders/sync-from-markets`, { method: "POST", body: JSON.stringify({ days, account_id: accountId || undefined }) }),
+      `${SAMBA_PREFIX}/orders/sync-from-markets`, { method: "POST", body: JSON.stringify({ days, account_id: accountId || undefined, start_date: startDate || undefined, end_date: endDate || undefined }) }),
   approveCancel: (id: string) =>
     request<{ ok: boolean; message: string }>(`${SAMBA_PREFIX}/orders/${id}/approve-cancel`, { method: "POST" }),
   // 쿠팡 이미출고(release_status='A') 케이스 — 운영자가 택배사·송장번호 입력 (#246)

@@ -4171,6 +4171,11 @@ async def fetch_product_image(
 class SyncOrdersRequest(BaseModel):
     days: int = 7
     account_id: Optional[str] = None  # 특정 계정만 동기화
+    # 명시적 날짜 범위 — 지정 시 days 무시. KST 기준 YYYY-MM-DD 또는 YYYYMMDD.
+    # PlayAuto/스마트스토어 등 start_date 지원 마켓에 그대로 전달, 그 외 마켓은
+    # (end - start + 1) 일수를 days 로 환산해 사용.
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
 
 
 @router.post("/sync-from-markets")
@@ -4182,6 +4187,26 @@ async def sync_orders_from_markets(
     """활성 마켓 계정에서 주문 데이터를 가져와 DB에 저장."""
     from backend.domain.samba.account.repository import SambaMarketAccountRepository
     from backend.domain.samba.forbidden.repository import SambaSettingsRepository
+
+    # 명시적 start_date/end_date 가 들어오면 days 환산.
+    # 프론트의 날짜 input 이 daysMap 프리셋만 보고 days=1 로 박히던 버그 보완.
+    # YYYY-MM-DD / YYYYMMDD 모두 허용.
+    if body.start_date and body.end_date:
+        from datetime import date as _bd_date
+
+        def _parse_ymd(s: str) -> _bd_date | None:
+            s = (s or "").strip().replace("-", "").replace(".", "").replace("/", "")
+            if len(s) == 8 and s.isdigit():
+                try:
+                    return _bd_date(int(s[:4]), int(s[4:6]), int(s[6:8]))
+                except ValueError:
+                    return None
+            return None
+
+        _sd_dt = _parse_ymd(body.start_date)
+        _ed_dt = _parse_ymd(body.end_date)
+        if _sd_dt and _ed_dt and _ed_dt >= _sd_dt:
+            body.days = max(1, (_ed_dt - _sd_dt).days + 1)
 
     account_repo = SambaMarketAccountRepository(session)
 
@@ -7025,6 +7050,25 @@ async def sync_orders_from_markets(
                     # 송장전송완료/배송중 이상 상태는 덮어쓰지 않음
                     # 단, 롯데ON은 발송완료/배송중/배송완료로 진행된 경우 갱신 허용
                     new_ship_status = order_data.get("shipping_status")
+                    # Recovery — 마켓이 '배송완료'/'구매확정' 같은 종결 상태를 보낸 경우
+                    # 좀비 '취소요청' 잔존을 자동 해제 (PlayAuto 5/19 수취확인됐는데
+                    # DB는 13일째 취소요청으로 박혀있던 사고 방지).
+                    # 마켓의 종결 신호가 진실의 원천 — 취소가 실제로 진행됐다면 마켓이
+                    # '취소완료'를 보냈을 것.
+                    if (
+                        new_ship_status in ("배송완료", "구매확정")
+                        and existing.shipping_status == "취소요청"
+                    ):
+                        update_fields["shipping_status"] = new_ship_status
+                        update_fields["status"] = "delivered"
+                        if existing.cancel_requested_at is not None:
+                            update_fields["cancel_requested_at"] = None
+                        logger.info(
+                            f"[주문동기화] 취소요청 좀비 해제: "
+                            f"{order_data.get('order_number')} "
+                            f"취소요청 → {new_ship_status} (마켓 종결 신호)"
+                        )
+                        new_ship_status = None  # 아래 분기 스킵
                     if new_ship_status:
                         cancel_statuses = {"취소요청", "취소처리중", "취소완료"}
                         exchange_statuses = {

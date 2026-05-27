@@ -51,6 +51,8 @@ async def run(
     payload = job.payload or {}
     days = int(payload.get("days") or 7)
     account_ids: list[str] | None = payload.get("account_ids") or None
+    start_date: str | None = payload.get("start_date") or None
+    end_date: str | None = payload.get("end_date") or None
 
     # 1) 활성 마켓 계정 조회 — 라우터의 1864-1891 로직과 동일한 정책
     from backend.domain.samba.account.repository import SambaMarketAccountRepository
@@ -113,7 +115,12 @@ async def run(
                     try:
                         res = await asyncio.wait_for(
                             sync_orders_from_markets(
-                                body=SyncOrdersRequest(days=days, account_id=acc.id),
+                                body=SyncOrdersRequest(
+                                    days=days,
+                                    account_id=acc.id,
+                                    start_date=start_date,
+                                    end_date=end_date,
+                                ),
                                 session=acc_session,
                                 tenant_id=job.tenant_id,
                             ),

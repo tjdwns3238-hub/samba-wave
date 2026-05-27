@@ -9,12 +9,14 @@ import { fmtTime } from '@/lib/samba/utils'
 interface UseOrderSyncArgs {
   accounts: SambaMarketAccount[]
   period: string
+  customStart?: string
+  customEnd?: string
   setLogMessages: Dispatch<SetStateAction<string[]>>
   showNotification: (message: string, type?: string) => void
   loadOrders: () => void | Promise<void>
 }
 
-export function useOrderSync({ accounts, period, setLogMessages, showNotification, loadOrders }: UseOrderSyncArgs) {
+export function useOrderSync({ accounts, period, customStart, customEnd, setLogMessages, showNotification, loadOrders }: UseOrderSyncArgs) {
   const [syncing, setSyncing] = useState(false)
   const [syncAccountId, setSyncAccountId] = useState('')
   const [backgroundMode, setBackgroundMode] = useState(true)
@@ -39,12 +41,30 @@ export function useOrderSync({ accounts, period, setLogMessages, showNotificatio
       thisyear: Math.ceil((Date.now() - new Date(new Date().getFullYear(), 0, 1).getTime()) / 86400000) + 1,
       all: 365,
     }
-    const days = daysMap[period] || 7
+    // customStart/End 가 들어와있으면 항상 백엔드에 그대로 전달 (프리셋 days 무시).
+    // 사용자가 날짜 input을 바꿔도 period state가 그대로 'today'에 남아 days=1로
+    // 박히던 버그 보완 — 화면 날짜 입력 = 사용자의 명시적 의도.
+    let days = daysMap[period] || 7
+    let payloadStart: string | undefined
+    let payloadEnd: string | undefined
+    if (customStart && customEnd) {
+      const sd = new Date(customStart)
+      const ed = new Date(customEnd)
+      if (!isNaN(sd.getTime()) && !isNaN(ed.getTime()) && ed >= sd) {
+        days = Math.max(1, Math.ceil((ed.getTime() - sd.getTime()) / 86400000) + 1)
+        payloadStart = customStart.replace(/-/g, '')
+        payloadEnd = customEnd.replace(/-/g, '')
+      }
+    }
 
     const runBackgroundSync = async (accountIds?: string[]) => {
       try {
         const payload: Record<string, unknown> = { days }
         if (accountIds && accountIds.length > 0) payload.account_ids = accountIds
+        if (payloadStart && payloadEnd) {
+          payload.start_date = payloadStart
+          payload.end_date = payloadEnd
+        }
 
         const created = await jobApi.create({ job_type: 'order_sync', payload })
         const jobId = created.id
@@ -133,7 +153,7 @@ export function useOrderSync({ accounts, period, setLogMessages, showNotificatio
     setLogMessages(prev => [...prev, `[${ts()}] ${label} 주문수집 시작 (최근 ${days}일)...`])
 
     try {
-      const res = await orderApi.syncFromMarkets(days, syncAccountId)
+      const res = await orderApi.syncFromMarkets(days, syncAccountId, payloadStart, payloadEnd)
 
       for (const result of res.results) {
         if (result.status === 'success') {
