@@ -226,6 +226,27 @@ class CoupangPlugin(MarketPlugin):
         except Exception as e:
             logger.warning(f"[쿠팡] 이미지 정규화 단계 오류 — 원본 URL 유지: {e}")
 
+        # 2026-08-01 쿠팡 brandId 의무화 — 브랜드 검색 API 로 매핑 (실패 시 brand 문자열만 사용)
+        brand_id = ""
+        brand_name = (product.get("brand") or "").strip()
+        if brand_name:
+            try:
+                brand_id = await client.search_brand_id(brand_name)
+            except Exception as _e:
+                logger.info(f"[쿠팡 brandId] '{brand_name}' 매핑 실패: {_e}")
+
+        # 2026-08-01 필수 구매옵션 의무화 — notice_meta 응답에서 추출 (없으면 [])
+        required_attr_types: list[str] = []
+        if notice_meta is not None:
+            try:
+                from backend.domain.samba.proxy.notice_utils import (
+                    extract_required_attribute_types,
+                )
+
+                required_attr_types = extract_required_attribute_types(notice_meta)
+            except Exception as _e:
+                logger.info(f"[쿠팡 필수 attribute] 추출 실패: {_e}")
+
         # AS 전화번호 주입은 base._apply_market_settings 에서 처리됨
         data = CoupangClient.transform_product(
             product,
@@ -233,6 +254,8 @@ class CoupangPlugin(MarketPlugin):
             return_center_code=return_center_code,
             outbound_shipping_place_code=outbound_code,
             notice_meta=notice_meta,
+            brand_id=brand_id,
+            required_attribute_types=required_attr_types,
         )
         data["vendorId"] = vendor_id
         data["vendorUserId"] = vendor_user_id or vendor_id

@@ -91,6 +91,76 @@ class SambaTetrisService:
             self._session,
         )
 
+    async def _exists_pending_transmit(
+        self,
+        source_site: str,
+        brand_name: str,
+        market_account_id: str,
+    ) -> bool:
+        """같은 (site, brand, account) pending/running transmit 잡 존재 여부.
+
+        sync_all 중복 잡 누적 방지용 atomic 가드 — INSERT 직전 한 번 더 DB 확인.
+        in-memory `pending_transmit_keys` 외 race/key-mismatch 케이스 마지막 방어선.
+        """
+        row = await self._session.execute(
+            text("""
+                SELECT 1
+                FROM samba_jobs
+                WHERE job_type = 'transmit'
+                  AND status IN ('pending', 'running')
+                  AND BTRIM(payload->>'source_site') = BTRIM(:site)
+                  AND BTRIM(payload->>'brand_name') = BTRIM(:brand)
+                  AND payload->>'target_account_ids' LIKE :acct_like
+                LIMIT 1
+            """),
+            {
+                "site": source_site,
+                "brand": brand_name,
+                "acct_like": f"%{market_account_id}%",
+            },
+        )
+        return row.first() is not None
+
+    async def _market_account_exists(self, market_account_id: str) -> bool:
+        """samba_market_account 테이블에 해당 ID 존재 여부."""
+        row = await self._session.execute(
+            text("SELECT 1 FROM samba_market_account WHERE id = :aid LIMIT 1"),
+            {"aid": market_account_id},
+        )
+        return row.first() is not None
+
+    async def _cleanup_dead_registered_account(
+        self,
+        tenant_id: Optional[str],
+        source_site: str,
+        brand_name: str,
+        dead_account_id: str,
+    ) -> int:
+        """삭제된 계정 ID 를 해당 상품 registered_accounts JSONB 에서 제거.
+
+        sync_all legacy 루프가 죽은 계정으로 잡을 무한 생성하는 사고를 막는다.
+        반환: 정리된 상품 수.
+        """
+        result = await self._session.execute(
+            text("""
+                UPDATE samba_collected_product
+                SET registered_accounts = registered_accounts - :aid
+                WHERE (tenant_id IS NULL AND :tid_is_null OR tenant_id = :tid)
+                  AND source_site = :site
+                  AND BTRIM(brand) = BTRIM(:brand)
+                  AND registered_accounts::jsonb ? :aid
+            """),
+            {
+                "aid": dead_account_id,
+                "tid": tenant_id,
+                "tid_is_null": tenant_id is None,
+                "site": source_site,
+                "brand": brand_name,
+            },
+        )
+        await self._session.commit()
+        return result.rowcount or 0
+
     async def _get_product_ids_for_assign(
         self,
         tenant_id: Optional[str],
@@ -1223,11 +1293,16 @@ class SambaTetrisService:
             """)
         )
         # target_account_ids는 '["account_id"]' 형태 text — 단순 포함 체크
+        # brand_name/source_site 양쪽 공백 정규화로 매칭 실패 차단 (assignment.brand_name 끝/앞 공백 케이스 방어)
         pending_transmit_keys: set[tuple[str, str, str]] = set()
         for row in existing_rows:
             if row.source_site and row.brand_name and row.account_ids:
                 pending_transmit_keys.add(
-                    (row.source_site, row.brand_name, row.account_ids)
+                    (
+                        (row.source_site or "").strip(),
+                        (row.brand_name or "").strip(),
+                        row.account_ids,
+                    )
                 )
 
         # pending/running 상태의 delete_market 잡 조합 조회
@@ -1270,8 +1345,11 @@ class SambaTetrisService:
             if a.excluded:
                 processed_keys.add((a.source_site, a.brand_name, a.market_account_id))
                 continue
+            # brand_name 양쪽 공백 정규화 — 가드 매칭 실패로 중복 누적 방지
+            a_brand_norm = (a.brand_name or "").strip()
+            a_site_norm = (a.source_site or "").strip()
             acct_key = f'["{a.market_account_id}"]'
-            if (a.source_site, a.brand_name, acct_key) in pending_transmit_keys:
+            if (a_site_norm, a_brand_norm, acct_key) in pending_transmit_keys:
                 logger.debug(
                     f"[테트리스 sync] 이미 pending/running 잡 존재 — 건너뜀: "
                     f"{a.source_site}/{a.brand_name} → {a.market_account_id}"
@@ -1283,6 +1361,16 @@ class SambaTetrisService:
             )
             processed_keys.add((a.source_site, a.brand_name, a.market_account_id))
             if not pids:
+                continue
+            # Atomic 더블체크 — 가드 query 이후 다른 사이클이 잡 생성했는지 INSERT 직전 재확인
+            # (sync_all 동시 호출/race 방지)
+            if await self._exists_pending_transmit(
+                a.source_site, a.brand_name, a.market_account_id
+            ):
+                logger.info(
+                    f"[테트리스 sync] atomic 가드 — INSERT 직전 동일 잡 발견, skip: "
+                    f"{a.source_site}/{a.brand_name} → {a.market_account_id}"
+                )
                 continue
             await job_repo.create_async(
                 tenant_id=tenant_id,
@@ -1352,8 +1440,22 @@ class SambaTetrisService:
                 )
                 processed_keys.add(key)
                 continue
+            # 삭제된 마켓 계정으로의 잡 생성 금지 — 잡 처리 단계에서 "계정 못 찾음" 에러 발생 차단
+            if not await self._market_account_exists(row.account_id):
+                logger.warning(
+                    f"[테트리스 sync 레거시] 삭제된 계정 — 잡 생성 스킵 + registered_accounts 정리 예약: "
+                    f"{row.source_site}/{row.brand_name} → {row.account_id}"
+                )
+                await self._cleanup_dead_registered_account(
+                    tenant_id, row.source_site, row.brand_name, row.account_id
+                )
+                processed_keys.add(key)
+                continue
+            # brand_name/site 양쪽 공백 정규화 후 키 매칭 (assignment 가드와 동일 패턴)
+            row_brand_norm = (row.brand_name or "").strip()
+            row_site_norm = (row.source_site or "").strip()
             acct_key = f'["{row.account_id}"]'
-            if (row.source_site, row.brand_name, acct_key) in pending_transmit_keys:
+            if (row_site_norm, row_brand_norm, acct_key) in pending_transmit_keys:
                 logger.debug(
                     f"[테트리스 sync 레거시] 이미 pending/running 잡 존재 — 건너뜀: "
                     f"{row.source_site}/{row.brand_name} → {row.account_id}"
@@ -1365,6 +1467,15 @@ class SambaTetrisService:
                 tenant_id, row.source_site, row.brand_name, row.account_id
             )
             if not pids:
+                continue
+            # Atomic 더블체크
+            if await self._exists_pending_transmit(
+                row.source_site, row.brand_name, row.account_id
+            ):
+                logger.info(
+                    f"[테트리스 sync 레거시] atomic 가드 — INSERT 직전 동일 잡 발견, skip: "
+                    f"{row.source_site}/{row.brand_name} → {row.account_id}"
+                )
                 continue
             await job_repo.create_async(
                 tenant_id=tenant_id,

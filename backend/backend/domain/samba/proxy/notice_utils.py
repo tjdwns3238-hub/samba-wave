@@ -558,6 +558,70 @@ def build_coupang_notices_with_meta(
     return notices or None
 
 
+def extract_required_attribute_types(meta: Any) -> list[str]:
+    """쿠팡 카테고리 메타 응답에서 카테고리별 필수 구매옵션(attributeTypeName) 추출.
+
+    2026-08-01 쿠팡 정책: 카테고리별 필수 구매옵션이 누락되면 등록 실패/노출 제한.
+    응답 구조가 공식 문서상 명확치 않아 알려진 키를 광범위하게 탐색 (없으면 빈 리스트).
+
+    탐색 키(우선순위):
+      data.attributes / data.attributeTypes / data.requiredAttributes / data.mandatoryAttributes
+    각 항목에서 attributeTypeName(또는 typeName/name) 추출, dataType/required 가 MANDATORY/true 인 것만.
+    """
+    if meta is None:
+        return []
+    raw = meta.get("data") if isinstance(meta, dict) else meta
+    if not isinstance(raw, dict):
+        return []
+
+    candidates: list[Any] = []
+    for key in (
+        "attributes",
+        "attributeTypes",
+        "requiredAttributes",
+        "mandatoryAttributes",
+        "attributeGroups",
+    ):
+        v = raw.get(key)
+        if isinstance(v, list):
+            candidates.extend(v)
+
+    if not candidates:
+        return []
+
+    required: list[str] = []
+    seen: set[str] = set()
+    for entry in candidates:
+        if not isinstance(entry, dict):
+            continue
+        # MANDATORY 표기 다양: dataType=MANDATORY / required=true / mandatory=true / usageType=MANDATORY
+        flags = (
+            str(entry.get("dataType", "")).upper(),
+            str(entry.get("usageType", "")).upper(),
+            str(entry.get("mandatory", "")).lower(),
+            str(entry.get("required", "")).lower(),
+        )
+        is_required = (
+            "MANDATORY" in flags[0]
+            or "MANDATORY" in flags[1]
+            or flags[2] == "true"
+            or flags[3] == "true"
+        )
+        if not is_required:
+            continue
+        name = (
+            entry.get("attributeTypeName")
+            or entry.get("typeName")
+            or entry.get("name")
+            or ""
+        )
+        name = str(name).strip()
+        if name and name not in seen:
+            seen.add(name)
+            required.append(name)
+    return required
+
+
 def build_coupang_notices(product: dict[str, Any]) -> list[dict[str, str]]:
     """상품 카테고리에 맞는 쿠팡 고시정보 notices 배열을 생성한다 (정적 매핑 폴백).
 

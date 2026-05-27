@@ -329,6 +329,12 @@ class CoupangClient:
         200  # 카테고리 200개 한도 (의류/신발/가방 등 메인 leaf 충분)
     )
 
+    # 브랜드명 → brandId 캐시 (2026-08-01 쿠팡 brandId 의무화 대응)
+    # 정규화된 brand_key → (brandId | "", timestamp). "" 는 검색 실패(=brand 문자열만 사용) 캐시.
+    _brand_id_cache: dict[str, tuple[str, float]] = {}
+    _BRAND_ID_CACHE_TTL = 86400  # 24시간 (브랜드 ID는 거의 안 바뀜)
+    _BRAND_ID_CACHE_MAX = 2000
+
     def __init__(
         self,
         access_key: str,
@@ -554,6 +560,71 @@ class CoupangClient:
                 del self._notice_meta_cache[k]
 
         return result
+
+    # ------------------------------------------------------------------
+    # 브랜드 검색 (2026-08-01 brandId 의무화 대응)
+    # ------------------------------------------------------------------
+
+    async def search_brand_id(self, brand_name: str) -> str:
+        """쿠팡 표준 브랜드 라이브러리에서 brandId 조회 (TTL 캐시, 실패 시 "" 캐시).
+
+        POST /v2/providers/seller_api/apis/api/v1/marketplace/brands/search
+        브랜드명 → brandId(예: "KR-5") 매핑. 8/1부터 신규/기존 상품 등록 시 권장 필드.
+
+        성공/실패 모두 캐시 (실패=빈 문자열). 브랜드 검색 API 호출 빈도 최소화.
+        """
+        import time
+
+        key = (brand_name or "").strip().lower()
+        if not key:
+            return ""
+
+        now = time.time()
+        cached = self._brand_id_cache.get(key)
+        if cached:
+            bid, ts = cached
+            if now - ts < self._BRAND_ID_CACHE_TTL:
+                return bid
+            del self._brand_id_cache[key]
+
+        brand_id = ""
+        try:
+            res = await self._call_api(
+                "POST",
+                "/v2/providers/seller_api/apis/api/v1/marketplace/brands/search",
+                body={"brandName": brand_name, "countPerPage": 10, "page": 1},
+            )
+            data = res.get("data") if isinstance(res, dict) else None
+            items = (data or {}).get("items") if isinstance(data, dict) else None
+            if isinstance(items, list) and items:
+                # 정확 일치 우선, 없으면 첫 결과
+                target_lower = brand_name.strip().lower()
+                exact = next(
+                    (
+                        it
+                        for it in items
+                        if isinstance(it, dict)
+                        and str(it.get("brandName", "")).strip().lower() == target_lower
+                    ),
+                    None,
+                )
+                chosen = exact or (items[0] if isinstance(items[0], dict) else None)
+                if isinstance(chosen, dict):
+                    brand_id = str(chosen.get("brandId", "") or "")
+        except Exception as e:
+            logger.info(
+                f"[쿠팡 brand search] '{brand_name}' 조회 실패 — brand 문자열만 사용: {e}"
+            )
+
+        self._brand_id_cache[key] = (brand_id, now)
+
+        # 캐시 한도 초과 시 가장 오래된 절반 제거
+        if len(self._brand_id_cache) > self._BRAND_ID_CACHE_MAX:
+            sorted_items = sorted(self._brand_id_cache.items(), key=lambda x: x[1][1])
+            for k, _ in sorted_items[: self._BRAND_ID_CACHE_MAX // 2]:
+                del self._brand_id_cache[k]
+
+        return brand_id
 
     # ------------------------------------------------------------------
     # 출고지 / 반품지 조회
@@ -806,6 +877,8 @@ class CoupangClient:
         return_center_code: str = "",
         outbound_shipping_place_code: str = "",
         notice_meta: Any = None,
+        brand_id: str = "",
+        required_attribute_types: list[str] | None = None,
     ) -> dict[str, Any]:
         """SambaCollectedProduct → 쿠팡 상품 등록 데이터 변환.
 
@@ -814,6 +887,12 @@ class CoupangClient:
 
         notice_meta: get_notice_categories(category_id) 결과 (선택). 있으면 동적 매핑,
         없으면 정적 매핑 폴백 (의류/신발 등록 시 옵션의 notice가 거부되는 미스매치 방지).
+
+        brand_id: 쿠팡 브랜드 라이브러리 brandId (예: "KR-5"). 2026-08-01 brandId 의무화 대응.
+            CoupangClient.search_brand_id() 결과를 호출자가 전달. 비어있으면 brand 문자열만 사용.
+
+        required_attribute_types: 카테고리별 필수 구매옵션 attributeTypeName 목록.
+            2026-08-01 필수 구매옵션 의무화 대응. 누락된 type만 "상세페이지 참조"로 자동 보충.
         """
         from datetime import datetime as dt, timezone as tz
 
@@ -876,6 +955,12 @@ class CoupangClient:
         # 상세 컨텐츠 (IMAGE/TEXT 혼합)
         content_details = _build_content_details(detail_html)
 
+        # 품번(MPN, modelNo) — 2026-08-01 의무화: 바코드(GTIN) 또는 품번 둘 중 하나 필수
+        _style_code = (product.get("style_code") or "").strip()[:50]
+
+        # 카테고리별 필수 attribute type 보충용 (누락 시 "상세페이지 참조")
+        _required_attr_types: list[str] = list(required_attribute_types or [])
+
         # 아이템별 공통 필드 생성 함수
         def _build_item(
             item_name: str,
@@ -914,7 +999,51 @@ class CoupangClient:
             opt_sale = base_sale + int(add_price or 0)
             opt_orig = base_orig + int(add_price or 0) if base_orig else 0
 
-            return {
+            # 기본 attributes 조립 (사이즈/색상/extra)
+            _attrs: list[dict[str, str]] = []
+            if not extra_attr_name:
+                _attrs.append(
+                    {
+                        "attributeTypeName": "패션의류/잡화 사이즈",
+                        "attributeValueName": (size_val or "")[:30],
+                    }
+                )
+            _attrs.append(
+                {
+                    "attributeTypeName": "색상",
+                    "attributeValueName": (resolved_color or "")[:30],
+                }
+            )
+            if extra_attr_name and extra_attr_value:
+                _attrs.append(
+                    {
+                        "attributeTypeName": extra_attr_name[:25],
+                        "attributeValueName": extra_attr_value[:30],
+                    }
+                )
+
+            # 2026-08-01: 품번(MPN) attribute 동시 등록 — 일부 카테고리는 attribute 형식 요구
+            if _style_code:
+                _attrs.append(
+                    {
+                        "attributeTypeName": "Variation MPN",
+                        "attributeValueName": _style_code[:30],
+                    }
+                )
+
+            # 카테고리별 필수 구매옵션 누락분 자동 보충 ("상세페이지 참조")
+            if _required_attr_types:
+                _present = {a["attributeTypeName"] for a in _attrs}
+                for _req in _required_attr_types:
+                    if _req and _req not in _present:
+                        _attrs.append(
+                            {
+                                "attributeTypeName": _req[:25],
+                                "attributeValueName": "상세페이지 참조",
+                            }
+                        )
+
+            _item: dict[str, Any] = {
                 "itemName": item_name,
                 "originalPrice": opt_orig,
                 "salePrice": opt_sale,
@@ -928,41 +1057,8 @@ class CoupangClient:
                 "parallelImported": "NOT_PARALLEL_IMPORTED",
                 "overseasPurchased": "NOT_OVERSEAS_PURCHASED",
                 "pccNeeded": False,
-                "barcode": "",
-                "emptyBarcode": True,
-                "emptyBarcodeReason": "바코드 없음",
                 "offerCondition": "NEW",
-                # attributes — 색상축 + 옵션 그룹명 기반 자유 입력 attribute
-                # 두 번째 그룹(예: "Gift box 추가") 이 있으면 사이즈축은 추가하지 않고
-                # 색상 × extra 2축으로만 등록. 두 번째 그룹이 없을 때만 사이즈축 채움.
-                "attributes": (
-                    (
-                        []
-                        if extra_attr_name
-                        else [
-                            {
-                                "attributeTypeName": "패션의류/잡화 사이즈",
-                                "attributeValueName": (size_val or "")[:30],
-                            },
-                        ]
-                    )
-                    + [
-                        {
-                            "attributeTypeName": "색상",
-                            "attributeValueName": (resolved_color or "")[:30],
-                        },
-                    ]
-                    + (
-                        [
-                            {
-                                "attributeTypeName": extra_attr_name[:25],
-                                "attributeValueName": extra_attr_value[:30],
-                            }
-                        ]
-                        if extra_attr_name and extra_attr_value
-                        else []
-                    )
-                ),
+                "attributes": _attrs,
                 "contents": [
                     {
                         "contentsType": "HTML",
@@ -975,6 +1071,20 @@ class CoupangClient:
                     {"certificationType": "NOT_REQUIRED", "certificationCode": ""}
                 ],
             }
+
+            # 2026-08-01: 품번(MPN) modelNo 채우기. style_code 없으면 종전대로 emptyBarcode 처리.
+            if _style_code:
+                _item["modelNo"] = _style_code
+                # barcode 비어있어도 modelNo 가 식별번호 역할 — emptyBarcode 명시
+                _item["barcode"] = ""
+                _item["emptyBarcode"] = True
+                _item["emptyBarcodeReason"] = "품번(MPN)으로 대체"
+            else:
+                _item["barcode"] = ""
+                _item["emptyBarcode"] = True
+                _item["emptyBarcodeReason"] = "바코드 없음"
+
+            return _item
 
         # 옵션 처리 — 색상/사이즈 분리
         options = product.get("options") or []
@@ -1088,6 +1198,10 @@ class CoupangClient:
         # 검색태그 추가
         if search_tags:
             result["searchTags"] = search_tags
+
+        # 2026-08-01 brandId 의무화 대응 — 검색 성공 시에만 주입(빈 값 전송 금지)
+        if brand_id:
+            result["brandId"] = brand_id
 
         return result
 

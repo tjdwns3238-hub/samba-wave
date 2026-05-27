@@ -1420,7 +1420,30 @@ class SambaShipmentService:
 
                 account = _dispatch_account_map.get(account_id)
                 if not account:
-                    res["error"] = "계정을 찾을 수 없습니다."
+                    # 삭제된 마켓 계정 — 해당 상품 registered_accounts 에서 자동 제거
+                    # (legacy 루프가 동일 잡 무한 재생성하는 사고 방지)
+                    res["error"] = f"계정을 찾을 수 없습니다 (삭제됨): {account_id}"
+                    res["status"] = "failed"
+                    try:
+                        from sqlalchemy import text as _sa_text
+
+                        await self.session.execute(
+                            _sa_text(
+                                "UPDATE samba_collected_product "
+                                "SET registered_accounts = registered_accounts - :aid "
+                                "WHERE id = :pid AND registered_accounts::jsonb ? :aid"
+                            ),
+                            {"aid": account_id, "pid": product_id},
+                        )
+                        await self.session.commit()
+                        logger.warning(
+                            f"[전송] 삭제계정 자동정리 — product={product_id} "
+                            f"account={account_id} (registered_accounts -= 1)"
+                        )
+                    except Exception as _e:
+                        logger.warning(
+                            f"[전송] 삭제계정 registered_accounts 정리 실패: {_e}"
+                        )
                     return res
 
                 market_type = account.market_type
@@ -1792,13 +1815,6 @@ class SambaShipmentService:
                     # 모든 DB 읽기 완료 — HTTP 전송 전 트랜잭션 종료 (idle in transaction 방지)
                     try:
                         await self.session.commit()
-                    except Exception:
-                        pass
-                    # ESM 옵션 PUT propagation 대기(최대 90s) 등 long sleep 동안 connection 보유 시
-                    # Cloud SQL/네트워크 stale 로 다음 마켓 진입 때 greenlet_spawn 예외 발생.
-                    # close() 로 풀에 반납, 후속 query 시 SQLAlchemy 가 자동 새 connection 획득.
-                    try:
-                        await self.session.close()
                     except Exception:
                         pass
                     logger.info(f"[메모리] 마켓전송 전: {_mem_mb()}MB")
