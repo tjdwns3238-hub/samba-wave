@@ -193,7 +193,7 @@ export function StoreSettingsPanel(props: Props) {
                           }
                           await forbiddenApi.saveSetting('store_ssg', data)
                           // 배송비정책 조회
-                          const shipRes = await proxyApi.ssgShippingPolicies()
+                          const shipRes = await proxyApi.ssgShippingPolicies(editingAccountId || undefined)
                           if (shipRes.success && shipRes.policies?.length) {
                             setSsgShippingOptions(shipRes.policies.map((p: { shppcstId: string; feeAmt: number; prpayCodDivNm: string; shppcstAplUnitNm: string; divCd: number }) => {
                               const fee = p.feeAmt ? `${fmtNum(Number(p.feeAmt))}원` : '무료'
@@ -204,7 +204,7 @@ export function StoreSettingsPanel(props: Props) {
                             }))
                           }
                           // 주소 조회
-                          const addrRes = await proxyApi.ssgAddresses()
+                          const addrRes = await proxyApi.ssgAddresses(editingAccountId || undefined)
                           if (addrRes.success && addrRes.addresses?.length) {
                             setSsgAddrOptions(addrRes.addresses.map((a: { grpAddrId: string; doroAddrId?: string; addrNm: string; bascAddr: string }) => ({
                               value: a.doroAddrId || a.grpAddrId,
@@ -227,8 +227,8 @@ export function StoreSettingsPanel(props: Props) {
                           if (!data.apiKey) { showAlert('API Key를 먼저 입력하세요.', 'error'); return }
                           await forbiddenApi.saveSetting('store_lotteon', data)
                           const [polRes, whRes] = await Promise.all([
-                            proxyApi.lotteonDeliveryPolicies(),
-                            proxyApi.lotteonWarehouses(),
+                            proxyApi.lotteonDeliveryPolicies(editingAccountId || undefined),
+                            proxyApi.lotteonWarehouses(editingAccountId || undefined),
                           ])
                           if (polRes.success) setLotteonDeliveryPolicyOptions(polRes.policies)
                           if (whRes.success) setLotteonWarehouseOptions({ departure: whRes.departure, return_: whRes.return_ })
@@ -591,7 +591,7 @@ export function StoreSettingsPanel(props: Props) {
                           if (data.apiKey) {
                             await forbiddenApi.saveSetting('store_11st', data)
                           }
-                          const res = await proxyApi.elevenstSellerInfo()
+                          const res = await proxyApi.elevenstSellerInfo(editingAccountId ? { account_id: editingAccountId } : undefined)
                           if (res.success && res.data) {
                             const d = res.data
                             if (d.shipFromAddress) updateStoreField('11st', 'shipFromAddress', d.shipFromAddress)

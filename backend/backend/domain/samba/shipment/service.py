@@ -1794,6 +1794,13 @@ class SambaShipmentService:
                         await self.session.commit()
                     except Exception:
                         pass
+                    # ESM 옵션 PUT propagation 대기(최대 90s) 등 long sleep 동안 connection 보유 시
+                    # Cloud SQL/네트워크 stale 로 다음 마켓 진입 때 greenlet_spawn 예외 발생.
+                    # close() 로 풀에 반납, 후속 query 시 SQLAlchemy 가 자동 새 connection 획득.
+                    try:
+                        await self.session.close()
+                    except Exception:
+                        pass
                     logger.info(f"[메모리] 마켓전송 전: {_mem_mb()}MB")
                     start_time = time.time()
                     result = await dispatch_to_market(

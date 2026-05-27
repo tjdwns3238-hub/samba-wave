@@ -338,8 +338,8 @@ export function useStoreSettings(): StoreSettingsState & StoreSettingsActions {
         // 인증 성공 시 배송비정책/출고지/회수지 목록 자동 로드
         if (lotteonResult.success) {
           const [polRes, whRes] = await Promise.all([
-            proxyApi.lotteonDeliveryPolicies(),
-            proxyApi.lotteonWarehouses(),
+            proxyApi.lotteonDeliveryPolicies(editingAccountId ?? undefined),
+            proxyApi.lotteonWarehouses(editingAccountId ?? undefined),
           ])
           if (polRes.success) setLotteonDeliveryPolicyOptions(polRes.policies)
           if (whRes.success) setLotteonWarehouseOptions({ departure: whRes.departure, return_: whRes.return_ })
@@ -421,7 +421,7 @@ export function useStoreSettings(): StoreSettingsState & StoreSettingsActions {
     if (ssgShippingOptions.length > 0 || ssgAddrOptions.length > 0) return
     const ssgData = savedStoreData['ssg'] || storeData['ssg'] || {}
     if (!ssgData.apiKey) return
-    proxyApi.ssgShippingPolicies().then(res => {
+    proxyApi.ssgShippingPolicies(editingAccountId ?? undefined).then(res => {
       if (!res.success || !res.policies?.length) return
       const opts = res.policies.map((p: { shppcstId: string; feeAmt: number; prpayCodDivNm: string; shppcstAplUnitNm: string; divCd: number }) => {
         const fee = p.feeAmt ? `${fmtNum(Number(p.feeAmt))}원` : '무료'
@@ -432,14 +432,14 @@ export function useStoreSettings(): StoreSettingsState & StoreSettingsActions {
       })
       setSsgShippingOptions(opts)
     }).catch(() => {})
-    proxyApi.ssgAddresses().then(res => {
+    proxyApi.ssgAddresses(editingAccountId ?? undefined).then(res => {
       if (!res.success || !res.addresses?.length) return
       setSsgAddrOptions(res.addresses.map((a: { grpAddrId: string; doroAddrId?: string; addrNm: string; bascAddr: string }) => ({
         value: a.doroAddrId || a.grpAddrId,
         label: `${a.addrNm}${a.bascAddr ? ` (${a.bascAddr})` : ''}`,
       })))
     }).catch(() => {})
-  }, [storeTab, savedStoreData, storeData, ssgShippingOptions.length, ssgAddrOptions.length])
+  }, [storeTab, savedStoreData, storeData, ssgShippingOptions.length, ssgAddrOptions.length, editingAccountId])
 
   // 롯데ON 탭 진입 시 배송비정책/출고지/회수지 자동 로드
   useEffect(() => {
@@ -447,12 +447,15 @@ export function useStoreSettings(): StoreSettingsState & StoreSettingsActions {
     if (lotteonDeliveryPolicyOptions.length > 0 || lotteonWarehouseOptions.departure.length > 0) return
     const d = savedStoreData['lotteon'] || storeData['lotteon'] || {}
     if (!d.apiKey) return
-    Promise.all([proxyApi.lotteonDeliveryPolicies(), proxyApi.lotteonWarehouses()])
+    Promise.all([
+      proxyApi.lotteonDeliveryPolicies(editingAccountId ?? undefined),
+      proxyApi.lotteonWarehouses(editingAccountId ?? undefined),
+    ])
       .then(([polRes, whRes]) => {
         if (polRes.success) setLotteonDeliveryPolicyOptions(polRes.policies)
         if (whRes.success) setLotteonWarehouseOptions({ departure: whRes.departure, return_: whRes.return_ })
       }).catch(() => {})
-  }, [storeTab, savedStoreData, storeData, lotteonDeliveryPolicyOptions.length, lotteonWarehouseOptions.departure.length])
+  }, [storeTab, savedStoreData, storeData, lotteonDeliveryPolicyOptions.length, lotteonWarehouseOptions.departure.length, editingAccountId])
 
   // 롯데홈쇼핑 배송비정책/출고지/반품지는 버튼 클릭 시에만 로드 (자동 로드 제거 — 동시 호출 시 롯데 API 오류 방지)
 
@@ -462,7 +465,7 @@ export function useStoreSettings(): StoreSettingsState & StoreSettingsActions {
     if (elevenstDispatchTemplateOptions.length > 0) return
     const d = savedStoreData['11st'] || storeData['11st'] || {}
     if (!d.apiKey) return
-    proxyApi.elevenstSellerInfo()
+    proxyApi.elevenstSellerInfo(editingAccountId ? { account_id: editingAccountId } : undefined)
       .then((res) => {
         const list = res.success ? res.data?.dispatchTemplateList : null
         if (Array.isArray(list)) {
@@ -474,7 +477,7 @@ export function useStoreSettings(): StoreSettingsState & StoreSettingsActions {
           )
         }
       }).catch(() => {})
-  }, [storeTab, savedStoreData, storeData, elevenstDispatchTemplateOptions.length])
+  }, [storeTab, savedStoreData, storeData, elevenstDispatchTemplateOptions.length, editingAccountId])
 
   const handleAccountToggle = async (id: string) => {
     await accountApi.toggle(id)

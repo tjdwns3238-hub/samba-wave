@@ -33,8 +33,13 @@ async def _resolve_creds(
     store_key: str,
     form_payload: Optional[dict] = None,
     account_id: Optional[str] = None,
+    allow_default_fallback: bool = False,
 ) -> dict[str, Any]:
-    """범용 자격증명 해석 — backend.domain.samba.account.resolver 위임 (2026-05-25)."""
+    """범용 자격증명 해석 — backend.domain.samba.account.resolver 위임 (2026-05-25).
+
+    allow_default_fallback=True 는 조회/설정 endpoint 전용. 전송/등록 hot 경로엔
+    절대 켜지 말 것 — resolver.py 주석 참조. (이슈 #255 fix, 2026-05-27)
+    """
     from backend.domain.samba.account.resolver import resolve_market_creds
 
     return await resolve_market_creds(
@@ -44,6 +49,7 @@ async def _resolve_creds(
         store_key=store_key,
         form_payload=form_payload,
         account_id=account_id,
+        allow_default_fallback=allow_default_fallback,
     )
 
 
@@ -53,6 +59,7 @@ async def _resolve_lotteon_creds(
     form_api_key: Optional[str] = None,
     form_extras: Optional[dict] = None,
     account_id: Optional[str] = None,
+    allow_default_fallback: bool = False,
 ) -> dict[str, Any]:
     """롯데ON 자격증명 해석 — _resolve_creds 어댑터 (기존 호출자 호환)."""
     payload: Optional[dict] = None
@@ -67,6 +74,7 @@ async def _resolve_lotteon_creds(
         store_key="store_lotteon",
         form_payload=payload,
         account_id=account_id,
+        allow_default_fallback=allow_default_fallback,
     )
     # lotteon_creds 빌더가 처리 못 한 store_* 레거시 dict 직접 반환 케이스도 자연 처리됨
     if not creds and (form_api_key or account_id):
@@ -165,6 +173,7 @@ async def elevenst_seller_info(
         store_key="store_11st",
         form_payload={"apiKey": body.api_key} if body.api_key else None,
         account_id=body.account_id,
+        allow_default_fallback=True,
     )
     if not creds:
         return {"success": False, "message": "11번가 설정이 저장되지 않았습니다."}
@@ -467,7 +476,9 @@ async def lotteon_delivery_policies(
     tenant_id: Optional[str] = Depends(get_optional_tenant_id),
 ) -> dict[str, Any]:
     """롯데ON 배송비정책 목록 조회. account_id 지정 시 그 계정, 미지정 시 default."""
-    creds = await _resolve_lotteon_creds(session, tenant_id, account_id=account_id)
+    creds = await _resolve_lotteon_creds(
+        session, tenant_id, account_id=account_id, allow_default_fallback=True
+    )
     api_key = (creds.get("apiKey", "") or "").strip()
     if not api_key:
         return {"success": False, "policies": []}
@@ -515,7 +526,9 @@ async def lotteon_warehouses(
     tenant_id: Optional[str] = Depends(get_optional_tenant_id),
 ) -> dict[str, Any]:
     """롯데ON 출고지/회수지 목록 조회. account_id 지정 시 그 계정, 미지정 시 default."""
-    creds = await _resolve_lotteon_creds(session, tenant_id, account_id=account_id)
+    creds = await _resolve_lotteon_creds(
+        session, tenant_id, account_id=account_id, allow_default_fallback=True
+    )
     api_key = (creds.get("apiKey", "") or "").strip()
     if not api_key:
         return {"success": False, "departure": [], "return_": []}
@@ -604,6 +617,7 @@ async def ssg_brands(
         market_type="ssg",
         store_key="store_ssg",
         account_id=account_id,
+        allow_default_fallback=True,
     )
     api_key = creds.get("apiKey", "")
     if not api_key:
@@ -648,6 +662,7 @@ async def ssg_shipping_policies(
         market_type="ssg",
         store_key="store_ssg",
         account_id=account_id,
+        allow_default_fallback=True,
     )
     api_key = creds.get("apiKey", "")
     if not api_key:
@@ -692,6 +707,7 @@ async def ssg_addresses(
         market_type="ssg",
         store_key="store_ssg",
         account_id=account_id,
+        allow_default_fallback=True,
     )
     api_key = creds.get("apiKey", "")
     if not api_key:
