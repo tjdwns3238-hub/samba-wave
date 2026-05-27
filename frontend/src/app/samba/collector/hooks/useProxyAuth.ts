@@ -16,12 +16,27 @@ export type PoolInfo = {
   read_pool_max?: number
 } | null
 
+export type MusinsaAccount = {
+  slot_label: string | null
+  slot_username: string | null
+  slot_hash_id: string | null
+  cookie_hash_id: string | null
+  match: boolean | null
+  source: 'slot' | 'pool' | null
+  level: number | null
+  gender: string | null
+  birth_year: string | null
+  register_date: string | null
+  order_count: number | null
+} | null
+
 export default function useProxyAuth() {
   const [proxyStatus, setProxyStatus] = useState<ProxyAuthStatus>('checking')
   const [proxyText, setProxyText] = useState('프록시 서버 확인 중...')
   const [musinsaAuth, setMusinsaAuth] = useState<ProxyAuthStatus>('checking')
   const [musinsaAuthText, setMusinsaAuthText] = useState('인증 상태 확인 중...')
   const [musinsaCookieUpdatedAt, setMusinsaCookieUpdatedAt] = useState<string | null>(null)
+  const [musinsaAccount, setMusinsaAccount] = useState<MusinsaAccount>(null)
   const [poolInfo, setPoolInfo] = useState<PoolInfo>(null)
 
   // 프록시 서버 상태 확인 — 502/네트워크 오류 시 1회 재시도(1.5초 지연)
@@ -63,10 +78,12 @@ export default function useProxyAuth() {
           setMusinsaAuth('ok')
           setMusinsaAuthText(data.message || '무신사 인증 완료')
           setMusinsaCookieUpdatedAt(data.updated_at ?? null)
+          setMusinsaAccount(data.account ?? null)
         } else {
           setMusinsaAuth('error')
           setMusinsaAuthText(data.message || '무신사 인증 필요')
           setMusinsaCookieUpdatedAt(null)
+          setMusinsaAccount(null)
         }
       })
       .catch(() => {
@@ -77,6 +94,7 @@ export default function useProxyAuth() {
         setMusinsaAuth('error')
         setMusinsaAuthText('백엔드 서버 연결 실패')
         setMusinsaCookieUpdatedAt(null)
+        setMusinsaAccount(null)
       })
   }, [])
 
@@ -123,6 +141,7 @@ export default function useProxyAuth() {
     musinsaAuth,
     musinsaAuthText,
     musinsaCookieUpdatedAt,
+    musinsaAccount,
     poolInfo,
     checkProxyStatus,
     checkMusinsaAuth,

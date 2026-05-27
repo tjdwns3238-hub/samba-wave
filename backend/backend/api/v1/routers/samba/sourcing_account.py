@@ -562,32 +562,73 @@ async def sync_balance_from_extension(
     body: SyncBalanceRequest,
     session: AsyncSession = Depends(get_write_session_dependency),
 ):
-    """확장앱에서 잔액 수신 → 크롬 프로필 Gmail로 계정 매칭 → 저장."""
+    """확장앱에서 잔액 수신 → 쿠키 JWT hashId 우선 매칭 → 저장.
+
+    매칭 우선순위 (2026-05-27 오염방지 강화):
+      1) 쿠키 JWT(mss_mac).sub(hashId) ↔ row.additional_fields.musinsa_hash_id 일치
+         — 무신사 계정 고유 식별자. Chrome 프로필 이메일/username 무관하게 정확.
+      2) (bootstrap) hashId 미설정 row 중 memo email 일치 → 박으면서 hashId 자동 캡처
+      3) (bootstrap) hashId 미설정 row 중 username 이 쿠키 안에 포함 → 박고 hashId 캡처
+      4) 매칭 0건 → pool 만 갱신, 어떤 row 도 안 건드림 (오염 차단)
+    """
+    from backend.api.v1.routers.samba.proxy._musinsa_jwt import musinsa_hash_id
+
     svc = _write_service(session)
     accounts = await svc.list_accounts(site_name="MUSINSA")
     matched = None
+    capture_hash_id: str | None = None  # bootstrap 시 row 에 새로 박을 hashId
 
-    # 1순위: 크롬 프로필 Gmail(memo 필드)로 매칭
-    if body.profileEmail:
+    # 쿠키 JWT 에서 hashId 추출 (있을 때만)
+    cookie_hash_id = musinsa_hash_id(body.cookie or "")
+
+    # 1순위: hashId 일치 (이미 박힌 row)
+    if cookie_hash_id:
         matched = next(
             (
                 a
                 for a in accounts
-                if a.memo and a.memo.lower() == body.profileEmail.lower()
+                if (a.additional_fields or {}).get("musinsa_hash_id") == cookie_hash_id
             ),
             None,
         )
 
-    # 2순위: 쿠키 문자열에 아이디가 포함되어 있는지 확인
-    if not matched and body.cookie:
+    # 2순위 (bootstrap): hashId 미설정 + memo email 일치 → hashId 캡처
+    if not matched and body.profileEmail:
+        cand = next(
+            (
+                a
+                for a in accounts
+                if a.memo
+                and a.memo.lower() == body.profileEmail.lower()
+                and not (a.additional_fields or {}).get("musinsa_hash_id")
+            ),
+            None,
+        )
+        if cand and cookie_hash_id:
+            matched = cand
+            capture_hash_id = cookie_hash_id
+            logger.info(
+                f"[잔액동기화 bootstrap] memo 매칭 → {cand.account_label} hashId={cookie_hash_id} 캡처"
+            )
+
+    # 3순위 (bootstrap): hashId 미설정 + username 이 쿠키 안에 포함 → hashId 캡처
+    if not matched and body.cookie and cookie_hash_id:
         for a in accounts:
-            if a.username and a.username in body.cookie:
+            if (
+                a.username
+                and a.username in body.cookie
+                and not (a.additional_fields or {}).get("musinsa_hash_id")
+            ):
                 matched = a
+                capture_hash_id = cookie_hash_id
+                logger.info(
+                    f"[잔액동기화 bootstrap] username 매칭 → {a.account_label} hashId={cookie_hash_id} 캡처"
+                )
                 break
 
     if not matched:
         logger.warning(
-            f"[잔액동기화] 매칭 실패: email={body.profileEmail}, username={body.username}"
+            f"[잔액동기화] 매칭 실패: cookie_hashId={cookie_hash_id}, email={body.profileEmail}, username={body.username}"
         )
         # 매칭 실패해도 쿠키는 refresher 풀(SambaSettings.musinsa_cookies)에 저장
         # — 소싱처 계정 미등록 상태(포크/신규 인스턴스)에서도 최대혜택가 계산 가능하도록
@@ -598,8 +639,9 @@ async def sync_balance_from_extension(
             )
         return {
             "ok": False,
+            "cookie_hash_id": cookie_hash_id,
             "cookie_saved": bool(body.cookie and not body.expired),
-            "message": f"계정을 찾을 수 없습니다: {body.profileEmail or body.username}",
+            "message": f"계정을 찾을 수 없습니다: hashId={cookie_hash_id or '?'} / email={body.profileEmail} / username={body.username}",
         }
 
     from datetime import datetime, timezone
@@ -622,6 +664,9 @@ async def sync_balance_from_extension(
     if body.cookie:
         extra["musinsa_cookie"] = body.cookie
         extra["cookie_updated_at"] = datetime.now(timezone.utc).isoformat()
+    # bootstrap 매칭(2/3순위) 시 hashId 캡처 — 이후 push 부터 1순위로 자동 매칭
+    if capture_hash_id:
+        extra["musinsa_hash_id"] = capture_hash_id
     await svc.repo.update_async(
         matched.id,
         balance=body.money,

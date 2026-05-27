@@ -7238,8 +7238,21 @@ async def sync_orders_from_markets(
                         "arrived",
                         "processing",
                         "shipped",
+                        "ship_failed",
                     ):
                         update_fields["status"] = "shipping"
+                    # 마켓이 발송완료/배송완료/구매확정 신호를 주면 ship_failed 잔존 해제.
+                    # 우리 송장전송이 false-negative 로 실패했지만 마켓 측엔 실제 송장이 들어간 케이스 보정.
+                    elif (
+                        _new_ss_final in ("송장전송완료",)
+                        and existing.status == "ship_failed"
+                    ):
+                        update_fields["status"] = "shipping"
+                    elif _new_ss_final in (
+                        "배송완료",
+                        "구매확정",
+                    ) and existing.status in ("ship_failed", "wait_ship", "shipping"):
+                        update_fields["status"] = "delivered"
                     elif _new_ss_final == "취소완료" and existing.status != "cancelled":
                         update_fields["status"] = "cancelled"
                     elif (

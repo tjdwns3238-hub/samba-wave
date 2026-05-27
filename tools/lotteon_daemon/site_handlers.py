@@ -822,9 +822,11 @@ SITE_HANDLERS: dict[str, SiteHandler] = {
         dialog_policy="accept",
         pre_extract_marker_js=_SSG_MARKER_JS,
         # 실측(2026-05-24, 10상품): itemNm·uitemObjList 동시 생성, 최대 1.30s.
-        # 마커(itemNm)가 곧 재고 준비 시점 → 정확성 안전. timeout 6s 넉넉.
-        pre_extract_marker_timeout_ms=6_000,
-        pre_extract_wait_ms=200,
+        # 마커(itemNm)가 곧 재고 준비 시점 → 정확성 안전. timeout 6→10s 상향
+        # (2026-05-27 오토튠 SSG 실패율 높음 — 헤드리스 + 이미지 차단 환경에서
+        # resultItemObj XHR 지연 케이스 보강).
+        pre_extract_marker_timeout_ms=10_000,
+        pre_extract_wait_ms=1_500,
         # 송장(tracking)은 마이페이지 접근 → 로그인 필수. login_url/selectors 추가.
         # requires_login=False 유지 → detail 흐름은 ensure_logged_in_for_site 가 스킵.
         login_url=SSG_TRACKING_LOGIN_URL,

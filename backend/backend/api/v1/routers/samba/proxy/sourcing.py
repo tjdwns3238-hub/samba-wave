@@ -190,10 +190,10 @@ async def sourcing_collect_queue(request: Request) -> Any:
 # ====================================================================
 
 # build/release 시 갱신. 데몬이 시작 시 비교하여 신버전이면 자기 종료(다음 시작 시 갱신).
-AUTOTUNE_DAEMON_LATEST_VERSION = "1.4.12"
+AUTOTUNE_DAEMON_LATEST_VERSION = "1.4.13"
 AUTOTUNE_DAEMON_DOWNLOAD_URL = (
     "https://github.com/sbk0674-web/samba-wave/releases/download/"
-    "samba-daemon-v1.4.12/samba.exe"
+    "samba-daemon-v1.4.13/samba.exe"
 )
 # 데몬 self-update 경로 — backend 경유로 install-token 박힌 exe 받기.
 # 인증: X-Api-Key (데몬 long-lived key). 키 검증 후 새 install-token 발급 + exe tail append.

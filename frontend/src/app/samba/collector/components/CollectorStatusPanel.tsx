@@ -3,7 +3,7 @@
 import type { Dispatch, RefObject, SetStateAction } from 'react'
 import { fetchWithAuth, API_BASE } from '@/lib/samba/api/shared'
 import { fmtNum, fmtTextNumbers } from '@/lib/samba/styles'
-import type { PoolInfo } from '../hooks/useProxyAuth'
+import type { MusinsaAccount, PoolInfo } from '../hooks/useProxyAuth'
 
 // 인증/프록시 상태 타입
 type StatusState = 'checking' | 'ok' | 'error'
@@ -26,6 +26,7 @@ type StatusProps = {
   musinsaAuth: StatusState
   musinsaAuthText: string
   musinsaCookieUpdatedAt?: string | null
+  musinsaAccount?: MusinsaAccount
   poolInfo?: PoolInfo
   setProxyStatus: Dispatch<SetStateAction<StatusState>>
   setProxyText: Dispatch<SetStateAction<string>>
@@ -73,11 +74,42 @@ export default function CollectorStatusPanel(props: Props) {
       musinsaAuth,
       musinsaAuthText,
       musinsaCookieUpdatedAt,
+      musinsaAccount,
       poolInfo,
       setProxyStatus,
       setProxyText,
     } = props
     const cookieFresh = musinsaAuth === 'ok' ? formatCookieFreshness(musinsaCookieUpdatedAt) : null
+
+    // 쿠키 주인 식별 정보 — slot vs cookie hashId 매칭 결과
+    let accountText: string | null = null
+    let accountColor: string = '#51CF66'
+    if (musinsaAccount) {
+      const slot = musinsaAccount.slot_label
+        ? `${musinsaAccount.slot_label}${musinsaAccount.slot_username ? `(${musinsaAccount.slot_username})` : ''}`
+        : '자리미설정'
+      const lvl = musinsaAccount.level != null ? `LV.${musinsaAccount.level}` : ''
+      const gender = musinsaAccount.gender
+        ? (musinsaAccount.gender === 'M' ? '남' : musinsaAccount.gender === 'F' ? '여' : '')
+        : ''
+      const cookieDesc = [lvl, gender, musinsaAccount.birth_year].filter(Boolean).join(' ')
+      if (musinsaAccount.match === false) {
+        // 오염 — slot 과 쿠키 주인 다름
+        const shortCookieHash = (musinsaAccount.cookie_hash_id || '').slice(0, 8)
+        accountText = `⚠ 자리:${slot} / 쿠키:외부 ${cookieDesc} (${shortCookieHash}..)`
+        accountColor = '#FF6B6B'
+      } else if (musinsaAccount.match === true) {
+        accountText = `${slot} · ${cookieDesc} ✓`
+        accountColor = '#51CF66'
+      } else if (musinsaAccount.slot_hash_id == null && musinsaAccount.cookie_hash_id) {
+        // bootstrap 미완료 — hashId 캡처 대기
+        accountText = `${slot} · ${cookieDesc} · (식별자 미설정)`
+        accountColor = '#FAB005'
+      } else {
+        accountText = `${slot} · ${cookieDesc}`
+        accountColor = '#9AA5C0'
+      }
+    }
 
     // write/read pool_max 분리 — 같은 값으로 표시하면 read(실제 30) 오인 유발
     const wPoolMax = poolInfo?.write_pool_max ?? poolInfo?.write?.pool_max ?? poolInfo?.pool_max ?? 60
@@ -124,6 +156,11 @@ export default function CollectorStatusPanel(props: Props) {
             background: musinsaAuth === 'ok' ? '#51CF66' : musinsaAuth === 'error' ? '#FF6B6B' : '#555',
           }} />
           <span style={{ color: musinsaAuth === 'ok' ? '#51CF66' : '#888' }}>{musinsaAuthText}</span>
+          {accountText && (
+            <span style={{ color: accountColor, fontSize: '0.72rem', fontWeight: musinsaAccount?.match === false ? 700 : 400 }}>
+              · {accountText}
+            </span>
+          )}
           {cookieFresh && (
             <span style={{ color: cookieFresh.color, fontSize: '0.72rem' }}>· {cookieFresh.text}</span>
           )}

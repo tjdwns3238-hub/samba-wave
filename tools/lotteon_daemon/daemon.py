@@ -77,7 +77,7 @@ except ImportError:
 # ====================================================================
 # 데몬 버전 — build.ps1 가 갱신. 자동 업데이트 비교 기준.
 # ====================================================================
-DAEMON_VERSION = "1.4.12"
+DAEMON_VERSION = "1.4.13"
 
 
 # ====================================================================
@@ -1672,7 +1672,11 @@ async def extract_pdp(
 
     data = await page.evaluate(handler.extract_js)
     retry_field = handler.extract_retry_field
-    if (
+    # 재시도 조건 2가지:
+    # (a) 부분 추출 — sale_price/options 있으나 retry_field(best_benefit_price) 비어있음
+    # (b) 완전 실패 — success=False (2026-05-27 SSG 실패율 보강: marker 만료 후 0원
+    #     반환 케이스에서 1회 더 시도). 3s 추가 대기로 XHR 지연 회복 유도.
+    _need_retry_partial = (
         retry_field
         and isinstance(data, dict)
         and not data.get(retry_field)
@@ -1680,10 +1684,19 @@ async def extract_pdp(
             (data.get("sale_price") or 0) > 0
             or (data.get("options") and len(data["options"]) > 0)
         )
-    ):
+    )
+    _need_retry_full = (
+        isinstance(data, dict)
+        and not data.get("success")
+        and not data.get("staffOnly")
+        and not data.get("login_required")
+    )
+    if _need_retry_partial or _need_retry_full:
         await page.wait_for_timeout(3_000)
         data2 = await page.evaluate(handler.extract_js)
-        if isinstance(data2, dict) and data2.get(retry_field):
+        if isinstance(data2, dict) and (
+            data2.get(retry_field) or data2.get("success")
+        ):
             data = data2
     return (
         data

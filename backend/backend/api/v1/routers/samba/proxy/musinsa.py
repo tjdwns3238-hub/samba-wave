@@ -231,13 +231,50 @@ async def musinsa_set_cookie(
     except Exception as exc:  # pragma: no cover — fallback 실패해도 단수는 저장됨
         logger.warning(f"[set-cookie] musinsa_cookies 풀 갱신 실패 (무시): {exc}")
 
-    # (2026-05-27) 자동로그인 계정 자리 강제 덮어쓰기 영구 제거.
-    # 이전: 발신자 식별 없이 무조건 is_login_default 계정 additional_fields.musinsa_cookie
-    # 박음 → 다른 계정으로 로그인된 PC 가 push 하면 자동로그인 계정 쿠키 자리에 타계정
-    # 쿠키 박힘 → 오토튠/원가 갱신이 잘못된 등급/적립률/쿠폰으로 cost 계산 (들쑥날쑥).
-    # 자동로그인 계정 자리는 sourcing_account.py 의 잔액동기화(profileEmail/username 매칭)
-    # 경유로만 박힘 — 본인 계정 push 만 자기 자리 갱신. 풀(musinsa_cookies)은 위에서
-    # 이미 머지 완료.
+    # (2026-05-27) hashId 기반 row 동기화 — sync-balance 미발생 시(마이페이지 미진입)에도
+    # 본인 계정 row 에 쿠키 박힘. JWT(mss_mac).sub 매칭이라 Chrome 프로필 이메일 불일치/
+    # Whale 환경 chrome.identity 빈값에 무관.
+    # 매칭 0건이면 row 안 건드림 → 오염 차단.
+    try:
+        from backend.api.v1.routers.samba.proxy._musinsa_jwt import (
+            musinsa_hash_id,
+        )
+        from backend.domain.samba.sourcing_account.repository import (
+            SambaSourcingAccountRepository,
+        )
+        from backend.domain.samba.sourcing_account.service import (
+            SambaSourcingAccountService,
+        )
+
+        _hash = musinsa_hash_id(body.cookie or "")
+        if _hash:
+            _svc = SambaSourcingAccountService(
+                SambaSourcingAccountRepository(write_session)
+            )
+            _accs = await _svc.list_accounts(site_name="MUSINSA")
+            _match = next(
+                (
+                    a
+                    for a in _accs
+                    if (a.additional_fields or {}).get("musinsa_hash_id") == _hash
+                ),
+                None,
+            )
+            if _match:
+                from datetime import datetime, timezone
+
+                _extra = dict(_match.additional_fields or {})
+                _extra["musinsa_cookie"] = body.cookie
+                _extra["cookie_expired"] = False
+                _extra["cookie_updated_at"] = datetime.now(timezone.utc).isoformat()
+                await _svc.repo.update_async(_match.id, additional_fields=_extra)
+                logger.info(
+                    f"[set-cookie] hashId 매칭 → {_match.account_label} row 갱신"
+                )
+            else:
+                logger.info(f"[set-cookie] hashId={_hash} 매칭 row 없음 — pool 만 저장")
+    except Exception as exc:
+        logger.warning(f"[set-cookie] hashId row 동기화 실패 (무시): {exc}")
 
     return result
 

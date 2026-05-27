@@ -287,25 +287,104 @@ async def pool_status(
 async def musinsa_auth_status(
     session: AsyncSession = Depends(get_read_session_dependency),
 ):
-    """무신사 인증 상태 확인."""
+    """무신사 인증 상태 + 자동로그인 자리 쿠키 주인 식별.
+
+    - is_login_default row 가 cost 계산의 단일 진실. 그 row 의 쿠키를 본다.
+      비어있으면 SambaSettings.musinsa_cookie pool 폴백 (UI 표시 한정).
+    - 쿠키 JWT(mss_mac) 디코딩 → hashId/등급/성별/가입일.
+    - row.additional_fields.musinsa_hash_id 와 쿠키 hashId 비교 → match 필드.
+    """
+    from backend.api.v1.routers.samba.proxy._musinsa_jwt import (
+        musinsa_account_brief,
+        musinsa_hash_id,
+    )
     from backend.domain.samba.forbidden.model import SambaSettings
-    from sqlmodel import select
+    from backend.domain.samba.sourcing_account.repository import (
+        SambaSourcingAccountRepository,
+    )
+    from backend.domain.samba.sourcing_account.service import (
+        SambaSourcingAccountService,
+    )
+    from backend.utils.crypto import decrypt_value
 
     try:
-        result = await session.execute(
-            select(SambaSettings).where(SambaSettings.key == "musinsa_cookie")
-        )
-        row = result.scalar_one_or_none()
-        if row and row.value:
+        # 1) 자동로그인 row 조회
+        svc = SambaSourcingAccountService(SambaSourcingAccountRepository(session))
+        acc = await svc.get_login_default("MUSINSA")
+
+        slot_label: Optional[str] = None
+        slot_username: Optional[str] = None
+        slot_hash_id: Optional[str] = None
+        row_cookie: str = ""
+        row_updated_at: Optional[str] = None
+        if acc:
+            slot_label = acc.account_label
+            slot_username = acc.username
+            af = acc.additional_fields or {}
+            slot_hash_id = af.get("musinsa_hash_id")
+            if not af.get("cookie_expired"):
+                row_cookie = af.get("musinsa_cookie", "") or ""
+            row_updated_at = af.get("cookie_updated_at")
+
+        # 2) row 비어있으면 pool 폴백 (status 판정용)
+        pool_cookie = ""
+        pool_updated_at: Optional[str] = None
+        if not row_cookie:
+            try:
+                result = await session.execute(
+                    select(SambaSettings).where(SambaSettings.key == "musinsa_cookie")
+                )
+                _row = result.scalar_one_or_none()
+                if _row and _row.value:
+                    pool_cookie = decrypt_value(_row.value) or ""
+                    pool_updated_at = (
+                        _row.updated_at.isoformat() if _row.updated_at else None
+                    )
+            except Exception:
+                pass
+
+        active_cookie = row_cookie or pool_cookie
+        active_source = "slot" if row_cookie else ("pool" if pool_cookie else None)
+        if not active_cookie:
             return {
-                "status": "ok",
-                "message": "무신사 인증 완료",
-                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+                "status": "error",
+                "message": "무신사 인증 필요",
+                "updated_at": None,
+                "account": None,
             }
+
+        brief = musinsa_account_brief(active_cookie) or {}
+        cookie_hash_id = brief.get("hash_id") or musinsa_hash_id(active_cookie)
+        match: Optional[bool] = None
+        if slot_hash_id and cookie_hash_id:
+            match = slot_hash_id == cookie_hash_id
+
+        return {
+            "status": "ok",
+            "message": "무신사 인증 완료",
+            "updated_at": row_updated_at if row_cookie else pool_updated_at,
+            "account": {
+                "slot_label": slot_label,
+                "slot_username": slot_username,
+                "slot_hash_id": slot_hash_id,
+                "cookie_hash_id": cookie_hash_id,
+                "match": match,
+                "source": active_source,
+                "level": brief.get("level"),
+                "gender": brief.get("gender"),
+                "birth_year": brief.get("birth_year"),
+                "register_date": brief.get("register_date"),
+                "order_count": brief.get("order_count"),
+            },
+        }
     except Exception as e:
-        # DB 조회 실패 등 심각한 에러가 삼켜지지 않도록 로깅
-        logger.error(f"[musinsa-auth-status] 인증 상태 조회 실패: {e}", exc_info=True)
-    return {"status": "error", "message": "무신사 인증 필요", "updated_at": None}
+        logger.error(f"[musinsa-auth-status] 조회 실패: {e}", exc_info=True)
+    return {
+        "status": "error",
+        "message": "무신사 인증 필요",
+        "updated_at": None,
+        "account": None,
+    }
 
 
 # ── Search Filters ──
