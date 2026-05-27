@@ -6,9 +6,15 @@ import { fetchWithAuth, API_BASE } from '@/lib/samba/api/shared'
 // - setter들도 함께 반환하여 외부(예: CollectorStatusPanel)에서 재확인 가능
 export type ProxyAuthStatus = 'checking' | 'ok' | 'error'
 
-type PgStat = { active?: number; idle_in_transaction?: number; idle?: number; total?: number }
+type PgStat = { active?: number; idle_in_transaction?: number; idle?: number; total?: number; iit_zombie?: number }
 type PoolStat = { size: number; checkedout: number; overflow: number; checkedin: number; pool_max?: number; pg?: PgStat }
-export type PoolInfo = { write: PoolStat | null; read: PoolStat | null; pool_max?: number } | null
+export type PoolInfo = {
+  write: PoolStat | null
+  read: PoolStat | null
+  pool_max?: number
+  write_pool_max?: number
+  read_pool_max?: number
+} | null
 
 export default function useProxyAuth() {
   const [proxyStatus, setProxyStatus] = useState<ProxyAuthStatus>('checking')
@@ -94,7 +100,8 @@ export default function useProxyAuth() {
 
     refreshAll()
 
-    const intervalId = window.setInterval(refreshAll, 5000)
+    // 폴링 주기 — pool-status 호출당 write+read 세션 점유. 5→15s 완화로 모니터링 자체 압박 감소.
+    const intervalId = window.setInterval(refreshAll, 15000)
     const handleFocus = () => refreshAll()
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') refreshAll()

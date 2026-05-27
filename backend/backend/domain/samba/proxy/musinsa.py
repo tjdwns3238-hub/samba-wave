@@ -419,9 +419,11 @@ class MusinsaClient:
                 )
                 pre_discount = grade_point + save_point_value
 
-            # 사용자 정책: 받는 적립금(savePoint, 구매 적립)은 cost에 반영하지 않음.
-            # 결제 후 받는 포인트지 가격 할인 아님 → display_benefit_price 만 사용.
-            best_benefit_price = display_benefit_price
+            # 선할인(isPrePoint=True)일 때만 pre_discount 차감.
+            # isPrePoint=False(예: 5180810)면 위 단계에서 pre_discount=0 → 차감 영향 없음.
+            # isPrePoint=True(예: 4988437)면 무신사 화면 "적립금 선할인" 라디오 즉시 차감 가격에 맞춤.
+            # b1e64568에서 무조건 제거했으나 isPrePoint 분기가 이미 보호하므로 차감 부활.
+            best_benefit_price = display_benefit_price - pre_discount
 
             # 보유 적립금(point_usage) 제외 버전 — 정책 토글용
             # point_usage만 0으로 재계산. 등급할인/선할인은 유지
@@ -437,8 +439,10 @@ class MusinsaClient:
                     else 0
                 )
                 pre_discount_excl = grade_point_excl + save_point_value
-            # 동일 정책: 선할인(받는 적립) 미반영
-            best_benefit_price_excl_held_point = display_benefit_price_excl_held
+            # 동일 정책: isPrePoint=True면 pre_discount_excl 차감
+            best_benefit_price_excl_held_point = (
+                display_benefit_price_excl_held - pre_discount_excl
+            )
 
             # 추가 비로그인 검출 신호: 쿠키 있는데 회원 혜택(등급할인/적립금/선할인)이 전부 0
             # 5259516 사례 — 쿠폰은 적용됐지만 등급할인/적립금만 누락된 비로그인 응답

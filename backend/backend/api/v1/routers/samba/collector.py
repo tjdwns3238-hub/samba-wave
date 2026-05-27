@@ -236,19 +236,30 @@ async def pool_status(
 
     async def _pg_stats(session: AsyncSession):
         try:
+            # state별 카운트 + IIT 좀비(state_change >= 30s) 분리.
+            # asyncpg/SQLAlchemy 정상 트랜잭션은 BEGIN 직후 ClientRead 대기 상태로 IIT에 잡힘 →
+            # age 기반으로 진짜 좀비만 구분해야 false positive 알람 방지.
             result = await session.execute(
                 text("""
-                    SELECT state, count(*) as cnt
+                    SELECT state,
+                           count(*) AS cnt,
+                           count(*) FILTER (
+                             WHERE state = 'idle in transaction'
+                               AND state_change < now() - interval '30 seconds'
+                           ) AS zombie_cnt
                     FROM pg_stat_activity
                     WHERE datname = current_database()
                     GROUP BY state
                 """)
             )
             data: dict = {}
-            for state, cnt in result.all():
+            zombie_total = 0
+            for state, cnt, zombie_cnt in result.all():
                 key = (state or "unknown").replace(" ", "_")
                 data[key] = int(cnt)
-            data["total"] = sum(data.values())
+                zombie_total += int(zombie_cnt or 0)
+            data["total"] = sum(v for k, v in data.items() if k != "total")
+            data["iit_zombie"] = zombie_total
             return data
         except Exception:
             return None
@@ -263,7 +274,10 @@ async def pool_status(
         return {
             "write": {**write_pool, "pg": write_pg},
             "read": {**read_pool, "pg": read_pg},
+            # 하위 호환 유지 — 신규 UI는 write/read 각각의 pool_max 사용
             "pool_max": write_pool["pool_max"],
+            "write_pool_max": write_pool["pool_max"],
+            "read_pool_max": read_pool["pool_max"],
         }
     except Exception:
         return {"write": None, "read": None, "pool_max": 35}

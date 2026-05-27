@@ -79,24 +79,33 @@ export default function CollectorStatusPanel(props: Props) {
     } = props
     const cookieFresh = musinsaAuth === 'ok' ? formatCookieFreshness(musinsaCookieUpdatedAt) : null
 
-    const poolMax = poolInfo?.pool_max ?? 35
+    // write/read pool_max 분리 — 같은 값으로 표시하면 read(실제 30) 오인 유발
+    const wPoolMax = poolInfo?.write_pool_max ?? poolInfo?.write?.pool_max ?? poolInfo?.pool_max ?? 60
+    const rPoolMax = poolInfo?.read_pool_max ?? poolInfo?.read?.pool_max ?? 30
     const wPg = poolInfo?.write?.pg
     const rPg = poolInfo?.read?.pg
     const wTotal = wPg?.total ?? 0
     const rTotal = rPg?.total ?? 0
-    const maxTotal = Math.max(wTotal, rTotal)
-    const wIit = wPg?.idle_in_transaction ?? 0
-    const rIit = rPg?.idle_in_transaction ?? 0
-    const maxIit = Math.max(wIit, rIit)
-    const poolStatusColor = (maxTotal > poolMax || maxIit >= 10)
+    // 백엔드 SQLAlchemy 풀 실제 점유 (이게 진짜 풀 사용량 — DB 전체 세션과 비교 금지)
+    const wCheckedOut = poolInfo?.write?.checkedout ?? 0
+    const rCheckedOut = poolInfo?.read?.checkedout ?? 0
+    // IIT 임계 — 단순 카운트는 BEGIN 직후 정상 트랜잭션도 잡혀 false positive.
+    // age >= 30s 좀비(iit_zombie) 기반으로 빨강/노랑 판단.
+    const wZombie = wPg?.iit_zombie ?? 0
+    const rZombie = rPg?.iit_zombie ?? 0
+    const maxZombie = Math.max(wZombie, rZombie)
+    // 빨강 기준: 실제 백엔드 풀 점유율 또는 좀비 (DB 전체 세션 totals 는 다른 컨테이너/cron 포함이라 무관)
+    const wPoolRatio = wPoolMax > 0 ? wCheckedOut / wPoolMax : 0
+    const rPoolRatio = rPoolMax > 0 ? rCheckedOut / rPoolMax : 0
+    const poolStatusColor = (wPoolRatio >= 1 || rPoolRatio >= 1 || maxZombie >= 5)
       ? '#FF6B6B'
-      : (maxTotal > poolMax * 0.85 || maxIit >= 5)
+      : (wPoolRatio >= 0.85 || rPoolRatio >= 0.85 || maxZombie >= 2)
         ? '#FAB005'
         : '#51CF66'
-    const cellColor = (val: number, type: 'total' | 'iit') => {
-      if (type === 'total') return val > poolMax ? '#FF6B6B' : val > poolMax * 0.85 ? '#FAB005' : '#C4CAD8'
-      return val >= 10 ? '#FF6B6B' : val >= 5 ? '#FAB005' : '#C4CAD8'
-    }
+    const poolCellColor = (ratio: number) =>
+      ratio >= 1 ? '#FF6B6B' : ratio >= 0.85 ? '#FAB005' : '#C4CAD8'
+    const iitCellColor = (zombie: number) =>
+      zombie >= 5 ? '#FF6B6B' : zombie >= 2 ? '#FAB005' : '#C4CAD8'
 
     return (
       <div style={{ marginBottom: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -153,26 +162,48 @@ export default function CollectorStatusPanel(props: Props) {
                 </tr>
               </thead>
               <tbody>
+                {/* 백엔드 SQLAlchemy 풀 실제 점유 — 이게 진짜 "풀 꽉참" 지표 */}
+                <tr style={{ background: 'rgba(81,207,102,0.04)', borderBottom: '1px solid rgba(28,30,42,0.8)' }}>
+                  <td style={{ padding: '6px 14px', color: '#C4CAD8', fontWeight: 700 }}>
+                    백엔드 풀 점유
+                    <span style={{ marginLeft: 8, fontSize: '0.7rem', color: '#6A7388', fontWeight: 400 }}>
+                      (이 값이 풀 최대 넘으면 진짜 꽉참)
+                    </span>
+                  </td>
+                  <td style={{ padding: '6px 14px', textAlign: 'center', color: poolCellColor(wPoolRatio), fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                    {fmtNum(wCheckedOut)} / {fmtNum(wPoolMax)} ({Math.round(wPoolRatio * 100)}%)
+                  </td>
+                  <td style={{ padding: '6px 14px', textAlign: 'center', color: poolCellColor(rPoolRatio), fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                    {fmtNum(rCheckedOut)} / {fmtNum(rPoolMax)} ({Math.round(rPoolRatio * 100)}%)
+                  </td>
+                </tr>
                 {([
-                  { label: 'active', wVal: wPg.active ?? 0, rVal: rPg.active ?? 0, type: 'normal' },
-                  { label: 'idle in transaction', wVal: wIit, rVal: rIit, type: 'iit' },
-                  { label: 'idle', wVal: wPg.idle ?? 0, rVal: rPg.idle ?? 0, type: 'normal' },
-                ] as const).map(({ label, wVal, rVal, type }) => (
-                  <tr key={label} style={{ borderBottom: '1px solid rgba(28,30,42,0.8)' }}>
-                    <td style={{ padding: '5px 14px', color: '#8A95B0' }}>{label}</td>
-                    <td style={{ padding: '5px 14px', textAlign: 'center', color: type === 'iit' ? cellColor(wVal, 'iit') : '#C4CAD8', fontVariantNumeric: 'tabular-nums' }}>{fmtNum(wVal)}개</td>
-                    <td style={{ padding: '5px 14px', textAlign: 'center', color: type === 'iit' ? cellColor(rVal, 'iit') : '#C4CAD8', fontVariantNumeric: 'tabular-nums' }}>{fmtNum(rVal)}개</td>
+                  { label: 'active', wVal: wPg.active ?? 0, rVal: rPg.active ?? 0, type: 'normal' as const },
+                  { label: 'idle in transaction', wVal: wPg.idle_in_transaction ?? 0, rVal: rPg.idle_in_transaction ?? 0, type: 'iit' as const },
+                  { label: 'idle', wVal: wPg.idle ?? 0, rVal: rPg.idle ?? 0, type: 'normal' as const },
+                ]).map((row) => (
+                  <tr key={row.label} style={{ borderBottom: '1px solid rgba(28,30,42,0.8)' }}>
+                    <td style={{ padding: '5px 14px', color: '#8A95B0' }}>
+                      {row.label}
+                      {row.type === 'iit' && (
+                        <span style={{ marginLeft: 8, fontSize: '0.7rem', color: '#6A7388' }}>
+                          (좀비 ≥30s: W {fmtNum(wZombie)} / R {fmtNum(rZombie)})
+                        </span>
+                      )}
+                    </td>
+                    <td style={{ padding: '5px 14px', textAlign: 'center', color: row.type === 'iit' ? iitCellColor(wZombie) : '#C4CAD8', fontVariantNumeric: 'tabular-nums' }}>{fmtNum(row.wVal)}개</td>
+                    <td style={{ padding: '5px 14px', textAlign: 'center', color: row.type === 'iit' ? iitCellColor(rZombie) : '#C4CAD8', fontVariantNumeric: 'tabular-nums' }}>{fmtNum(row.rVal)}개</td>
                   </tr>
                 ))}
                 <tr style={{ borderTop: '1px solid #2D3040', background: 'rgba(255,255,255,0.02)' }}>
-                  <td style={{ padding: '6px 14px', color: '#C4CAD8', fontWeight: 700 }}>총 연결</td>
-                  <td style={{ padding: '6px 14px', textAlign: 'center', color: cellColor(wTotal, 'total'), fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{fmtNum(wTotal)}개</td>
-                  <td style={{ padding: '6px 14px', textAlign: 'center', color: cellColor(rTotal, 'total'), fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{fmtNum(rTotal)}개</td>
-                </tr>
-                <tr>
-                  <td style={{ padding: '5px 14px', color: '#8A95B0', fontWeight: 700 }}>풀 최대</td>
-                  <td style={{ padding: '5px 14px', textAlign: 'center', color: '#8A95B0', fontVariantNumeric: 'tabular-nums' }}>{fmtNum(poolMax)}개</td>
-                  <td style={{ padding: '5px 14px', textAlign: 'center', color: '#8A95B0', fontVariantNumeric: 'tabular-nums' }}>{fmtNum(poolMax)}개</td>
+                  <td style={{ padding: '6px 14px', color: '#8A95B0' }}>
+                    DB 전체 세션
+                    <span style={{ marginLeft: 8, fontSize: '0.7rem', color: '#6A7388' }}>
+                      (백엔드 + cron + admin + 다른 컨테이너 합산 — 풀 최대와 비교 X)
+                    </span>
+                  </td>
+                  <td style={{ padding: '6px 14px', textAlign: 'center', color: '#8A95B0', fontVariantNumeric: 'tabular-nums' }}>{fmtNum(wTotal)}개</td>
+                  <td style={{ padding: '6px 14px', textAlign: 'center', color: '#8A95B0', fontVariantNumeric: 'tabular-nums' }}>{fmtNum(rTotal)}개</td>
                 </tr>
               </tbody>
             </table>
