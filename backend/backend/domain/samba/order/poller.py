@@ -95,6 +95,60 @@ async def _fetch_new_order_numbers(
                 finally:
                     await client.close()
 
+            elif market_type == "lottehome":
+                from datetime import UTC, datetime, timedelta
+
+                from backend.domain.samba.forbidden.model import SambaSettings
+                from backend.domain.samba.proxy.lottehome import LotteHomeClient
+
+                _lh_creds_result = await session.exec(
+                    select(SambaSettings).where(
+                        SambaSettings.key == "lottehome_credentials"
+                    )
+                )
+                _lh_creds_row = _lh_creds_result.first()
+                lh_creds = _lh_creds_row.value if _lh_creds_row else {}
+
+                lh_user_id = (
+                    lh_creds.get("userId", "")
+                    or extras.get("userId", "")
+                    or account.seller_id
+                    or ""
+                )
+                lh_password = (
+                    lh_creds.get("password", "") or extras.get("password", "") or ""
+                )
+                lh_agnc_no = lh_creds.get("agncNo", "") or extras.get("agncNo", "")
+                lh_env = lh_creds.get("env", "prod")
+
+                if not lh_user_id or not lh_password:
+                    continue
+
+                lh_client = LotteHomeClient(lh_user_id, lh_password, lh_agnc_no, lh_env)
+                lh_end = datetime.now(UTC)
+                lh_start = lh_end - timedelta(days=1)
+                lh_start_str = lh_start.strftime("%Y%m%d")
+                lh_end_str = lh_end.strftime("%Y%m%d")
+                for sel_option in ["01", "02", "03"]:
+                    lh_orders = await lh_client.search_new_orders(
+                        lh_start_str, lh_end_str, sel_option=sel_option
+                    )
+                    for ro in lh_orders:
+                        prod = (
+                            ro.get("ProdInfo", {})
+                            if isinstance(ro.get("ProdInfo"), dict)
+                            else {}
+                        )
+                        oid = str(
+                            ro.get("SubOrdNo")
+                            or prod.get("DlvUnitSn")
+                            or prod.get("OrdDtlSn")
+                            or ro.get("OrdNo", "")
+                            or ""
+                        )
+                        if oid:
+                            raw_order_numbers.append(oid)
+
             else:
                 continue
 

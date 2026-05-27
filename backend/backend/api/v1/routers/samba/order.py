@@ -4460,6 +4460,7 @@ async def sync_orders_from_markets(
         try:
             orders_data: list[dict[str, Any]] = []
             unconfirmed_ids: list[str] = []
+            _lh_replaced_old_keys: list[str] = []  # deliver_list가 교체한 index-format order_numbers
 
             if market_type == "smartstore":
                 from backend.domain.samba.proxy.smartstore import SmartStoreClient
@@ -6246,6 +6247,69 @@ async def sync_orders_from_markets(
                     continue
 
                 await session.commit()
+
+                # sync 시작 전: 구형식(order_number에 콜론 없음) 고아 레코드 정리.
+                # 신형식(OrdNo:OrdDtlSn) 레코드가 이미 있는 경우에만 삭제하므로
+                # 데이터 손실 없음. sync 후가 아닌 시작 전 실행으로 신규 생성 레코드와
+                # 충돌 없음.
+                try:
+                    await session.execute(
+                        _sa_text(
+                            "DELETE FROM samba_order "
+                            "WHERE source = 'lottehome' "
+                            "AND channel_id = :cid "
+                            "AND order_number NOT LIKE '%:%' "
+                            "AND ("
+                            "  (ext_order_number LIKE '%:%' AND EXISTS ("
+                            "    SELECT 1 FROM samba_order s2 "
+                            "    WHERE s2.channel_id = :cid "
+                            "    AND s2.order_number = samba_order.ext_order_number"
+                            "  ))"
+                            "  OR EXISTS ("
+                            "    SELECT 1 FROM samba_order s2 "
+                            "    WHERE s2.channel_id = :cid "
+                            "    AND s2.order_number LIKE samba_order.order_number || ':%'"
+                            "  )"
+                            ")"
+                        ),
+                        {"cid": account["id"]},
+                    )
+                    # 인덱스 형식(K72118:0) 레코드가 DlvUnitSn 형식(K72118:1001)과 공존하면
+                    # 인덱스 형식 삭제 — 같은 OrdNo에 더 긴 suffix 레코드가 있을 때만
+                    await session.execute(
+                        _sa_text(
+                            "DELETE FROM samba_order "
+                            "WHERE source = 'lottehome' "
+                            "AND channel_id = :cid "
+                            "AND order_number ~ ':[0-9]$' "
+                            "AND EXISTS ("
+                            "  SELECT 1 FROM samba_order s2 "
+                            "  WHERE s2.source = 'lottehome' "
+                            "  AND s2.channel_id = :cid "
+                            "  AND SPLIT_PART(s2.order_number, ':', 1) = SPLIT_PART(samba_order.order_number, ':', 1) "
+                            "  AND s2.order_number != samba_order.order_number "
+                            "  AND s2.order_number !~ ':[0-9]$'"
+                            ")"
+                        ),
+                        {"cid": account["id"]},
+                    )
+                    # 상품명이 비어있는 레코드는 깨진 sync 결과 → 삭제 후 재생성
+                    await session.execute(
+                        _sa_text(
+                            "DELETE FROM samba_order "
+                            "WHERE source = 'lottehome' "
+                            "AND channel_id = :cid "
+                            "AND (product_name IS NULL OR product_name = '')"
+                        ),
+                        {"cid": account["id"]},
+                    )
+                    await session.commit()
+                except Exception as _pre_clean_e:
+                    await session.rollback()
+                    logger.warning(
+                        f"[주문동기화] {label}: pre-sync 고아 레코드 정리 실패(무시): {_pre_clean_e}"
+                    )
+
                 lh_client = LotteHomeClient(lh_user_id, lh_password, lh_agnc_no, lh_env)
                 _clients_to_close.append(lh_client)
 
@@ -6257,6 +6321,7 @@ async def sync_orders_from_markets(
                 lh_end_str = lh_end.strftime("%Y%m%d")
 
                 _lh_seen: set[str] = set()
+                _lh_seen_ordno: set[str] = set()  # list-ProdInfo로 처리된 OrdNo
 
                 def _lh_order_key(ro: dict) -> str:
                     prod = (
@@ -6264,13 +6329,68 @@ async def sync_orders_from_markets(
                         if isinstance(ro.get("ProdInfo"), dict)
                         else {}
                     )
+                    _ord_no = str(ro.get("OrdNo", "") or "")
+                    _dtl_sn = str(
+                        prod.get("OrdDtlSn")
+                        or prod.get("DlvUnitSn")
+                        or prod.get("OrgOrdDtlSn")
+                        or prod.get("ProdSeq")
+                        or prod.get("ProdCode")
+                        or ""
+                    )
+                    if _ord_no and _dtl_sn:
+                        return f"{_ord_no}:{_dtl_sn}"
                     return str(
                         ro.get("SubOrdNo")
                         or prod.get("DlvUnitSn")
                         or prod.get("OrdDtlSn")
-                        or ro.get("OrdNo", "")
+                        or _ord_no
                         or ""
                     )
+
+                # deliver_list를 먼저 수집: OrdNo → DlvUnitSn 목록 매핑 확보.
+                # new_orders에서 인덱스 대신 DlvUnitSn으로 키를 통일해
+                # 다음 sync에서도 동일 키로 upsert되도록 한다.
+                _dlv_status_map = {
+                    "15": ("shipping", "출고지시"),
+                    "16": ("shipping", "배송대기중"),
+                    "17": ("delivered", "배송완료"),
+                    "18": ("confirmed", "구매확정"),
+                }
+                _lh_dlv_cache: dict[str, list[dict]] = {}
+                _lh_dlvsn_map: dict[str, list[str]] = {}  # OrdNo → [DlvUnitSn, ...]
+                for _lh_stat in ["15", "16", "17", "18"]:
+                    try:
+                        _cached = await lh_client.search_deliver_list(
+                            lh_start_str, lh_end_str, ord_dtl_stat_cd=_lh_stat
+                        )
+                        _lh_dlv_cache[_lh_stat] = _cached
+                        for _ro in _cached:
+                            _ono = str(_ro.get("OrdNo", "") or "")
+                            _pi = _ro.get("ProdInfo")
+                            if not _ono:
+                                continue
+                            if isinstance(_pi, list):
+                                for _pitem in _pi:
+                                    if isinstance(_pitem, dict):
+                                        _dsn = str(
+                                            _pitem.get("DlvUnitSn")
+                                            or _pitem.get("OrdDtlSn")
+                                            or ""
+                                        )
+                                        if _dsn and _dsn not in _lh_dlvsn_map.get(_ono, []):
+                                            _lh_dlvsn_map.setdefault(_ono, []).append(_dsn)
+                            elif isinstance(_pi, dict):
+                                _dsn = str(
+                                    _pi.get("DlvUnitSn") or _pi.get("OrdDtlSn") or ""
+                                )
+                                if _dsn and _dsn not in _lh_dlvsn_map.get(_ono, []):
+                                    _lh_dlvsn_map.setdefault(_ono, []).append(_dsn)
+                    except Exception as _dlv_pre_e:
+                        logger.warning(
+                            f"[주문동기화] {label}: 배송조회(stat={_lh_stat}) 수집 실패: {_dlv_pre_e}"
+                        )
+                        _lh_dlv_cache[_lh_stat] = []
 
                 _new_ord_status_map = {
                     "01": ("pending", "주문접수"),
@@ -6283,28 +6403,31 @@ async def sync_orders_from_markets(
                     )
                     _fs, _fss = _new_ord_status_map[_lh_sel]
                     for ro in _lh_orders:
-                        _oid = _lh_order_key(ro)
-                        if _oid and _oid not in _lh_seen:
-                            _lh_seen.add(_oid)
-                            orders_data.append(
-                                _parse_lottehome_order(
-                                    ro, account["id"], label, _fs, _fss
+                        _prod_info_raw = ro.get("ProdInfo")
+                        if isinstance(_prod_info_raw, list):
+                            _no_key = str(ro.get("OrdNo", "") or "")
+                            # deliver_list에서 수집한 DlvUnitSn 사용 → 키 일관성 유지
+                            _dlvsn_list = _lh_dlvsn_map.get(_no_key, [])
+                            for _i, _prod in enumerate(_prod_info_raw):
+                                _flat = dict(ro)
+                                _flat["ProdInfo"] = _prod if isinstance(_prod, dict) else {}
+                                if _dlvsn_list and _i < len(_dlvsn_list):
+                                    _flat["_lh_prod_idx"] = _dlvsn_list[_i]
+                                    # DlvUnitSn 키로 교체 시 이전 index-format 레코드 삭제 대상 등록
+                                    _lh_replaced_old_keys.append(f"{_no_key}:{_i}")
+                                else:
+                                    _flat["_lh_prod_idx"] = _i
+                                _p = _parse_lottehome_order(
+                                    _flat, account["id"], label, _fs, _fss
                                 )
-                            )
-
-                _dlv_status_map = {
-                    "15": ("shipping", "출고지시"),
-                    "16": ("shipping", "배송대기중"),
-                    "17": ("delivered", "배송완료"),
-                    "18": ("confirmed", "구매확정"),
-                }
-                for _lh_stat in ["15", "16", "17", "18"]:
-                    try:
-                        _lh_dlv = await lh_client.search_deliver_list(
-                            lh_start_str, lh_end_str, ord_dtl_stat_cd=_lh_stat
-                        )
-                        _fs, _fss = _dlv_status_map[_lh_stat]
-                        for ro in _lh_dlv:
+                                _p["shipping_status"] = _fss
+                                _dedup_key = _p.get("ext_order_number") or _p.get("order_number", "")
+                                if _dedup_key and _dedup_key not in _lh_seen:
+                                    _lh_seen.add(_dedup_key)
+                                    orders_data.append(_p)
+                            if _no_key:
+                                _lh_seen_ordno.add(_no_key)
+                        else:
                             _oid = _lh_order_key(ro)
                             if _oid and _oid not in _lh_seen:
                                 _lh_seen.add(_oid)
@@ -6313,10 +6436,49 @@ async def sync_orders_from_markets(
                                         ro, account["id"], label, _fs, _fss
                                     )
                                 )
-                    except Exception as _dlv_e:
-                        logger.warning(
-                            f"[주문동기화] {label}: 배송조회(stat={_lh_stat}) 실패: {_dlv_e}"
-                        )
+
+                # deliver_list 처리: 캐시 재사용 (API 이중 호출 없음).
+                # new_orders에서 이미 처리된 합배송 주문은 상태만 업데이트.
+                _lh_dlv_replaced: set[str] = set()
+                for _lh_stat in ["15", "16", "17", "18"]:
+                    _fs, _fss = _dlv_status_map[_lh_stat]
+                    for ro in _lh_dlv_cache.get(_lh_stat, []):
+                        _dlv_ord_no = str(ro.get("OrdNo", "") or "")
+                        _prod_info_raw = ro.get("ProdInfo")
+                        # new_orders에서 list-ProdInfo로 이미 처리된 합배송 주문 →
+                        # 상품 데이터 교체 없이 상태만 업데이트
+                        if _dlv_ord_no and _dlv_ord_no in _lh_seen_ordno:
+                            if _dlv_ord_no not in _lh_dlv_replaced:
+                                for _o in orders_data:
+                                    if (
+                                        _o.get("source") == "lottehome"
+                                        and str(_o.get("order_number", "")).startswith(
+                                            f"{_dlv_ord_no}:"
+                                        )
+                                    ):
+                                        _o["status"] = _fs
+                                        _o["shipping_status"] = _fss
+                                _lh_dlv_replaced.add(_dlv_ord_no)
+                            continue
+
+                        if isinstance(_prod_info_raw, list):
+                            for _p in _parse_lottehome_order_multi(
+                                ro, account["id"], label, _fs
+                            ):
+                                _p["shipping_status"] = _fss
+                                _dedup_key = _p.get("ext_order_number") or _p.get("order_number", "")
+                                if _dedup_key and _dedup_key not in _lh_seen:
+                                    _lh_seen.add(_dedup_key)
+                                    orders_data.append(_p)
+                        else:
+                            _oid = _lh_order_key(ro)
+                            if _oid and _oid not in _lh_seen:
+                                _lh_seen.add(_oid)
+                                orders_data.append(
+                                    _parse_lottehome_order(
+                                        ro, account["id"], label, _fs, _fss
+                                    )
+                                )
 
                 def _lh_override(parsed: dict) -> None:
                     _oid = parsed.get("order_number", "")
@@ -6582,6 +6744,33 @@ async def sync_orders_from_markets(
                     f"[주문동기화] {label}: 배치 중복 조회 완료 "
                     f"{len(_existing_id_map)}/{len(_non_lotteon_nos)}건 기존"
                 )
+
+            # 롯데홈쇼핑 역방향 조회: order_number가 "ord_no:ord_dtl_sn" 형식으로 바뀌었지만
+            # 기존 DB 레코드는 구형식(ord_no만) order_number로 저장돼 있어 위 조회에서 못 찾음.
+            # ext_order_number 필드는 구버전에도 "ord_no:ord_dtl_sn"으로 저장됐으므로 역조회.
+            _lh_unfound = [
+                str(od.get("order_number", ""))
+                for od in orders_data
+                if od.get("source") == "lottehome"
+                and str(od.get("order_number", "")) not in _existing_id_map
+                and od.get("order_number")
+            ]
+            if _lh_unfound:
+                _lh_ph = ", ".join(f":lh_{i}" for i in range(len(_lh_unfound)))
+                _lh_prm: dict = {f"lh_{i}": v for i, v in enumerate(_lh_unfound)}
+                _lh_prm["tid"] = account["tenant_id"] or tenant_id
+                _lh_q = await session.execute(
+                    _sa_text(
+                        f"SELECT id, ext_order_number FROM samba_order "
+                        f"WHERE ext_order_number IN ({_lh_ph}) "
+                        f"AND tenant_id IS NOT DISTINCT FROM :tid "
+                        f"ORDER BY created_at DESC"
+                    ),
+                    _lh_prm,
+                )
+                for _lhr in _lh_q.fetchall():
+                    if _lhr[1] and _lhr[1] not in _existing_id_map:
+                        _existing_id_map[_lhr[1]] = _lhr[0]
 
             # 중복 확인 후 저장 (기존 주문은 금액/상태 업데이트)
             synced = 0
@@ -7323,6 +7512,30 @@ async def sync_orders_from_markets(
                     continue
                 await svc.create_order(order_data)
                 synced += 1
+
+            # 롯데홈쇼핑: deliver_list가 교체한 index-format 레코드(K72118:0 등) DB에서 삭제
+            if _lh_replaced_old_keys:
+                try:
+                    _orp_ph = ", ".join(
+                        f":orp_{i}" for i in range(len(_lh_replaced_old_keys))
+                    )
+                    _orp_prm: dict = {
+                        f"orp_{i}": v for i, v in enumerate(_lh_replaced_old_keys)
+                    }
+                    _orp_prm["cid"] = account["id"]
+                    await session.execute(
+                        _sa_text(
+                            f"DELETE FROM samba_order "
+                            f"WHERE source = 'lottehome' "
+                            f"AND channel_id = :cid "
+                            f"AND order_number IN ({_orp_ph})"
+                        ),
+                        _orp_prm,
+                    )
+                    await session.commit()
+                except Exception as _orp_e:
+                    await session.rollback()
+                    logger.warning(f"[주문동기화] 롯데홈쇼핑 교체 레코드 삭제 실패(무시): {_orp_e}")
 
             total_synced += synced
             if market_type == "smartstore":
@@ -8813,9 +9026,10 @@ def _parse_lottehome_order_multi(
     if not prod_info_raw:
         prod_info_raw = [{}]
     results = []
-    for prod in prod_info_raw:
+    for i, prod in enumerate(prod_info_raw):
         flat = dict(item)
         flat["ProdInfo"] = prod
+        flat["_lh_prod_idx"] = i
         parsed = _parse_lottehome_order(flat, account_id, label)
         if force_status:
             parsed["status"] = force_status
@@ -8852,24 +9066,26 @@ def _parse_lottehome_order(
 
     order_no = str(item.get("OrdNo", "") or "")
     sub_ord_no = str(item.get("SubOrdNo") or "")
-    # SubOrdNo = 상품주문번호, OrdNo = 주문번호
-    # 반품API는 SubOrdNo가 없고 OrdNo에 상품주문번호가 들어옴 → 폴백으로 일치
-    order_number = sub_ord_no or order_no
 
     # 송장전송(registDeliver.lotte)에 ord_no + ord_dtl_sn 둘 다 필수.
     # ext_order_number 에 "ord_no:ord_dtl_sn" 형식으로 합쳐 저장한다.
     # issue #216 — 신규주문 API(searchNewOrdLstOpenApi.lotte)는 OrdDtlSn/DlvUnitSn 키 없음.
-    # OrgOrdDtlSn(=같은 값) 또는 ProdSeq 폴백 필수, 누락 시 송장 전송 시 형식 오류로 즉시 실패.
+    # OrgOrdDtlSn(=같은 값) 또는 ProdSeq/ProdCode 폴백 — ProdInfo 리스트 내 상품 구분에도 사용.
     ord_dtl_sn = str(
         prod_info.get("OrdDtlSn")
         or prod_info.get("DlvUnitSn")
         or prod_info.get("OrgOrdDtlSn")
         or prod_info.get("ProdSeq")
+        or prod_info.get("ProdCode")
+        or item.get("_lh_prod_idx", "")
         or ""
     )
     ext_order_number = (
         f"{order_no}:{ord_dtl_sn}" if (order_no and ord_dtl_sn) else order_no
     )
+    # ord_dtl_sn이 있으면 "ord_no:ord_dtl_sn" 형식으로 상품별 고유 식별.
+    # 없으면 sub_ord_no(상품주문번호)가 이미 상품별 고유값이므로 그대로 사용.
+    order_number = ext_order_number if ord_dtl_sn else (sub_ord_no or order_no)
 
     proc_stat = str(item.get("OrdProcStat", "") or "")
     is_deliver_api = bool(prod_info.get("DlvUnitSn") or prod_info.get("GoodsNo"))
