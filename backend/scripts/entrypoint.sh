@@ -112,6 +112,7 @@ async def fix():
         ('alter_return_exch_reship_company', 'ALTER TABLE samba_return ADD COLUMN IF NOT EXISTS exchange_reship_company TEXT'),
         ('alter_return_exch_reship_tracking', 'ALTER TABLE samba_return ADD COLUMN IF NOT EXISTS exchange_reship_tracking TEXT'),
         ('alter_return_exch_delivered_at', 'ALTER TABLE samba_return ADD COLUMN IF NOT EXISTS exchange_delivered_at TIMESTAMPTZ'),
+        ('alter_collected_product_coupang_search_tags', 'ALTER TABLE samba_collected_product ADD COLUMN IF NOT EXISTS coupang_search_tags JSONB'),
         ('alter_order_collected_product_id', 'ALTER TABLE samba_order ADD COLUMN IF NOT EXISTS collected_product_id TEXT'),
         ('alter_order_customer_address_detail', 'ALTER TABLE samba_order ADD COLUMN IF NOT EXISTS customer_address_detail TEXT'),
         ('alter_order_ord_prd_seq', 'ALTER TABLE samba_order ADD COLUMN IF NOT EXISTS ord_prd_seq TEXT'),
