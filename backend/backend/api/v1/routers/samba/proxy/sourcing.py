@@ -29,6 +29,10 @@ EXTENSION_SITES = {
 }
 
 
+# 프로세스 lifetime 내 자가등록 완료 dev 캐시 — DB read 중복 차단.
+_daemon_autoreg_done: set[str] = set()
+
+
 async def _ensure_daemon_extension_key(session, device_id: str) -> None:
     """데몬 device 가 samba_extension_key 에 없으면 placeholder INSERT.
 
@@ -41,6 +45,8 @@ async def _ensure_daemon_extension_key(session, device_id: str) -> None:
     실제 api_key 별도 발급 흐름(bootstrap_api_key) 로 동작, 이 row 는 cleanup_loop
     스캔용 marker 전용. exchange/auth 어디서도 매칭 안 됨.
     """
+    if device_id in _daemon_autoreg_done:
+        return
     try:
         import hashlib
         import uuid
@@ -54,6 +60,7 @@ async def _ensure_daemon_extension_key(session, device_id: str) -> None:
             {"d": device_id},
         )
         if existing.first():
+            _daemon_autoreg_done.add(device_id)
             return
         marker = f"DAEMON_AUTOREG:{device_id}"
         await session.execute(
@@ -71,6 +78,7 @@ async def _ensure_daemon_extension_key(session, device_id: str) -> None:
                 "d": device_id,
             },
         )
+        _daemon_autoreg_done.add(device_id)
     except Exception as _exc:
         from backend.utils.logger import logger as _lg
 
@@ -172,19 +180,22 @@ async def sourcing_collect_queue(request: Request) -> Any:
     # 여기서는 last_seen 갱신만 — 데몬 등록 흐름 외 분담 자동 부여 절대 없음.
     try:
         from backend.api.v1.routers.samba.collector_autotune import (
-            persist_pc_allowed_sites,
             touch_daemon_presence,
             update_pc_last_seen,
         )
 
         update_pc_last_seen(device_id)
         if device_id.startswith("samba-daemon-"):
-            # 데몬 = 등록(touch_daemon_presence)만. 사이트 분담은 사용자가 UI 에서 박는다.
-            if touch_daemon_presence(device_id):
+            # 데몬 등록 — extension_key 자가등록만 (cleanup_loop active_set 통과용).
+            # persist_pc_allowed_sites 호출 금지: 메모리 빈 set 이 DB 의 기존 사이트
+            # 분담을 덮어쓰는 사고 회귀 (2026-05-27, 4번 패치 시도 끝 root cause 확정).
+            # 분담 자체는 UI POST /pc-allowed-sites 가 유일한 작성 권한 + sync_pc_allowed_sites_from_db
+            # 가 10초마다 DB→메모리 복원 → 데몬 dev 도 DB 값 자동 복원.
+            touch_daemon_presence(device_id)
+            if device_id not in _daemon_autoreg_done:
                 from backend.db.orm import get_write_session
 
                 async with get_write_session() as _persist_sess:
-                    await persist_pc_allowed_sites(_persist_sess, device_id)
                     await _ensure_daemon_extension_key(_persist_sess, device_id)
                     await _persist_sess.commit()
         # 확장앱: 분담 자동 갱신 폐기 — UI 체크박스 저장만 분담 갱신 권한.
@@ -360,17 +371,16 @@ async def autotune_daemon_concurrency(request: Request) -> dict[str, Any]:
     try:
         from backend.api.v1.routers.samba.collector_autotune import (
             get_pc_allowed_sites,
-            persist_pc_allowed_sites,
             touch_daemon_presence,
         )
 
         if device_id.startswith("samba-daemon-"):
-            # 하트비트 — 사이트 0개 데몬도 목록에 뜨게(미등록 시 1회 빈 등록)
-            if touch_daemon_presence(device_id):
+            # 하트비트 — extension_key 자가등록만 (분담 persist 금지, 위 사고 회귀 차단)
+            touch_daemon_presence(device_id)
+            if device_id not in _daemon_autoreg_done:
                 from backend.db.orm import get_write_session
 
                 async with get_write_session() as _persist_sess:
-                    await persist_pc_allowed_sites(_persist_sess, device_id)
                     await _ensure_daemon_extension_key(_persist_sess, device_id)
                     await _persist_sess.commit()
         _my = get_pc_allowed_sites(device_id)
