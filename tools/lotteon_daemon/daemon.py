@@ -77,7 +77,7 @@ except ImportError:
 # ====================================================================
 # 데몬 버전 — build.ps1 가 갱신. 자동 업데이트 비교 기준.
 # ====================================================================
-DAEMON_VERSION = "1.4.10"
+DAEMON_VERSION = "1.4.11"
 
 
 # ====================================================================
@@ -1553,32 +1553,52 @@ async def fetch_job(
     단일 사이트로 폴링할 때 등록값이 그 사이트로 덮어써져 다른 사이트 owner 매칭이
     깨진다(LOTTEON env 폴백 → 죽은 디바이스 라우팅 → 60s 타임아웃).
     """
-    try:
-        _headers = {
-            "X-Api-Key": api_key,
-            "X-Device-Id": device_id,
-            "X-Allowed-Sites": allowed_sites,
-            "X-Ext-Version": "99.0.0",
-        }
-        if poll_site:
-            _headers["X-Poll-Site"] = poll_site
-        r = await client.get(
-            f"{backend_url}/api/v1/samba/proxy/sourcing/collect-queue",
-            headers=_headers,
-            timeout=10.0,
-        )
-        r.raise_for_status()
-        data = r.json()
-    except Exception as exc:
-        logger.warning("polling 실패: %s", exc)
-        return None
-    if not data.get("hasJob"):
+    _headers = {
+        "X-Api-Key": api_key,
+        "X-Device-Id": device_id,
+        "X-Allowed-Sites": allowed_sites,
+        "X-Ext-Version": "99.0.0",
+    }
+    if poll_site:
+        _headers["X-Poll-Site"] = poll_site
+    # backend 일시 장애 (배포 시 503 ~1~2분) 대비 retry 3회 — 짧은 backoff.
+    # 누적 ~5초. polling 은 잡 가져오기 1회당 호출이라 너무 길면 throughput 영향.
+    _POLL_RETRY_DELAYS = (0.5, 1.5, 3.0)
+    data = None
+    for attempt in range(len(_POLL_RETRY_DELAYS) + 1):
+        try:
+            r = await client.get(
+                f"{backend_url}/api/v1/samba/proxy/sourcing/collect-queue",
+                headers=_headers,
+                timeout=10.0,
+            )
+            if r.status_code in _RETRY_STATUSES and attempt < len(_POLL_RETRY_DELAYS):
+                await asyncio.sleep(_POLL_RETRY_DELAYS[attempt])
+                continue
+            r.raise_for_status()
+            data = r.json()
+            break
+        except Exception as exc:
+            if attempt < len(_POLL_RETRY_DELAYS):
+                await asyncio.sleep(_POLL_RETRY_DELAYS[attempt])
+                continue
+            logger.warning("polling 실패 (retry 소진): %s", exc)
+            return None
+    if not data or not data.get("hasJob"):
         return None
     return data
 
 
 _RETRY_STATUSES = {429, 502, 503, 504}
-_RETRY_DELAYS = (0.5, 1.5, 3.0)
+# 배포 시 backend 503 ~1~2분. 짧은 retry 3회로는 부족 → 데몬 자살 사고 (2026-05-27 SSG/LOTTEON 4.5h gap).
+# 누적 ~70초 retry 로 컨테이너 재시작 견딤.
+_RETRY_DELAYS = (0.5, 1.5, 3.0, 5.0, 10.0, 20.0, 30.0)
+
+# post_result 반환 sentinel — backend transient 장애 (503 등) 와 실제 잡 처리 실패 분리.
+# transient = caller 가 record_failure 호출하지 말 것 (consecutive_fail 카운트 X).
+POST_RESULT_OK = "ok"
+POST_RESULT_TRANSIENT = "transient"  # backend 일시 장애 — 카운트 제외
+POST_RESULT_PERMANENT = "permanent"  # 결과 자체 영구 거부 (400 등)
 
 
 async def post_result(
@@ -1587,7 +1607,12 @@ async def post_result(
     request_id: str,
     data: dict[str, Any],
     api_key: str,
-) -> bool:
+) -> str:
+    """결과 전송 — 반환:
+    - "ok" = 성공
+    - "transient" = backend 일시 장애 (retry 후도 503/네트워크) — caller 가 record_failure 호출 X
+    - "permanent" = 4xx 영구 거부
+    """
     url = f"{backend_url}/api/v1/samba/proxy/sourcing/collect-result"
     body = {"requestId": request_id, "data": data}
     headers = {"X-Api-Key": api_key}
@@ -1598,16 +1623,25 @@ async def post_result(
             if attempt < len(_RETRY_DELAYS):
                 await asyncio.sleep(_RETRY_DELAYS[attempt])
                 continue
-            logger.warning("결과전송 예외 (포기): %s", exc)
-            return False
+            logger.warning("결과전송 예외 (포기, transient): %s", exc)
+            return POST_RESULT_TRANSIENT
         if r.is_success:
-            return True
+            return POST_RESULT_OK
         if r.status_code in _RETRY_STATUSES and attempt < len(_RETRY_DELAYS):
             await asyncio.sleep(_RETRY_DELAYS[attempt])
             continue
-        logger.warning("결과전송 실패 status=%s body=%s", r.status_code, r.text[:200])
-        return False
-    return False
+        # 4xx 영구 거부 — 잡 처리 실패로 간주
+        if 400 <= r.status_code < 500:
+            logger.warning(
+                "결과전송 영구 실패 status=%s body=%s", r.status_code, r.text[:200]
+            )
+            return POST_RESULT_PERMANENT
+        # 5xx retry 소진 — backend 장애 지속
+        logger.warning(
+            "결과전송 transient 실패 status=%s body=%s", r.status_code, r.text[:200]
+        )
+        return POST_RESULT_TRANSIENT
+    return POST_RESULT_TRANSIENT
 
 
 async def extract_pdp(
@@ -2010,9 +2044,9 @@ async def process_job(
         except Exception as exc:
             logger.warning("[%s] 재로그인 예외 req=%s: %s", site, request_id, exc)
 
-    ok = await post_result(client, backend_url, request_id, data, api_key)
+    pr = await post_result(client, backend_url, request_id, data, api_key)
     dt = time.time() - t0
-    if ok and data.get("success"):
+    if pr == POST_RESULT_OK and data.get("success"):
         bp = data.get("best_benefit_price") or 0
         nopt = len(data.get("options") or [])
         logger.info(
@@ -2029,7 +2063,16 @@ async def process_job(
             return "login_required"
         state.reset_login_required()
         return None
-    # 회신 OK 였으나 success=False
+    # backend transient (503 등) — 실패 카운트 제외 (배포 시 데몬 자살 사고 방지, 2026-05-27).
+    if pr == POST_RESULT_TRANSIENT:
+        logger.info(
+            "결과전송 transient — 실패 카운트 제외 req=%s pid=%s (%.1fs)",
+            request_id,
+            product_id,
+            dt,
+        )
+        return None
+    # 회신 OK 였으나 success=False, 또는 영구 거부
     state.record_failure()
     if isinstance(data, dict) and data.get("login_required"):
         state.record_login_required()
@@ -2714,7 +2757,9 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--max-consecutive-fail",
         type=int,
-        default=int(os.environ.get("DAEMON_MAX_CONSECUTIVE_FAIL", "10")),
+        # 10 → 30: 배포 시 backend 503 1~2분 동안 누적 실패 견딤 (v1.4.11+).
+        # 추가 안전망: post_result transient 분리(503 retry 후도 카운트 제외) + fetch_job retry.
+        default=int(os.environ.get("DAEMON_MAX_CONSECUTIVE_FAIL", "30")),
     )
     # 기본 headless=True — 사용자 PC 에 Chromium 창 안 뜸 (zero-visual).
     # WAF 차단 발생 시 --no-headless 로 수동 전환 가능.

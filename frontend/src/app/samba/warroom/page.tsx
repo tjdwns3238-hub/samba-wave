@@ -352,6 +352,7 @@ async function downloadDaemonInstaller(did: string): Promise<boolean> {
 interface ActiveCycle {
   device_id: string
   site: string
+  status?: 'active' | 'inactive'
   idx: number
   total: number
   cycle_count: number
@@ -363,6 +364,7 @@ interface ActiveCycle {
   price_count: number
   stock_count: number
   soldout_count: number
+  last_seen_ago_sec?: number | null
 }
 
 function ActiveCyclesPanel(): React.ReactElement {
@@ -406,6 +408,30 @@ function ActiveCyclesPanel(): React.ReactElement {
       setBusy('')
     }
   }, [fetchCycles])
+  // 비활성 분담 삭제 — pc-allowed-sites 에서 해당 site 제거.
+  // 같은 device 의 다른 사이트는 보존 (authoritative=True 전체 덮어쓰기 보호).
+  const removeAllowedSite = useCallback(async (device_id: string, site: string) => {
+    const key = `${device_id}|${site}`
+    setBusy(key)
+    try {
+      const allSitesForDev = cycles.filter(c => c.device_id === device_id).map(c => c.site)
+      const remaining = Array.from(new Set(allSitesForDev.filter(s => s !== site)))
+      const { API_BASE_URL: api } = await import('@/config/api')
+      const r = await fetchWithAuth(`${api}/api/v1/samba/collector/autotune/pc-allowed-sites`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_id, sites: remaining }),
+      })
+      const d = await r.json().catch(() => ({} as { ok?: boolean; error?: string }))
+      if (!d || !d.ok) {
+        const { showAlert } = await import('@/components/samba/Modal')
+        showAlert(d?.error || '삭제 실패', 'error')
+      }
+      await fetchCycles()
+    } finally {
+      setBusy('')
+    }
+  }, [cycles, fetchCycles])
   return (
     <div style={card}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
@@ -422,6 +448,7 @@ function ActiveCyclesPanel(): React.ReactElement {
             <tr style={{ color: '#888', borderBottom: '1px solid #3D3D3D' }}>
               <th style={{ textAlign: 'left', padding: '0.4rem' }}>PC (device)</th>
               <th style={{ textAlign: 'left', padding: '0.4rem' }}>사이트</th>
+              <th style={{ textAlign: 'center', padding: '0.4rem' }}>상태</th>
               <th style={{ textAlign: 'right', padding: '0.4rem' }}>진행</th>
               <th style={{ textAlign: 'right', padding: '0.4rem' }}>처리속도</th>
               <th style={{ textAlign: 'right', padding: '0.4rem' }}>가격</th>
@@ -431,7 +458,7 @@ function ActiveCyclesPanel(): React.ReactElement {
               <th style={{ textAlign: 'left', padding: '0.4rem' }}>시작 시각</th>
               <th style={{ textAlign: 'right', padding: '0.4rem' }}>경과</th>
               <th style={{ textAlign: 'right', padding: '0.4rem' }}>최근 활동</th>
-              <th style={{ textAlign: 'center', padding: '0.4rem' }}>중단</th>
+              <th style={{ textAlign: 'center', padding: '0.4rem' }}>조치</th>
             </tr>
           </thead>
           <tbody>
@@ -461,8 +488,14 @@ function ActiveCyclesPanel(): React.ReactElement {
                   ? `${fmtNum(h)}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`
                   : `${fmtNum(m)}:${String(sec).padStart(2,'0')}`
               }
+              const isInactive = c.status === 'inactive'
+              const rowOpacity = isInactive ? 0.55 : 1
+              const statusLabel = isInactive
+                ? (c.last_seen_ago_sec != null ? `비활성 (${fmtNum(c.last_seen_ago_sec)}초 전 폴링)` : '비활성 (폴링 없음)')
+                : '활성'
+              const statusColor = isInactive ? '#888' : '#4CD964'
               return (
-                <tr key={k} style={{ borderBottom: '1px solid #2A2A2A' }}>
+                <tr key={k} style={{ borderBottom: '1px solid #2A2A2A', opacity: rowOpacity }}>
                   <td style={{ padding: '0.4rem', fontFamily: 'monospace', fontSize: '0.75rem' }}>
                     {c.device_id.slice(0, 28)}
                     <span style={{ marginLeft: '0.3rem', fontSize: '0.7rem', color: c.device_id.startsWith('samba-daemon-') ? '#4C9AFF' : '#FFB84D' }}>
@@ -470,29 +503,46 @@ function ActiveCyclesPanel(): React.ReactElement {
                     </span>
                   </td>
                   <td style={{ padding: '0.4rem' }}>{c.site}</td>
-                  <td style={{ padding: '0.4rem', textAlign: 'right' }}>{fmtNum(c.idx)} / {fmtNum(c.total)}</td>
-                  <td style={{ padding: '0.4rem', textAlign: 'right', color: '#FFB84D' }}>{avgStr}</td>
-                  <td style={{ padding: '0.4rem', textAlign: 'right', color: '#4CD964' }}>{fmtNum(c.price_count)}</td>
-                  <td style={{ padding: '0.4rem', textAlign: 'right', color: '#4C9AFF' }}>{fmtNum(c.stock_count)}</td>
-                  <td style={{ padding: '0.4rem', textAlign: 'right', color: '#EF4444' }}>{fmtNum(c.soldout_count)}</td>
-                  <td style={{ padding: '0.4rem', textAlign: 'right' }}>{fmtNum(c.cycle_count)}</td>
-                  <td style={{ padding: '0.4rem', fontFamily: 'monospace', fontSize: '0.75rem', color: '#9AA5C0' }}>{startedStr}</td>
-                  <td style={{ padding: '0.4rem', textAlign: 'right', color: '#9AA5C0' }}>{elapsedStr}</td>
-                  <td style={{ padding: '0.4rem', textAlign: 'right', color: '#888' }}>{hbStr}</td>
+                  <td style={{ padding: '0.4rem', textAlign: 'center', fontSize: '0.72rem', color: statusColor }}>{statusLabel}</td>
+                  <td style={{ padding: '0.4rem', textAlign: 'right' }}>{isInactive ? '-' : `${fmtNum(c.idx)} / ${fmtNum(c.total)}`}</td>
+                  <td style={{ padding: '0.4rem', textAlign: 'right', color: '#FFB84D' }}>{isInactive ? '-' : avgStr}</td>
+                  <td style={{ padding: '0.4rem', textAlign: 'right', color: '#4CD964' }}>{isInactive ? '-' : fmtNum(c.price_count)}</td>
+                  <td style={{ padding: '0.4rem', textAlign: 'right', color: '#4C9AFF' }}>{isInactive ? '-' : fmtNum(c.stock_count)}</td>
+                  <td style={{ padding: '0.4rem', textAlign: 'right', color: '#EF4444' }}>{isInactive ? '-' : fmtNum(c.soldout_count)}</td>
+                  <td style={{ padding: '0.4rem', textAlign: 'right' }}>{isInactive ? '-' : fmtNum(c.cycle_count)}</td>
+                  <td style={{ padding: '0.4rem', fontFamily: 'monospace', fontSize: '0.75rem', color: '#9AA5C0' }}>{isInactive ? '-' : startedStr}</td>
+                  <td style={{ padding: '0.4rem', textAlign: 'right', color: '#9AA5C0' }}>{isInactive ? '-' : elapsedStr}</td>
+                  <td style={{ padding: '0.4rem', textAlign: 'right', color: '#888' }}>{isInactive ? '-' : hbStr}</td>
                   <td style={{ padding: '0.4rem', textAlign: 'center' }}>
-                    <button
-                      disabled={busy === k}
-                      onClick={() => cancelCycle(c.device_id, c.site)}
-                      style={{
-                        padding: '0.2rem 0.6rem',
-                        background: busy === k ? '#444' : 'rgba(239,68,68,0.15)',
-                        border: '1px solid rgba(239,68,68,0.4)',
-                        borderRadius: '4px',
-                        color: '#EF4444',
-                        fontSize: '0.75rem',
-                        cursor: busy === k ? 'wait' : 'pointer',
-                      }}
-                    >{busy === k ? '중단중…' : '중단'}</button>
+                    {isInactive ? (
+                      <button
+                        disabled={busy === k}
+                        onClick={() => removeAllowedSite(c.device_id, c.site)}
+                        style={{
+                          padding: '0.2rem 0.6rem',
+                          background: busy === k ? '#444' : 'rgba(180,180,180,0.15)',
+                          border: '1px solid rgba(180,180,180,0.4)',
+                          borderRadius: '4px',
+                          color: '#CCCCCC',
+                          fontSize: '0.75rem',
+                          cursor: busy === k ? 'wait' : 'pointer',
+                        }}
+                      >{busy === k ? '삭제중…' : '분담삭제'}</button>
+                    ) : (
+                      <button
+                        disabled={busy === k}
+                        onClick={() => cancelCycle(c.device_id, c.site)}
+                        style={{
+                          padding: '0.2rem 0.6rem',
+                          background: busy === k ? '#444' : 'rgba(239,68,68,0.15)',
+                          border: '1px solid rgba(239,68,68,0.4)',
+                          borderRadius: '4px',
+                          color: '#EF4444',
+                          fontSize: '0.75rem',
+                          cursor: busy === k ? 'wait' : 'pointer',
+                        }}
+                      >{busy === k ? '중단중…' : '중단'}</button>
+                    )}
                   </td>
                 </tr>
               )

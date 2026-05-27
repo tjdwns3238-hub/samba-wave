@@ -1924,6 +1924,50 @@ const ProductCard = React.memo(function ProductCard({
                   </div>
                 </td>
               </tr>
+              {/* 쿠팡 전용 검색어 (연관/자동완성/롱테일) */}
+              <tr style={{ borderBottom: '1px solid #1E1E1E' }}>
+                <td style={tdLabel}>쿠팡 전용</td>
+                <td style={tdVal}>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', alignItems: 'center' }}>
+                    {(p.coupang_search_tags || []).map((tag, ti) => (
+                      <span key={`cp-${ti}`} style={{
+                        fontSize: '0.7rem', padding: '1px 8px', borderRadius: '10px',
+                        background: 'rgba(255,140,0,0.1)', border: '1px solid rgba(255,140,0,0.3)', color: '#FFB84D',
+                        display: 'inline-flex', alignItems: 'center', gap: '4px',
+                      }}>
+                        {tag}
+                        <span
+                          style={{ cursor: 'pointer', color: '#666', fontSize: '0.8rem', lineHeight: 1 }}
+                          onClick={() => {
+                            const newArr = (p.coupang_search_tags || []).filter(t => t !== tag)
+                            onProductUpdate(p.id, { coupang_search_tags: newArr })
+                          }}
+                        >×</span>
+                      </span>
+                    ))}
+                    <input
+                      type="text"
+                      placeholder="쿠팡 검색어 (최대 10개)"
+                      style={{ fontSize: '0.7rem', padding: '2px 7px', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#FFB84D', background: '#1A1A1A', outline: 'none', width: '180px' }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          const input = e.currentTarget
+                          const val = input.value.trim()
+                          if (!val) return
+                          const adds = val.split(',').map(t => t.trim()).filter(Boolean)
+                          const cur = p.coupang_search_tags || []
+                          const merged = [...cur, ...adds.filter(t => !cur.includes(t))].slice(0, 10)
+                          onProductUpdate(p.id, { coupang_search_tags: merged })
+                          input.value = ''
+                        }
+                      }}
+                    />
+                    <span style={{ fontSize: '0.62rem', color: '#666', whiteSpace: 'nowrap' }}>
+                      {(p.coupang_search_tags || []).length}/10
+                    </span>
+                  </div>
+                </td>
+              </tr>
               {/* 적용정책 */}
               <tr style={{ borderBottom: '1px solid #1E1E1E' }}>
                 <td style={tdLabel}>적용정책</td>

@@ -4208,14 +4208,18 @@ async def autotune_pc_allowed_sites_get():
 
 @router.get("/autotune/active-cycles")
 async def autotune_active_cycles():
-    """현재 backend in-memory 에서 활성 동작 중인 모든 (device_id, site) cycle 목록.
+    """모든 (device_id, site) 분담 목록 — 활성 사이클 + 비활성 분담 둘 다.
 
-    사용자 visibility — 어느 PC 의 어느 사이트 사이클이 도는지 한눈에. 인지 못 한
-    좀비 사이클 발견 + 개별 cancel 가능 (POST /autotune/cancel-cycle).
+    사용자 visibility — 죽은 분담도 보여 사용자가 삭제 액션 가능. 살아있는 task 는
+    개별 cancel (POST /autotune/cancel-cycle), 비활성 분담은 분담 자체 제거
+    (POST /autotune/pc-allowed-sites 로 sites 빈배열).
+    status: "active" = task 실행 중, "inactive" = 분담만 등록 폴링 없음.
     avg_sec_per_item — 현 사이클 시작 후 (now - started_at) / idx 평균 처리 시간.
     """
     cycles = []
     now_ts = time.time()
+    seen: set[tuple[str, str]] = set()
+    # 1) 활성 task entry — 정상 동작 중
     for dev, site_tasks in list(_pc_site_tasks.items()):
         if not isinstance(site_tasks, dict):
             continue
@@ -4223,13 +4227,13 @@ async def autotune_active_cycles():
             if task is None or task.done():
                 continue
             gkey = (dev, site)
+            seen.add(gkey)
             idx = _autotune_global_idx.get(gkey, 0)
             total = _autotune_global_total.get(gkey, 0)
             cycle_count = _pc_site_cycle_counts.get(dev, {}).get(site, 0)
             last_tick = _pc_site_last_ticks.get(dev, {}).get(site, "")
             hb = _pc_site_heartbeats.get(dev, {}).get(site, 0)
             hb_ago = int(now_ts - hb) if hb else None
-            # 현 사이클 시작 시각 + 경과 시간 + 건당 평균 처리 시간 + 누적 가격/재고/품절
             avg_sec: Optional[float] = None
             started_at_iso: Optional[str] = None
             elapsed_sec: Optional[int] = None
@@ -4252,7 +4256,6 @@ async def autotune_active_cycles():
                         avg_sec = round(_elapsed / idx, 2)
                 price_count = len(_cstats.get("price_pids") or set())
                 stock_count = len(_cstats.get("stock_pids") or set())
-                # 품절 = unique 상품 수 (1 상품 N 마켓삭제 = +1)
                 soldout_count = len(_cstats.get("deleted_pids") or set())
             except Exception:
                 pass
@@ -4260,6 +4263,7 @@ async def autotune_active_cycles():
                 {
                     "device_id": dev,
                     "site": site,
+                    "status": "active",
                     "idx": idx,
                     "total": total,
                     "cycle_count": cycle_count,
@@ -4273,7 +4277,37 @@ async def autotune_active_cycles():
                     "soldout_count": soldout_count,
                 }
             )
-    cycles.sort(key=lambda c: (c["device_id"], c["site"]))
+    # 2) 비활성 분담 entry — DB 에 등록됐지만 task 없음 (죽은 데몬/꺼진 PC).
+    # 사용자가 visibility 확보 후 삭제 액션 가능.
+    for dev, sites in list(_pc_allowed_sites.items()):
+        if not sites:
+            continue
+        last_seen_ts = _pc_last_seen.get(dev, 0)
+        last_seen_ago = int(now_ts - last_seen_ts) if last_seen_ts else None
+        for site in sorted(sites):
+            gkey2 = (dev, site)
+            if gkey2 in seen:
+                continue
+            cycles.append(
+                {
+                    "device_id": dev,
+                    "site": site,
+                    "status": "inactive",
+                    "idx": 0,
+                    "total": 0,
+                    "cycle_count": 0,
+                    "last_tick": "",
+                    "heartbeat_ago_sec": None,
+                    "avg_sec_per_item": None,
+                    "started_at": None,
+                    "elapsed_sec": None,
+                    "price_count": 0,
+                    "stock_count": 0,
+                    "soldout_count": 0,
+                    "last_seen_ago_sec": last_seen_ago,
+                }
+            )
+    cycles.sort(key=lambda c: (c["status"] != "active", c["device_id"], c["site"]))
     return {"count": len(cycles), "cycles": cycles}
 
 

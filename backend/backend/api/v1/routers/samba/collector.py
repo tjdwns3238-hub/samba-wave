@@ -135,6 +135,8 @@ class CollectedProductUpdate(BaseModel):
     images: Optional[list] = None
     detail_images: Optional[list] = None
     tags: Optional[list] = None
+    seo_keywords: Optional[list] = None
+    coupang_search_tags: Optional[list] = None
     options: Optional[list] = None
     extra_data: Optional[dict] = None
 

@@ -730,6 +730,7 @@ export interface SambaCollectedProduct {
   source_url?: string;
   extra_data?: Record<string, unknown>;
   seo_keywords?: string[];
+  coupang_search_tags?: string[];
   free_shipping?: boolean;
   same_day_delivery?: boolean;
   sourcing_shipping_fee?: number;
