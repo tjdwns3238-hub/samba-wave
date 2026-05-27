@@ -144,6 +144,8 @@ class SSGSourcingClient:
         seen: set[str] = set()
         page = 1
         rate_limit_retries = 3
+        # 무한루프 안전망 (이슈 #263) — 40건/page × 500 = 2만건 상한
+        MAX_PAGES = 500
 
         # 외부에서 brand_ids가 제공되면 _fetch_brand_ids 건너뛰기
         _brand_ids: list[str] | None = kwargs.pop("brand_ids", None)
@@ -151,7 +153,7 @@ class SSGSourcingClient:
             _brand_ids = await self._fetch_brand_ids(keyword)
         logger.info(f"[SSG] 검색 brand_ids: {_brand_ids}")
 
-        while len(products) < max_count:
+        while len(products) < max_count and page <= MAX_PAGES:
             # 모든 페이지에 brand_ids 전달 (page 1 포함, search_products 내부 추출 생략)
             raw: list[dict[str, Any]] = []
             for attempt in range(rate_limit_retries + 1):
@@ -1114,7 +1116,13 @@ class SSGSourcingClient:
         if products:
             return products
 
-        # 2순위: 상품 링크 기반 폴백
+        # __NEXT_DATA__가 있으면 페이지 정상 로드 — 상품이 없는 것 뿐.
+        # 폴백 파서(_parse_search_blocks)가 UI 요소를 상품으로 오인해
+        # 무한루프 + CPU 100%를 유발했음 (이슈 #263, 2026-05-27).
+        if re.search(r'<script[^>]+id="__NEXT_DATA__"', html):
+            return []
+
+        # 2순위: __NEXT_DATA__ 미존재 시에만 폴백 (페이지 구조 변경 대응)
         logger.warning(f"[SSG] dataList 파싱 실패, 폴백 파싱 시도: {keyword}")
         return self._parse_search_blocks(html)
 

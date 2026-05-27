@@ -3109,10 +3109,12 @@ class JobWorker:
         # 병렬 배치 처리 — SSG rate-limit 완화를 위해 2개 동시로 제한
         _SSG_BATCH = 2
         _ssg_page = 1
+        # 무한루프 안전망 (이슈 #263) — 40건/page × 500 = 2만건 상한
+        _SSG_MAX_PAGES = 500
         # 필터 requested_count 합산 → 총 예상 건수 (진행률 표시용)
         _ssg_total_est = sum(f.requested_count or 0 for f in filters) or 1
 
-        while True:
+        while _ssg_page <= _SSG_MAX_PAGES:
             from backend.domain.samba.emergency import (
                 is_collect_cancel_requested as _icc_s,
                 is_emergency_stopped as _ies_s,
