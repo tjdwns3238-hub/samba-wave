@@ -106,21 +106,22 @@ def _build_write_engine() -> AsyncEngine:
         future=True,
         echo=False,  # Disable SQL echo to reduce noise
         pool_pre_ping=False,  # asyncpg 버그: SELECT 1이 idle in transaction 좀비 누적 → pool_recycle로 대체
-        pool_size=30,  # write 풀 확장 (25 → 30) — transmit sem 사이트별 확대 대응
-        max_overflow=30,  # 추가 허용 (write 최대 60개, Cloud SQL max=100 내)
-        pool_recycle=45,  # idle 커넥션 45초 후 재활용 — 좀비 회수 가속 (60→45)
+        # (2026-05-27 PM) 풀 상한 축소: write 30+30=60 → 20+20=40.
+        # 사용자 캡쳐 Cloud SQL 최대 연결 97/100 위험. 백엔드 단일 워커가 풀 상한
+        # 90개(write 60 + read 30) 까지 차오를 수 있어 Cloud SQL max=100 한계 임박.
+        # 축소 후 합 max=60 (write 40 + read 20) — Cloud SQL 여유 35 확보.
+        pool_size=20,
+        max_overflow=20,
+        pool_recycle=45,  # idle 커넥션 45초 후 재활용 — 좀비 회수 가속
         pool_timeout=10,  # 빠른 실패 — 30s 대기 중 ASGI 워커 타임아웃 방지
         connect_args={
-            "timeout": 10,  # asyncpg 연결 타임아웃 10초
+            "timeout": 10,
             "server_settings": {
-                # 좀비 차단 — idle in transaction 초과 시 PostgreSQL 자동 종료.
-                # 60s → 180s 상향 (2026-05-27): transmit/worker 가 마켓 HTTP 호출
-                # 동안 write 세션 트랜잭션 보유 → 60s IIT 만나면 서버 강제 close →
-                # 다음 commit/query 에서 `connection is closed` (InterfaceError) → 잡 실패.
-                # 사례: 24h 12건 InterfaceError, worker.py:1311 _process_one (26s),
-                # collector_autotune.py:418 _run_transmit_in_background (5~17s) 핫스팟.
-                # 좀비 회수는 pool_recycle=45 + 명시적 rollback 경로가 담당, IIT 는 보조.
-                "idle_in_transaction_session_timeout": "180000",
+                # 좀비 차단 — IIT 초과 시 PostgreSQL 자동 종료. 120s 타협안:
+                # 60s = transmit/worker 마켓 HTTP 60s 초과 시 connection-closed 발생,
+                # 180s = 좀비 회수 늦어져 풀 idle 누적 → Cloud SQL 97/100 위험.
+                # 120s = transmit 평균 30~45s 대비 2~4배 마진 + 좀비 회수 가속.
+                "idle_in_transaction_session_timeout": "120000",
             },
         },
     )
@@ -149,14 +150,17 @@ def _build_read_engine() -> AsyncEngine:
         future=True,
         echo=False,
         pool_pre_ping=False,  # asyncpg 버그: SELECT 1이 idle in transaction 좀비 누적 → pool_recycle로 대체
-        pool_size=15,  # read 풀 확장 (8 → 15) — 좀비 누적 사고 대응
-        max_overflow=15,  # 추가 허용 (read 최대 30개)
-        pool_recycle=45,  # idle 커넥션 45초 후 재활용 — 좀비 회수 가속 (60→45)
-        pool_timeout=10,  # 빠른 실패 — 30s 대기 중 ASGI 워커 타임아웃 방지
+        # (2026-05-27 PM) read 풀 상한 축소: 15+15=30 → 10+10=20.
+        # Cloud SQL 97/100 위험 대응. 오토튠 코디네이터 read 전환으로 read 부하 ↑ 이지만
+        # scroll_products 병렬화 진입당 ~3 세션 + 백그라운드 sync 루프 합산해도 20 안.
+        pool_size=10,
+        max_overflow=10,
+        pool_recycle=45,  # idle 커넥션 45초 후 재활용 — 좀비 회수 가속
+        pool_timeout=10,
         connect_args={
-            "timeout": 10,  # asyncpg 연결 타임아웃 10초
+            "timeout": 10,
             "server_settings": {
-                # 좀비 차단 단축 — read 트랜잭션은 짧으므로 30s 초과 = 좀비 확정.
+                # read 트랜잭션 짧음 — 30s 유지 (좀비 빠른 회수 우선).
                 "idle_in_transaction_session_timeout": "30000",
             },
         },
