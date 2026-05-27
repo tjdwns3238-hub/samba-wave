@@ -6669,9 +6669,38 @@ async def sync_orders_from_markets(
                     _ch_no = ch_no_map.get(_od_no, "")
 
                     # 가격비교 채널 = PCS 수수료 부과 대상
-                    # 운영 데이터로 확장 필요 — 가디 계정 chNo=100065 표본 기준
-                    _PRICE_COMPARE_CHANNELS = {"100065"}
-                    _pcs_rate = 2.0 if _ch_no in _PRICE_COMPARE_CHANNELS else 0.0
+                    # account.additional_fields.lotteon_price_compare=True 면 PCS 부과.
+                    # 폴백: 운영 표본 chNo (가디 100065).
+                    _af = account.get("additional_fields") or {}
+                    _pcs_on = bool(_af.get("lotteon_price_compare"))
+                    _pcs_rate = 2.0 if (_pcs_on or _ch_no in {"100065"}) else 0.0
+
+                    # 수수료율 결정 (우선순위)
+                    # 1) account.additional_fields.lotteon_fee_rate (운영자 수동 지정, %)
+                    # 2) _matched.category 1뎁스가 LotteON 한국어 1뎁스와 일치할 때만 채택
+                    #    (소싱 카탈로그 카테고리는 영문/소싱 path라 거의 미매칭 — 임의 매칭 차단)
+                    # 3) DEFAULT_LOTTEON_FEE_RATE (13%)
+                    # 정산 확정 후 SettleItmdSales.pymtAmt 매칭으로 덮어씀.
+                    from backend.domain.samba.proxy.lotteon.category_fees import (
+                        DEFAULT_LOTTEON_FEE_RATE,
+                        LOTTEON_CATEGORY_FEE_RATES,
+                    )
+
+                    _fee: float
+                    _override_fee = _af.get("lotteon_fee_rate")
+                    if _override_fee is not None:
+                        try:
+                            _fee = float(_override_fee)
+                        except (TypeError, ValueError):
+                            _fee = DEFAULT_LOTTEON_FEE_RATE
+                    else:
+                        _cat_for_fee = _matched.get("category", "") if _matched else ""
+                        _first = (
+                            _cat_for_fee.split(">")[0].strip() if _cat_for_fee else ""
+                        )
+                        _fee = LOTTEON_CATEGORY_FEE_RATES.get(
+                            _first, DEFAULT_LOTTEON_FEE_RATE
+                        )
 
                     if _slamt > 0:
                         # 고객결제금액 = actualAmt 우선, 없으면 slAmt − fvrAmtSum 폴백
@@ -6687,15 +6716,11 @@ async def sync_orders_from_markets(
                             _customer_paid = max(0, _slamt - _slr_dc - _lotte_dc)
                         order_data["total_payment_amount"] = _customer_paid
 
-                        if not order_data.get("revenue"):
-                            from backend.domain.samba.proxy.lotteon.category_fees import (
-                                get_fee_rate_for_category,
-                            )
-
-                            _cat_for_fee = (
-                                _matched.get("category", "") if _matched else ""
-                            )
-                            _fee = get_fee_rate_for_category(_cat_for_fee)
+                        # revenue=0(손실 주문 등)을 unset으로 오인하지 않도록 sentinel(키 존재) 사용.
+                        if (
+                            "revenue" not in order_data
+                            or order_data.get("revenue") is None
+                        ):
                             _bse_cmsn = int(_slamt * _fee / 100)
                             _pcs_cmsn = int(_slamt * _pcs_rate / 100)
                             # ─────────────────────────────────────────────────────────────
@@ -6730,18 +6755,21 @@ async def sync_orders_from_markets(
                                 if _customer_paid > 0
                                 else 0
                             )
-                    elif not order_data.get("revenue"):
-                        # raw 매핑 실패 폴백 — 카테고리 수수료 공식
-                        from backend.domain.samba.proxy.lotteon.category_fees import (
-                            get_fee_rate_for_category,
-                        )
-
-                        _cat_for_fee = _matched.get("category", "") if _matched else ""
-                        _fee = get_fee_rate_for_category(_cat_for_fee)
+                    elif (
+                        "revenue" not in order_data or order_data.get("revenue") is None
+                    ):
+                        # raw 매핑 실패 폴백 — 위에서 결정된 _fee 재사용, PCS도 동일 적용
                         _sp = int(order_data.get("sale_price", 0) or 0)
+                        _bse_cmsn = int(_sp * _fee / 100)
+                        _pcs_cmsn = int(_sp * _pcs_rate / 100)
                         order_data["total_payment_amount"] = _sp
-                        order_data["fee_rate"] = _fee
-                        order_data["revenue"] = max(0, int(_sp * (1 - _fee / 100)))
+                        # 실효율 통일 — 정상경로와 동일하게 마켓수수료/실결제 기준
+                        order_data["fee_rate"] = (
+                            round((_bse_cmsn + _pcs_cmsn) / _sp * 100, 2)
+                            if _sp > 0
+                            else _fee
+                        )
+                        order_data["revenue"] = max(0, _sp - _bse_cmsn - _pcs_cmsn)
                 # 롯데홈쇼핑 정산금액 계산 — account.additional_fields.commission_rate 우선, 폴백 25%
                 if order_data.get("source") == "lottehome":
                     _lh_fee = float(
