@@ -270,6 +270,26 @@ class CoupangPlugin(MarketPlugin):
         if return_phone:
             data["companyContactNumber"] = return_phone
 
+        # 계정 popup 설정의 fee 3종 반영 (이슈 #262, 2026-05-27)
+        # transform_product 의 하드코딩(deliveryChargeOnReturn=2500, returnCharge=2500,
+        # remoteAreaDeliverable="N") 덮어쓰기. 다른 마켓(smartstore/lotteon/elevenst)과
+        # 동일 패턴.
+        try:
+            _return_fee = int(extras.get("returnFee") or 0)
+        except (TypeError, ValueError):
+            _return_fee = 0
+        try:
+            _jeju_fee = int(extras.get("jejuFee") or 0)
+        except (TypeError, ValueError):
+            _jeju_fee = 0
+        if _return_fee > 0:
+            data["returnCharge"] = _return_fee
+            data["deliveryChargeOnReturn"] = _return_fee
+        if _jeju_fee > 0:
+            # remoteAreaDeliverable=Y 는 출고지 도서산간 가능 택배사 + 상품
+            # deliveryCompanyCode 정합성 필요 — popup 에서 명시한 셀러 의도 존중
+            data["remoteAreaDeliverable"] = "Y"
+
         # 기존 상품번호가 있으면 수정, 없으면 신규등록
         if existing_no:
             await client.update_product(existing_no, data)
