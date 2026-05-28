@@ -612,6 +612,16 @@ async def persist_pc_allowed_sites(
             dev = device_id.strip()
             if not dev:
                 return
+            # advisory lock — 멀티 worker / 멀티 PC 동시 register 시 read-modify-write
+            # last-write-wins 으로 먼저 박힌 device row 가 사라지는 race 차단
+            # (2026-05-28: PC1 시작 시 브라우저+데몬 dev 동시 POST로 1ec58a10 row 증발 사고).
+            # 같은 트랜잭션 내 advisory lock — commit/rollback 시 자동 release.
+            from sqlalchemy import text
+
+            await session.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+                {"k": f"autotune_pc_allowed_sites:{PC_ALLOWED_SITES_DB_KEY}"},
+            )
             current = await _get_setting(session, PC_ALLOWED_SITES_DB_KEY)
             if not isinstance(current, dict):
                 current = {}

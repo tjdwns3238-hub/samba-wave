@@ -852,28 +852,28 @@ export default function WarroomPage() {
       const daemonSites = expanded === null
         ? null
         : expanded.filter(s => _DAEMON_ONLY.has(s))
-      const calls: Promise<unknown>[] = []
-      // 브라우저 dev — 비데몬 사이트만 (또는 null=전체)
-      calls.push(fetchWithAuth(
+      // race fix (2026-05-28): Promise.all 동시 POST 시 백엔드 persist 가 read-modify-write
+      // 라 last-write-wins 으로 먼저 박힌 device row 가 덮어써짐 → 브라우저 dev 분담이 DB
+      // 에서 사라지고 lifecycle sync 가 _pc_allowed_sites.pop → 무신사/GS 사이클 cancel.
+      // 순차 await 로 직렬화.
+      await fetchWithAuth(
         `${apiBase}/api/v1/samba/collector/autotune/pc-allowed-sites`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ device_id: dev, sites: browserSites }),
         },
-      ))
-      // 데몬 dev — 데몬 전용 사이트만
+      )
       if (daemonDev) {
-        calls.push(fetchWithAuth(
+        await fetchWithAuth(
           `${apiBase}/api/v1/samba/collector/autotune/pc-allowed-sites`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ device_id: daemonDev, sites: daemonSites }),
           },
-        ))
+        )
       }
-      await Promise.all(calls)
     } catch { /* ignore */ }
   }, [])
 
