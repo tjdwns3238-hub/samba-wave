@@ -1155,6 +1155,75 @@ class LotteHomeClient:
             "raw": data,
         }
 
+    async def search_qna_list(
+        self,
+        req_start_dtime: str,
+        req_end_dtime: str,
+        c_val: str = "",
+        proc_fin_yn: str = "",
+    ) -> list[dict[str, Any]]:
+        """상품 Q&A (핫라인) 조회 (searchQnAListOpenApi.lotte).
+
+        c_val:       빈값=전체, 2=상품정보Q&A, 17=고객핫라인
+        proc_fin_yn: 빈값=전체, 99=미처리, 02=처리완료
+        """
+        cert_key = await self._ensure_auth()
+        params: dict[str, Any] = {
+            "subscriptionId": cert_key,
+            "req_start_dtime": req_start_dtime,
+            "req_end_dtime": req_end_dtime,
+        }
+        if c_val:
+            params["c_val"] = c_val
+        if proc_fin_yn:
+            params["proc_fin_yn"] = proc_fin_yn
+
+        result = await self._call_api_auto_retry(
+            "searchQnAListOpenApi.lotte", "GET", params
+        )
+        data = result.get("data", {}) or {}
+        result_data = data.get("Result", data)
+        infos = result_data.get("GoodsQuestInfo", [])
+        if isinstance(infos, dict):
+            infos = [infos]
+        return infos if isinstance(infos, list) else []
+
+    async def register_qna_answer(
+        self,
+        inq_no: str,
+        inq_ans_cont: str,
+        ans_cont_type: str = "1",
+        ans_disp_yn: str = "Y",
+        memo: str = "",
+    ) -> dict[str, Any]:
+        """상품 Q&A 답변 등록 (updateQnaAnswerOpenApi.lotte).
+
+        ans_cont_type: 1=유형1, 2=유형2 (머리말/맺음말)
+        ans_disp_yn:   Y=전시, N=미전시
+        Result: 1=성공, 2=실패
+        """
+        cert_key = await self._ensure_auth()
+        params: dict[str, Any] = {
+            "subscriptionId": cert_key,
+            "inq_no": inq_no,
+            "ans_cont_type": ans_cont_type,
+            "inq_ans_cont": inq_ans_cont,
+            "ans_disp_yn": ans_disp_yn,
+        }
+        if memo:
+            params["memo"] = memo
+
+        result = await self._call_api_auto_retry(
+            "updateQnaAnswerOpenApi.lotte", "POST", params
+        )
+        data = result.get("data", {}) or {}
+        ok_val = data.get("Result")
+        return {
+            "ok": str(ok_val).strip() == "1",
+            "result": ok_val,
+            "raw": data,
+        }
+
 
 # ----------------------------------------------------------------------
 # 택배사 코드 매핑 (스펙: 70.배송처리 별첨, 2024-05-22)

@@ -422,14 +422,84 @@ class SambaCSInquiryService:
                 await self.repo.update_async(ep.id, reply_status="replied")
                 replied_marked += 1
 
+        # ====== 상품 Q&A (searchQnAListOpenApi.lotte) 수집 ======
+        # 별도 API — 상품 페이지 Q&A는 VOC와 분리되어 있음
+        # external_id 형식: "QNA:{ReceiptNo}" (CS상담의 "ccn_no:mvot_req_sn"과 구별)
+        qna_collected = 0
+        qna_skipped = 0
+        qna_replied_marked = 0
+        try:
+            qna_items = await lh_client.search_qna_list(
+                req_start_dtime=start_date,
+                req_end_dtime=end_date,
+                c_val="",      # 전체 (2=상품정보Q&A, 17=핫라인)
+                proc_fin_yn="",  # 전체
+            )
+        except Exception as e:
+            logger.warning(f"[롯데홈 상품Q&A] 수집 실패: {e}")
+            qna_items = []
+
+        qna_active_ids: set[str] = set()
+        for it in qna_items:
+            receipt_no = str(it.get("ReceiptNo") or "").strip()
+            if not receipt_no:
+                continue
+            ext_id = f"QNA:{receipt_no}"
+            qna_active_ids.add(ext_id)
+
+            existing = await self.repo.find_by_external_id("롯데홈쇼핑", ext_id)
+            # Result: "02"=처리완료, 그 외=미처리
+            is_done = str(it.get("Result", "")).strip() == "02"
+
+            if existing:
+                if is_done and existing.reply_status != "replied":
+                    await self.repo.update_async(existing.id, reply_status="replied")
+                    qna_replied_marked += 1
+                else:
+                    qna_skipped += 1
+                continue
+
+            # ReceiptDate: YYYYMMDDHHMMSS (14자) → datetime
+            raw_date = str(it.get("ReceiptDate") or "").strip()
+            parsed_date = _parse_date(raw_date)
+            subject = str(it.get("Subject") or "")
+            content = str(it.get("Content") or "")
+            goods_nm = str(it.get("GoodsNm") or "")
+
+            await self.repo.create_async(
+                market="롯데홈쇼핑",
+                inquiry_type="product_question",
+                external_id=ext_id,
+                external_sent=False,
+                account_id=account_id,
+                account_name=account_label,
+                market_order_id=str(it.get("RcntOrdNo") or "") or None,
+                questioner=str(it.get("QuestNm") or "") or None,
+                product_name=goods_nm or None,
+                market_product_no=str(it.get("GoodsNo") or "") or None,
+                content=f"[{subject}] {content}".strip() if subject else content,
+                reply_status="replied" if is_done else "pending",
+                inquiry_date=parsed_date,
+            )
+            qna_collected += 1
+
+        # 상품Q&A도 active_ids에 없는 기존 pending → replied 마킹
+        existing_qna_pending = await self.repo.find_pending_since(
+            "롯데홈쇼핑", "product_question", start_dt, account_id=account_id
+        )
+        for ep in existing_qna_pending:
+            if ep.external_id not in qna_active_ids:
+                await self.repo.update_async(ep.id, reply_status="replied")
+                qna_replied_marked += 1
+
         logger.info(
-            f"[롯데홈 CS] 수집 완료 — {collected}건, 스킵 {skipped}건, "
-            f"답변완료 마킹 {replied_marked}건"
+            f"[롯데홈 CS] 수집 완료 — CS상담 {collected}건/스킵 {skipped}건/완료마킹 {replied_marked}건, "
+            f"상품Q&A {qna_collected}건/스킵 {qna_skipped}건/완료마킹 {qna_replied_marked}건"
         )
         return {
-            "collected": collected,
-            "skipped": skipped,
-            "replied_marked": replied_marked,
+            "collected": collected + qna_collected,
+            "skipped": skipped + qna_skipped,
+            "replied_marked": replied_marked + qna_replied_marked,
         }
 
     async def send_reply_to_lottehome(
@@ -437,7 +507,10 @@ class SambaCSInquiryService:
         inquiry_id: str,
         lh_client: Any,
     ) -> bool:
-        """롯데홈쇼핑 VOC 답변 전송 (updateCounselMemoOpenApi.lotte)."""
+        """롯데홈쇼핑 답변 전송.
+        - CS상담(inquiry_type=qna/note, ext_id="ccn_no:mvot_req_sn") → updateCounselMemoOpenApi
+        - 상품Q&A(inquiry_type=product_question, ext_id="QNA:ReceiptNo") → updateQnaAnswerOpenApi
+        """
         inquiry = await self.repo.get_async(inquiry_id)
         if not inquiry:
             logger.warning(f"[롯데홈 CS] 문의 없음: {inquiry_id}")
@@ -448,6 +521,34 @@ class SambaCSInquiryService:
         if not ext_id or not reply:
             logger.warning(f"[롯데홈 CS] external_id 또는 답변 없음: {inquiry_id}")
             return False
+
+        # 상품Q&A 분기
+        if ext_id.startswith("QNA:"):
+            inq_no = ext_id[4:].strip()
+            if not inq_no:
+                logger.warning(f"[롯데홈 상품Q&A] ReceiptNo 없음: {ext_id}")
+                return False
+            try:
+                api_resp = await lh_client.register_qna_answer(
+                    inq_no=inq_no,
+                    inq_ans_cont=reply,
+                )
+            except Exception as e:
+                logger.warning(f"[롯데홈 상품Q&A] 답변 전송 실패 ({inquiry_id}): {e}")
+                return False
+            ok = bool(api_resp.get("ok"))
+            if ok:
+                await self.repo.update_async(
+                    inquiry_id, external_sent=True, reply_status="replied"
+                )
+                logger.info(f"[롯데홈 상품Q&A] 답변 전송 완료: {inquiry_id}")
+            else:
+                logger.warning(
+                    f"[롯데홈 상품Q&A] 답변 전송 실패: {inquiry_id} resp={api_resp}"
+                )
+            return ok
+
+        # CS상담 분기 (기존)
         if ":" not in ext_id:
             logger.warning(
                 f"[롯데홈 CS] external_id 형식 오류 (ccn_no:mvot_req_sn 필요): {ext_id}"
