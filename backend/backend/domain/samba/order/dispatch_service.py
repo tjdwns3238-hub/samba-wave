@@ -12,9 +12,85 @@ ship_order 라우터(수동 마켓전송 버튼)와 dispatch_to_market(자동 di
 
 from __future__ import annotations
 
+import re
+
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.utils.logger import logger
+
+# 이슈 #258 (2026-05-27) — b247fa99 백필이 hex ID 계정 생성 후 사용자가 정리하면서
+# samba_order.channel_id 가 orphan 상태가 됨. channel_name "마켓명(sub_key)" 파싱으로
+# vendor_id/agncNo/seller_id 매칭하여 active 계정 폴백.
+_KOREAN_MARKET_MAP = {
+    "쿠팡": "coupang",
+    "스마트스토어": "smartstore",
+    "롯데홈쇼핑": "lottehome",
+    "롯데ON": "lotteon",
+    "11번가": "11st",
+    "이베이": "ebay",
+    "옥션": "ebay",
+    "G마켓": "ebay",
+    "지마켓": "ebay",
+    "신세계몰": "ssg",
+    "SSG": "ssg",
+    "플레이오토": "playauto",
+}
+
+
+async def _resolve_account_with_fallback(order, session: AsyncSession):
+    """channel_id 직접 매칭 실패 시 channel_name + tenant_id + active 로 폴백.
+
+    이슈 #258: b247fa99 백필 마이그레이션이 생성한 hex ID 계정이 사용자에
+    의해 삭제되면서 발생한 orphan channel_id 회복용.
+    """
+    from backend.domain.samba.account.model import SambaMarketAccount
+    from backend.domain.samba.account.repository import SambaMarketAccountRepository
+
+    repo = SambaMarketAccountRepository(session)
+    account = await repo.get_async(order.channel_id) if order.channel_id else None
+    if account:
+        return account
+
+    name = (getattr(order, "channel_name", "") or "").strip()
+    m = re.match(r"^(.+?)\(([^)]*)\)\s*$", name)
+    if not m:
+        return None
+    korean = m.group(1).strip()
+    sub = m.group(2).strip()
+    market_type = _KOREAN_MARKET_MAP.get(korean)
+    if not market_type:
+        return None
+
+    stmt = select(SambaMarketAccount).where(
+        SambaMarketAccount.market_type == market_type,
+        SambaMarketAccount.tenant_id == order.tenant_id,
+        SambaMarketAccount.is_active == True,  # noqa: E712
+    )
+    candidates = list((await session.execute(stmt)).scalars())
+    if not candidates:
+        return None
+
+    if sub:
+        for a in candidates:
+            extras = a.additional_fields or {}
+            if not isinstance(extras, dict):
+                extras = {}
+            keys = [
+                a.seller_id or "",
+                str(extras.get("vendorId") or ""),
+                str(extras.get("agncNo") or ""),
+                str(extras.get("storeId") or ""),
+                a.account_label or "",
+            ]
+            if any(sub in k for k in keys if k):
+                return a
+        return None
+
+    if len(candidates) == 1:
+        return candidates[0]
+    defaults = [a for a in candidates if getattr(a, "is_default", False)]
+    return defaults[0] if len(defaults) == 1 else None
 
 
 async def send_invoice_to_market(
@@ -30,12 +106,15 @@ async def send_invoice_to_market(
     if not order.channel_id:
         return False, "마켓 채널 계정 미연결(channel_id 없음)"
 
-    from backend.domain.samba.account.repository import SambaMarketAccountRepository
-
-    account_repo = SambaMarketAccountRepository(session)
-    account = await account_repo.get_async(order.channel_id)
+    account = await _resolve_account_with_fallback(order, session)
     if not account:
         return False, "마켓 계정 조회 실패"
+    if order.channel_id and account.id != order.channel_id:
+        logger.warning(
+            f"[송장전송] channel_id orphan 회복: order={order.order_number} "
+            f"old={order.channel_id} → new={account.id} "
+            f"(channel_name='{order.channel_name}')"
+        )
 
     market_type = (account.market_type or "").lower()
     courier = shipping_company or ""
