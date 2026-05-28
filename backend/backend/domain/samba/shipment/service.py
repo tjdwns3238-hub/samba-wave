@@ -1910,7 +1910,9 @@ class SambaShipmentService:
                             api_data = {}
                         if not product_no and api_data:
                             product_no = self._extract_market_product_no(api_data)
-                    if product_no:
+                    # "0"/"0.0" 무효 상품번호 차단(이슈#278) — ESM 옥션/G마켓 중복등록 silent fail 응답
+                    # 검증 통과시 기존 유효 market_product_no가 "0"으로 덮어써져 PUT /goods/0 404 무한
+                    if product_no and str(product_no).strip() not in ("0", "0.0"):
                         nos: dict[str, str] = {account_id: str(product_no)}
                         if market_type == "smartstore" and isinstance(api_data, dict):
                             origin_no = api_data.get("originProductNo") or ""
@@ -1946,9 +1948,16 @@ class SambaShipmentService:
                                 _esm_d = {}
                             _site_goods_no = str(_esm_d.get("siteGoodsNo", "") or "")
                             _seller_pid = str(_esm_d.get("sellerProductId", "") or "")
-                            if _site_goods_no:
+                            # "0"/"0.0" 무효값 차단(이슈#278) — 기존 유효 ID 덮어쓰기 방지
+                            if _site_goods_no and _site_goods_no.strip() not in (
+                                "0",
+                                "0.0",
+                            ):
                                 nos[account_id] = _site_goods_no
-                            if _seller_pid:
+                            if _seller_pid and _seller_pid.strip() not in (
+                                "0",
+                                "0.0",
+                            ):
                                 nos[f"{account_id}_origin"] = _seller_pid
                             if _site_goods_no or _seller_pid:
                                 logger.info(

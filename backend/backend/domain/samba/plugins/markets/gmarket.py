@@ -186,6 +186,21 @@ class GMarketMarketPlugin(MarketPlugin):
         goods_no = result.get("goodsNo", "")
         site_goods_no = result.get("siteGoodsNo", "")
 
+        # ESM 지마켓 중복등록 silent fail 감지(이슈#278)
+        # — 같은 상품 재등록 시 resultCode=0(성공) + goodsNo=0 + siteGoodsNo=null 반환.
+        # 검증 없이 통과시키면 market_product_nos가 "0"으로 덮어써져 PUT /goods/0 404 무한.
+        _gno_str = str(goods_no or "").strip()
+        if _gno_str in ("", "0", "0.0") or not site_goods_no:
+            logger.error(
+                f"[지마켓] 등록 응답 무효(중복등록 의심): goodsNo={goods_no!r}, "
+                f"siteGoodsNo={site_goods_no!r} → 기존 유효 ID 보존 위해 실패 처리"
+            )
+            return {
+                "success": False,
+                "message": "지마켓 중복등록 의심(goodsNo=0 또는 siteGoodsNo 누락) — 기존 등록 확인 필요",
+                "_already_registered": True,
+            }
+
         # 추가 이미지 설정 (등록 후 propagation 대기 필요 — ESM CDN 캐시)
         if pending_images and goods_no:
             try:
