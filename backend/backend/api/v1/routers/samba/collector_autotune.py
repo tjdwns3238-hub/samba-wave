@@ -176,6 +176,24 @@ _pc_cycle_count: dict[str, int] = {}
 _pc_restart_count: dict[str, int] = {}
 _pc_last_tick: dict[str, str] = {}
 _pc_site_tasks: dict[str, dict[str, asyncio.Task]] = {}
+# 사용자 중단(cancel-cycle) 억제 플래그 — (device_id, site) -> 재spawn 거부 만료 시각.
+# allowed_sites 가 비어있거나(확장앱) 불일치해도 중단을 보장하는 핵심 가드.
+# 코디네이터 spawn 루프 + 사이트 루프 CancelledError 핸들러가 함께 확인해
+# task.cancel() 후 즉시 자가부활/재spawn 되던 버그(2026-05-29) 차단.
+_pc_site_cancel_until: dict[tuple[str, str], float] = {}
+
+
+def _is_site_cancel_suppressed(dev: str, site: str) -> bool:
+    """(dev, site) 가 사용자 중단으로 재spawn 억제 중인지. 만료 시 자동 정리."""
+    until = _pc_site_cancel_until.get((dev, site), 0.0)
+    if until <= 0:
+        return False
+    if time.time() >= until:
+        _pc_site_cancel_until.pop((dev, site), None)
+        return False
+    return True
+
+
 # PC별 백그라운드 transmit fire-and-forget 태스크 — autotune_stop에서 함께 cancel.
 # fire-and-forget으로 띄운 transmit 잡이 main_task/site_tasks와 분리돼 정지 후에도 계속
 # 살아 전송되던 버그(2026-05-27) 해결용. dev별 분리, done 시 discard.
@@ -3383,6 +3401,11 @@ async def _site_autotune_loop(device_id: str, site: str):
                 if not _is_pc_running(device_id):
                     log.info("[오토튠][%s] 루프 취소됨 (정상 종료)", site)
                     break
+                # 사용자 중단(cancel-cycle) 억제 중이면 재시작 거부 — task.cancel()
+                # 직후 자가부활하던 버그(2026-05-29) 차단.
+                if _is_site_cancel_suppressed(device_id, site):
+                    log.info("[오토튠][%s] 사용자 중단 — 사이클 종료", site)
+                    break
                 # Watchdog에 의해 site_tasks에서 제거된 경우 → 좀비 루프 방지 종료
                 _my_task = _pc_st(device_id).get(site)
                 if _my_task is not asyncio.current_task():
@@ -3564,6 +3587,11 @@ async def _autotune_loop(device_id: str):
                 for _site in active_sites:
                     existing = _site_tasks.get(_site)
                     if existing and not existing.done():
+                        continue
+                    # 사용자 중단(cancel-cycle) 억제 중이면 재spawn 거부 —
+                    # allowed_sites 가 아직 site 를 갖고 있어도(데몬 persist/sync 지연,
+                    # 또는 확장앱 []) 억제 만료 전까지 부활 차단.
+                    if _is_site_cancel_suppressed(device_id, _site):
                         continue
                     task = asyncio.create_task(
                         _site_autotune_loop(device_id, _site),
@@ -4533,7 +4561,15 @@ async def autotune_cancel_cycle(body: CancelCycleRequest):
     if not dev or not site:
         return {"ok": False, "error": "device_id 와 site 필수"}
 
-    # 1) allowed_sites 에서 site 제거 (in-memory)
+    # 0) 재spawn 억제 — allowed_sites 가 비어있거나(확장앱) 불일치해도 중단 보장.
+    #    코디네이터 spawn / 사이트 루프 CancelledError 핸들러가 이 플래그를 확인해
+    #    task.cancel() 직후 자가부활/재spawn 하던 버그(2026-05-29 확정) 차단.
+    #    (확장앱 device 의 allowed_sites=[] 라서 기존 `site in current` 게이트가
+    #     항상 False → 중단 통째로 무효였던 root cause.)
+    _SUPPRESS_SEC = 60.0
+    _pc_site_cancel_until[(dev, site)] = time.time() + _SUPPRESS_SEC
+
+    # 1) allowed_sites 에서 site 제거 (등록돼 있을 때만) — 영구 재spawn 차단.
     _re_spawn_blocked = False
     current = _pc_allowed_sites.get(dev)
     if current is not None and site in current:
@@ -4541,8 +4577,8 @@ async def autotune_cancel_cycle(body: CancelCycleRequest):
         register_pc_allowed_sites(dev, new_sites, authoritative=True)
         _re_spawn_blocked = True
 
-        # 2) DB persist — lifecycle sync_pc_allowed_sites_from_db 가 다른 worker
-        # 에서 옛 값으로 복원하지 못하도록 진실 출처 갱신.
+        # DB persist — lifecycle sync_pc_allowed_sites_from_db 가 옛 값으로
+        # 복원하지 못하도록 진실 출처 갱신.
         try:
             from backend.db.orm import get_write_session
 
@@ -4553,11 +4589,12 @@ async def autotune_cancel_cycle(body: CancelCycleRequest):
                 f"[cancel-cycle] persist 실패 (무시): {_exc}"
             )
 
-        # 3) active_sites_cache invalidate — _get_active_sites_cached TTL 만료 대기 제거
-        _active_sites_cache["ts"] = 0.0
-        _active_sites_cache["data"] = None
+    # 2) active_sites_cache invalidate — 항상 (TTL 만료 대기 제거)
+    _active_sites_cache["ts"] = 0.0
+    _active_sites_cache["data"] = None
 
-    # 4) task cancel
+    # 3) task cancel — 항상 시도 (게이트 무관). pop 으로 사이트 루프의 watchdog
+    #    체크(_pc_st().get(site) != current_task)도 break 유도.
     site_tasks = _pc_site_tasks.get(dev) or {}
     task = site_tasks.get(site)
     cancelled = False
@@ -4566,13 +4603,12 @@ async def autotune_cancel_cycle(body: CancelCycleRequest):
         cancelled = True
     site_tasks.pop(site, None)
 
-    if not cancelled and not _re_spawn_blocked:
-        return {"ok": False, "error": f"활성 cycle 없음: {dev[:12]} / {site}"}
-
+    # 억제 플래그를 항상 설정하므로 "활성 cycle 없음" 조기 반환 제거 — 중단은 항상 ok.
     return {
         "ok": True,
         "cancelled": cancelled,
         "respawn_blocked": _re_spawn_blocked,
+        "suppressed_sec": int(_SUPPRESS_SEC),
         "device_id": dev,
         "site": site,
     }
