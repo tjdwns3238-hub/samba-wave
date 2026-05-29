@@ -198,14 +198,15 @@ export default function AnalyticsPage() {
     }
 
     return (
-      <div style={{ ...card, padding: '1.25rem', marginBottom: '1.5rem' }}>
+      <div style={{ marginBottom: '1.5rem' }}>
         <h3 style={{
-          fontSize: '0.9375rem', fontWeight: 600, color: '#FF8C00', marginBottom: '1rem',
+          fontSize: '0.9375rem', fontWeight: 600, color: '#FF8C00',
           position: 'sticky', top: '64px', zIndex: 10,
-          background: 'rgba(26,26,26,0.97)', backdropFilter: 'blur(4px)',
-          padding: '0.5rem 0', margin: '-0.25rem 0 1rem 0',
+          background: 'rgba(15,15,15,0.97)', backdropFilter: 'blur(4px)',
+          padding: '0.5rem 1.25rem', marginBottom: 0,
           borderBottom: '1px solid #2D2D2D',
         }}>{title}</h3>
+        <div style={{ ...card, padding: '1.25rem', borderTopLeftRadius: 0, borderTopRightRadius: 0 }}>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: `${(columns.length + 2) * 120}px` }}>
             <thead>
@@ -275,6 +276,7 @@ export default function AnalyticsPage() {
             </tbody>
           </table>
         </div>
+      </div>
       </div>
     )
   }
@@ -408,58 +410,111 @@ export default function AnalyticsPage() {
       {/* ── 차트 + 추가 분석 섹션 ── */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.5rem', marginTop: '1.5rem' }}>
         {/* 매출 추이 라인차트 */}
-        <div style={{ ...card, padding: '1.25rem' }}>
+        <div>
           <div style={{
-            fontSize: '0.9375rem', fontWeight: 700, marginBottom: '0.75rem',
+            fontSize: '0.9375rem', fontWeight: 700,
             position: 'sticky', top: '64px', zIndex: 10,
-            background: 'rgba(26,26,26,0.97)', backdropFilter: 'blur(4px)',
-            padding: '0.5rem 0', margin: '-0.25rem 0 0.75rem 0',
+            background: 'rgba(15,15,15,0.97)', backdropFilter: 'blur(4px)',
+            padding: '0.5rem 1.25rem',
             borderBottom: '1px solid #2D2D2D',
+            borderRadius: '12px 12px 0 0',
+            border: '1px solid #2D2D2D',
           }}>최근 30일 매출 추이</div>
-          <RevenueTrendLine data={dailyData} />
+          <div style={{ ...card, padding: '1.25rem', borderTopLeftRadius: 0, borderTopRightRadius: 0, borderTop: 'none' }}>
+            <RevenueTrendLine data={dailyData} />
+          </div>
         </div>
       </div>
 
       {/* 브랜드별 매출 */}
       {brandData.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginTop: '1.5rem' }}>
-          <div style={{ ...card, padding: '1.25rem' }}>
+          <div>
             <div style={{
-              fontSize: '0.9375rem', fontWeight: 700, marginBottom: '0.75rem',
+              fontSize: '0.9375rem', fontWeight: 700,
               position: 'sticky', top: '64px', zIndex: 10,
-              background: 'rgba(26,26,26,0.97)', backdropFilter: 'blur(4px)',
-              padding: '0.5rem 0', margin: '-0.25rem 0 0.75rem 0',
-              borderBottom: '1px solid #2D2D2D',
+              background: 'rgba(15,15,15,0.97)', backdropFilter: 'blur(4px)',
+              padding: '0.5rem 1.25rem',
+              borderRadius: '12px 12px 0 0', border: '1px solid #2D2D2D',
             }}>브랜드별 매출 TOP 10</div>
-            <SalesBarChart data={brandData} nameKey="brand" valueKey="sales" />
+            <div style={{ ...card, padding: '1.25rem', borderTopLeftRadius: 0, borderTopRightRadius: 0, borderTop: 'none' }}>
+              <SalesBarChart data={brandData} nameKey="brand" valueKey="sales" />
+            </div>
           </div>
-          <div style={{ ...card, padding: '1.25rem' }}>
+          <div>
             <div style={{
-              fontSize: '0.9375rem', fontWeight: 700, marginBottom: '0.75rem',
+              fontSize: '0.9375rem', fontWeight: 700,
               position: 'sticky', top: '64px', zIndex: 10,
-              background: 'rgba(26,26,26,0.97)', backdropFilter: 'blur(4px)',
-              padding: '0.5rem 0', margin: '-0.25rem 0 0.75rem 0',
-              borderBottom: '1px solid #2D2D2D',
+              background: 'rgba(15,15,15,0.97)', backdropFilter: 'blur(4px)',
+              padding: '0.5rem 1.25rem',
+              borderRadius: '12px 12px 0 0', border: '1px solid #2D2D2D',
             }}>브랜드별 상세</div>
+            <div style={{ ...card, padding: '1.25rem', borderTopLeftRadius: 0, borderTopRightRadius: 0, borderTop: 'none' }}>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', fontSize: '0.8125rem', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid #2D2D2D' }}>
+                      <th style={{ padding: '0.5rem', textAlign: 'left', color: '#999' }}>브랜드</th>
+                      <th style={{ padding: '0.5rem', textAlign: 'right', color: '#999' }}>매출</th>
+                      <th style={{ padding: '0.5rem', textAlign: 'right', color: '#999' }}>이익</th>
+                      <th style={{ padding: '0.5rem', textAlign: 'right', color: '#999' }}>건수</th>
+                      <th style={{ padding: '0.5rem', textAlign: 'right', color: '#999' }}>이윤율</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {brandData.slice(0, 15).map(b => (
+                      <tr key={b.brand} style={{ borderBottom: '1px solid #1A1A1A' }}>
+                        <td style={{ padding: '0.4rem 0.5rem' }}>{b.brand}</td>
+                        <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', color: '#FF8C00' }}>₩{fmt(b.sales)}</td>
+                        <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', color: '#22C55E' }}>₩{fmt(b.profit)}</td>
+                        <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{fmt(b.orders)}</td>
+                        <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{b.avg_margin_rate}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 소싱처 ROI */}
+      {sourcingRoi.length > 0 && (
+        <div style={{ marginTop: '1.5rem' }}>
+          <div style={{
+            fontSize: '0.9375rem', fontWeight: 700,
+            position: 'sticky', top: '64px', zIndex: 10,
+            background: 'rgba(15,15,15,0.97)', backdropFilter: 'blur(4px)',
+            padding: '0.5rem 1.25rem',
+            borderRadius: '12px 12px 0 0', border: '1px solid #2D2D2D',
+          }}>소싱처별 ROI 분석</div>
+          <div style={{ ...card, padding: '1.25rem', borderTopLeftRadius: 0, borderTopRightRadius: 0, borderTop: 'none' }}>
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', fontSize: '0.8125rem', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid #2D2D2D' }}>
-                    <th style={{ padding: '0.5rem', textAlign: 'left', color: '#999' }}>브랜드</th>
+                    <th style={{ padding: '0.5rem', textAlign: 'left', color: '#999' }}>소싱처</th>
                     <th style={{ padding: '0.5rem', textAlign: 'right', color: '#999' }}>매출</th>
+                    <th style={{ padding: '0.5rem', textAlign: 'right', color: '#999' }}>원가</th>
                     <th style={{ padding: '0.5rem', textAlign: 'right', color: '#999' }}>이익</th>
                     <th style={{ padding: '0.5rem', textAlign: 'right', color: '#999' }}>건수</th>
+                    <th style={{ padding: '0.5rem', textAlign: 'right', color: '#999' }}>건당이익</th>
                     <th style={{ padding: '0.5rem', textAlign: 'right', color: '#999' }}>이윤율</th>
+                    <th style={{ padding: '0.5rem', textAlign: 'right', color: '#999' }}>ROI</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {brandData.slice(0, 15).map(b => (
-                    <tr key={b.brand} style={{ borderBottom: '1px solid #1A1A1A' }}>
-                      <td style={{ padding: '0.4rem 0.5rem' }}>{b.brand}</td>
-                      <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', color: '#FF8C00' }}>₩{fmt(b.sales)}</td>
-                      <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', color: '#22C55E' }}>₩{fmt(b.profit)}</td>
-                      <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{fmt(b.orders)}</td>
-                      <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{b.avg_margin_rate}%</td>
+                  {sourcingRoi.map(r => (
+                    <tr key={r.source_site} style={{ borderBottom: '1px solid #1A1A1A' }}>
+                      <td style={{ padding: '0.4rem 0.5rem', fontWeight: 600 }}>{r.source_site}</td>
+                      <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', color: '#FF8C00' }}>₩{fmt(r.total_revenue)}</td>
+                      <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>₩{fmt(r.total_cost)}</td>
+                      <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', color: '#22C55E' }}>₩{fmt(r.total_profit)}</td>
+                      <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{fmt(r.order_count)}</td>
+                      <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>₩{fmt(r.avg_profit_per_order)}</td>
+                      <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{r.avg_margin_rate}%</td>
+                      <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', color: r.roi >= 0 ? '#22C55E' : '#EF4444', fontWeight: 600 }}>{r.roi}%</td>
                     </tr>
                   ))}
                 </tbody>
@@ -469,75 +524,34 @@ export default function AnalyticsPage() {
         </div>
       )}
 
-      {/* 소싱처 ROI */}
-      {sourcingRoi.length > 0 && (
-        <div style={{ ...card, padding: '1.25rem', marginTop: '1.5rem' }}>
-          <div style={{
-            fontSize: '0.9375rem', fontWeight: 700, marginBottom: '0.75rem',
-            position: 'sticky', top: '64px', zIndex: 10,
-            background: 'rgba(26,26,26,0.97)', backdropFilter: 'blur(4px)',
-            padding: '0.5rem 0', margin: '-0.25rem 0 0.75rem 0',
-            borderBottom: '1px solid #2D2D2D',
-          }}>소싱처별 ROI 분석</div>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', fontSize: '0.8125rem', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid #2D2D2D' }}>
-                  <th style={{ padding: '0.5rem', textAlign: 'left', color: '#999' }}>소싱처</th>
-                  <th style={{ padding: '0.5rem', textAlign: 'right', color: '#999' }}>매출</th>
-                  <th style={{ padding: '0.5rem', textAlign: 'right', color: '#999' }}>원가</th>
-                  <th style={{ padding: '0.5rem', textAlign: 'right', color: '#999' }}>이익</th>
-                  <th style={{ padding: '0.5rem', textAlign: 'right', color: '#999' }}>건수</th>
-                  <th style={{ padding: '0.5rem', textAlign: 'right', color: '#999' }}>건당이익</th>
-                  <th style={{ padding: '0.5rem', textAlign: 'right', color: '#999' }}>이윤율</th>
-                  <th style={{ padding: '0.5rem', textAlign: 'right', color: '#999' }}>ROI</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sourcingRoi.map(r => (
-                  <tr key={r.source_site} style={{ borderBottom: '1px solid #1A1A1A' }}>
-                    <td style={{ padding: '0.4rem 0.5rem', fontWeight: 600 }}>{r.source_site}</td>
-                    <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', color: '#FF8C00' }}>₩{fmt(r.total_revenue)}</td>
-                    <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>₩{fmt(r.total_cost)}</td>
-                    <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', color: '#22C55E' }}>₩{fmt(r.total_profit)}</td>
-                    <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{fmt(r.order_count)}</td>
-                    <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>₩{fmt(r.avg_profit_per_order)}</td>
-                    <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }}>{r.avg_margin_rate}%</td>
-                    <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', color: r.roi >= 0 ? '#22C55E' : '#EF4444', fontWeight: 600 }}>{r.roi}%</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
       {/* 베스트셀러 */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.5rem', marginTop: '1.5rem' }}>
-        <div style={{ ...card, padding: '1.25rem' }}>
+        <div>
           <div style={{
-            fontSize: '0.9375rem', fontWeight: 700, color: '#FF8C00', marginBottom: '0.75rem',
+            fontSize: '0.9375rem', fontWeight: 700, color: '#FF8C00',
             position: 'sticky', top: '64px', zIndex: 10,
-            background: 'rgba(26,26,26,0.97)', backdropFilter: 'blur(4px)',
-            padding: '0.5rem 0', margin: '-0.25rem 0 0.75rem 0',
-            borderBottom: '1px solid #2D2D2D',
+            background: 'rgba(15,15,15,0.97)', backdropFilter: 'blur(4px)',
+            padding: '0.5rem 1.25rem',
+            borderRadius: '12px 12px 0 0', border: '1px solid #2D2D2D',
           }}>베스트셀러 TOP 10 (30일)</div>
-          {bestSellers.length > 0 ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              {bestSellers.map((p, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.4rem 0', borderBottom: '1px solid #1A1A1A', fontSize: '0.8125rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: 0 }}>
-                    <span style={{ color: '#FF8C00', fontWeight: 700, width: '1.5rem' }}>{i + 1}</span>
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.product_name}</span>
+          <div style={{ ...card, padding: '1.25rem', borderTopLeftRadius: 0, borderTopRightRadius: 0, borderTop: 'none' }}>
+            {bestSellers.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                {bestSellers.map((p, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.4rem 0', borderBottom: '1px solid #1A1A1A', fontSize: '0.8125rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: 0 }}>
+                      <span style={{ color: '#FF8C00', fontWeight: 700, width: '1.5rem' }}>{i + 1}</span>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.product_name}</span>
+                    </div>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', whiteSpace: 'nowrap', marginLeft: '0.5rem' }}>
+                      <span style={{ color: '#888', fontSize: '0.75rem' }}>{fmt(p.orders)}건</span>
+                      <span style={{ color: '#FF8C00', fontWeight: 600 }}>₩{fmt(p.sales)}</span>
+                    </span>
                   </div>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', whiteSpace: 'nowrap', marginLeft: '0.5rem' }}>
-                    <span style={{ color: '#888', fontSize: '0.75rem' }}>{fmt(p.orders)}건</span>
-                    <span style={{ color: '#FF8C00', fontWeight: 600 }}>₩{fmt(p.sales)}</span>
-                  </span>
-                </div>
-              ))}
-            </div>
-          ) : <p style={{ color: '#666', fontSize: '0.8rem' }}>데이터 없음</p>}
+                ))}
+              </div>
+            ) : <p style={{ color: '#666', fontSize: '0.8rem' }}>데이터 없음</p>}
+          </div>
         </div>
       </div>
     </div>
