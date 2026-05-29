@@ -161,6 +161,7 @@ def _is_stale_conn_error(exc: BaseException) -> bool:
         or "ssl connection has been closed" in msg.lower()
         or "terminating connection due to" in msg.lower()
         or "session is in 'prepared' state" in msg.lower()
+        or "greenlet_spawn has not been called" in msg.lower()
     )
 
 
