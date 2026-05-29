@@ -1,6 +1,7 @@
 """나이키 소싱처 플러그인."""
 
 import logging
+import os
 from typing import TYPE_CHECKING
 
 import httpx
@@ -11,6 +12,19 @@ if TYPE_CHECKING:
     from backend.domain.samba.collector.refresher import RefreshResult
 
 logger = logging.getLogger(__name__)
+
+
+def _availability_enabled() -> bool:
+    """`NIKE_AVAILABILITY_ENABLED` env가 truthy면 size-level reconcile 활성.
+
+    default off (opt-in). 운영 동작 변경 없이 머지 후 별도 env 설정으로 켤 수 있도록 함.
+    """
+    return os.environ.get("NIKE_AVAILABILITY_ENABLED", "0").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 class NikePlugin(SourcingPlugin):
@@ -93,6 +107,42 @@ class NikePlugin(SourcingPlugin):
         new_sale_price = fresh.get("sale_price")
         new_original_price = fresh.get("original_price")
         new_options = fresh.get("options")  # 사이즈 목록
+
+        # 사이즈별 availability reconcile — opt-in (NIKE_AVAILABILITY_ENABLED=1).
+        # PDP `sizes[*].status='ACTIVE'`는 listing availability 메타데이터라
+        # size-level stock source로는 부적합. 일부 SKU에서 모든 사이즈가 ACTIVE로
+        # 평탄화되어 sold_out/restock 감지 불가한 경로가 있음.
+        # threads API(_fetch_availability)는 GTIN→available bool을 노출하므로
+        # 매칭된 GTIN만 stock 보정. 응답 누락/실패는 기존 파서 결과 유지 (보수적).
+        if new_options and _availability_enabled():
+            try:
+                availability = await client._fetch_availability(site_product_id)
+            except Exception as e:
+                logger.warning(
+                    f"[Nike] availability 조회 실패 {site_product_id}: {e}"
+                )
+                availability = {}
+            if availability:
+                matched = 0
+                missing = 0
+                for opt in new_options:
+                    gtin = opt.get("gtin")
+                    if not gtin:
+                        continue
+                    if gtin in availability:
+                        opt["stock"] = 99 if availability[gtin] else 0
+                        matched += 1
+                    else:
+                        # threads API 응답에 없는 GTIN — 기존 stock 유지 (절대 0 강제 X).
+                        # 응답 누락은 region/캐시/일시 숨김 등 다양한 원인 가능.
+                        missing += 1
+                if missing:
+                    logger.info(
+                        "[Nike] availability reconcile %s: matched=%d missing_gtin=%d",
+                        site_product_id,
+                        matched,
+                        missing,
+                    )
 
         old_sale_price = getattr(product, "sale_price", None)
         old_original_price = getattr(product, "original_price", None)
