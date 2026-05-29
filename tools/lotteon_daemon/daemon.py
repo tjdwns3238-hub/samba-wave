@@ -50,6 +50,7 @@ if getattr(sys, "frozen", False):
             os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(_bundled_browsers)
 
 import httpx  # noqa: E402  # playwright env 설정 후 import 필수
+from urllib.parse import urlparse  # noqa: E402
 from playwright.async_api import (  # noqa: E402
     BrowserContext,
     Page,
@@ -77,7 +78,48 @@ except ImportError:
 # ====================================================================
 # 데몬 버전 — build.ps1 가 갱신. 자동 업데이트 비교 기준.
 # ====================================================================
-DAEMON_VERSION = "1.4.19"
+DAEMON_VERSION = "1.4.20"
+
+
+# ── 가격수집 도메인 화이트리스트 ───────────────────────────────────────────
+# 가격/재고에 필요한 건 사이트 본체 1~2개 도메인뿐인데, PDP 를 통째로 로딩하면
+# 구글애널·구글광고·RTB House·CDN·국내추적기 등 제3자 호스트 수십 개로 동시 연결이
+# 깔린다(ABC 실측 29개, SSG 35개). 이 연결 버스트가 약한 공유기를 막아 인터넷 끊김
+# 유발 + 추적 JS 가 렌더러 메모리를 부풀린다. 사이트별 "필수 도메인"만 허용하고
+# 나머지 script/xhr/fetch 를 전부 차단한다(이미지/CSS/폰트/미디어는 기존대로 타입 차단).
+#
+# A/B 실측 검증(2026-05-30, 프로덕션 PDP, 로그인 상태):
+#   · ABCmart  a-rt.com           → 외부호스트 29→2,  가격/옵션 5/5 동일
+#   · SSG      ssg.com/ssgcdn.com → 외부호스트 35→6,  가격/옵션 5/5 동일
+#   · LOTTEON  lotteon.com        → 외부호스트 31→5,  가격/혜택가/옵션 5/5 동일
+#     (필수 5개 전부 lotteon.com 서브도메인: www/contents/pbf/static/llis-goodsdetail)
+#   (ABC: image.a-rt.com 까지 막으면 jQuery 등 본체 JS 누락 → '최대 혜택가' DOM 미렌더 →
+#    API 폴백으로 200~300원 오차 발생 확인. 그래서 a-rt.com 전체 허용이 정답.)
+#
+# 미검증 사이트는 본 맵에 없으면 화이트리스트 미적용(타입 차단만) → 기존 동작 유지, 회귀 0.
+_PRICE_ALLOW_DOMAINS: dict[str, tuple[str, ...]] = {
+    "ABCmart": ("a-rt.com",),
+    "GrandStage": ("a-rt.com",),
+    "SSG": ("ssg.com", "ssgcdn.com"),
+    "LOTTEON": ("lotteon.com",),
+}
+
+
+def _compute_price_whitelist(active: list[str]) -> tuple[bool, tuple[str, ...]]:
+    """active_sites 가 전부 검증된 사이트면 (True, 허용도메인 union) 반환.
+
+    하나라도 미검증/미배정이면 (False, ()) — 화이트리스트 미적용(타입차단만, 회귀 0).
+    여러 사이트 동시 담당 시 허용도메인은 union 이라 각 사이트는 자기 도메인만 통과하고
+    다른 사이트 도메인은 어차피 그 사이트 페이지에서 요청 안 되므로 안전하다.
+    """
+    if not active:
+        return False, ()
+    domains: set[str] = set()
+    for s in active:
+        if s not in _PRICE_ALLOW_DOMAINS:
+            return False, ()  # 미검증 사이트(LOTTEON 등) 포함 — 안전하게 비활성
+        domains.update(_PRICE_ALLOW_DOMAINS[s])
+    return True, tuple(sorted(domains))
 
 
 # ====================================================================
@@ -2290,20 +2332,34 @@ async def run_daemon(args: argparse.Namespace) -> int:
                 context_kwargs["storage_state"] = str(storage_state_path)
             context: BrowserContext = await browser.new_context(**context_kwargs)
 
+            # 가격수집 도메인 화이트리스트 상태 — 런타임 active_sites 변경 시 _sync_assignment 가 갱신.
+            _wl_on0, _wl_dom0 = _compute_price_whitelist(active_sites)
+            _wl = {"on": _wl_on0, "domains": _wl_dom0}
+            logger.info(
+                "도메인 화이트리스트: on=%s domains=%s (사이트=%s)",
+                _wl_on0,
+                _wl_dom0,
+                active_sites,
+            )
+
             # 무거운 서브리소스 차단 — 가격은 JSON API + DOM 텍스트, 이미지는 <img> src
             # 속성에서만 읽으므로 렌더링된 이미지/동영상/폰트/CSS 불필요.
             # CSS 차단 안전성: ABCmart(29% 절감)·SSG(19%)·LOTTEON(10%) 실측 검증 완료.
             # 가격·옵션·혜택가 파싱값 A/B 동일 확인(2026-05-29).
+            # 추가(2026-05-30): 검증된 사이트는 제3자(광고/추적) script/xhr 도 차단 —
+            # _PRICE_ALLOW_DOMAINS 의 필수 도메인만 허용. 연결 29→2·35→6, 파싱 무손실 검증.
             async def _block_heavy(route):
-                if route.request.resource_type in (
-                    "image",
-                    "media",
-                    "font",
-                    "stylesheet",
-                ):
+                rt = route.request.resource_type
+                if rt in ("image", "media", "font", "stylesheet"):
                     await route.abort()
-                else:
-                    await route.continue_()
+                    return
+                # 검증된 사이트(_wl["on"]=True)만 제3자 도메인 차단. 미검증은 통과(회귀 0).
+                if _wl["on"]:
+                    host = urlparse(route.request.url).hostname or ""
+                    if host and not any(host.endswith(d) for d in _wl["domains"]):
+                        await route.abort()  # 제3자 광고/추적 차단
+                        return
+                await route.continue_()
 
             await context.route("**/*", _block_heavy)
             page = await context.new_page()
@@ -2595,6 +2651,16 @@ async def run_daemon(args: argparse.Namespace) -> int:
                         active_sites = list(assigned)
                         allowed_sites_header = ",".join(active_sites)
                         await _ensure_login_for_new_sites(active_sites)
+                # 담당 사이트 변경 시 도메인 화이트리스트 갱신
+                _new_on, _new_dom = _compute_price_whitelist(active_sites)
+                if (_new_on, _new_dom) != (_wl["on"], _wl["domains"]):
+                    _wl["on"], _wl["domains"] = _new_on, _new_dom
+                    logger.info(
+                        "도메인 화이트리스트 갱신: on=%s domains=%s (사이트=%s)",
+                        _new_on,
+                        _new_dom,
+                        active_sites,
+                    )
                 return _eff_conc(conc_raw)
 
             _cur_conc = await _sync_assignment()
