@@ -2572,6 +2572,122 @@ async def _do_sync_cs_from_markets(
                 except Exception as e:
                     logger.warning(f"[CS동기화] 쿠팡({cp_label}) 실패: {e}")
                     errors.append(f"쿠팡({cp_label}): {e}")
+
+                # ── 쿠팡 고객센터 CS 문의 수집 ──
+                try:
+                    cc_items = await cp_client.get_call_center_inquiries(days=7)
+                    cc_synced = 0
+                    for cc_item in cc_items:
+                        cc_inq_id = str(cc_item.get("inquiryId", "") or "")
+                        if not cc_inq_id:
+                            continue
+                        # onlineInquiries와 충돌 방지용 prefix
+                        cc_market_inquiry_no = f"cc_{cc_inq_id}"
+
+                        cc_existing = await session.execute(
+                            select(SambaCSInquiry).where(
+                                SambaCSInquiry.market == "쿠팡",
+                                SambaCSInquiry.market_inquiry_no
+                                == cc_market_inquiry_no,
+                                SambaCSInquiry.is_hidden == False,  # noqa: E712
+                            )
+                        )
+                        if cc_existing.scalar_one_or_none():
+                            continue
+
+                        cc_content = str(cc_item.get("content", "") or "")
+                        cc_order_id = str(cc_item.get("orderId", "") or "") or None
+                        cc_phone = str(cc_item.get("buyerPhone", "") or "") or None
+                        cc_product_name = str(cc_item.get("itemName", "") or "")
+                        cc_receipt_cat = str(cc_item.get("receiptCategory", "") or "")
+
+                        # vendorItemId: list 또는 단일값
+                        vendor_item_ids = cc_item.get("vendorItemId") or []
+                        if isinstance(vendor_item_ids, list):
+                            cc_product_no = (
+                                str(vendor_item_ids[0]) if vendor_item_ids else ""
+                            )
+                        else:
+                            cc_product_no = (
+                                str(vendor_item_ids) if vendor_item_ids else ""
+                            )
+
+                        # 답변 여부: csPartnerCounselingStatus 또는 vendor 답변 존재
+                        cc_partner_status = str(
+                            cc_item.get("csPartnerCounselingStatus", "") or ""
+                        )
+                        replies = cc_item.get("replies") or []
+                        vendor_replies = [
+                            r
+                            for r in replies
+                            if isinstance(r, dict) and r.get("answerType") == "vendor"
+                        ]
+                        cc_is_answered = cc_partner_status == "answered" or bool(
+                            vendor_replies
+                        )
+                        cc_reply_content = ""
+                        if vendor_replies:
+                            last_vr = vendor_replies[-1]
+                            cc_reply_content = str(last_vr.get("content", "") or "")
+
+                        raw_cc_dt = str(cc_item.get("inquiryAt", "") or "")
+                        cc_parsed_date = None
+                        for fmt in (
+                            "%Y-%m-%dT%H:%M:%S",
+                            "%Y-%m-%d %H:%M:%S",
+                            "%Y-%m-%d",
+                        ):
+                            try:
+                                cc_parsed_date = datetime.strptime(raw_cc_dt[:19], fmt)
+                                break
+                            except Exception:
+                                continue
+                        if cc_parsed_date is None:
+                            cc_parsed_date = datetime.now(timezone.utc)
+
+                        cc_content_full = (
+                            f"[{cc_receipt_cat}]\n{cc_content}".strip()
+                            if cc_receipt_cat
+                            else cc_content
+                        )
+
+                        cc_data = {
+                            "market": "쿠팡",
+                            "market_inquiry_no": cc_market_inquiry_no,
+                            "market_answer_no": None,
+                            "market_order_id": cc_order_id,
+                            "market_product_no": cc_product_no or None,
+                            "account_id": cp_acc.id,
+                            "account_name": cp_label,
+                            "inquiry_type": "call_center",
+                            "questioner": cc_phone,
+                            "product_name": cc_product_name,
+                            "product_image": "",
+                            "product_link": "",
+                            "original_link": "",
+                            "collected_product_id": None,
+                            "content": cc_content_full,
+                            "reply": cc_reply_content if cc_is_answered else None,
+                            "reply_status": "replied" if cc_is_answered else "pending",
+                            "inquiry_date": cc_parsed_date,
+                            "replied_at": None,
+                        }
+                        try:
+                            await svc.create_inquiry(cc_data)
+                            cc_synced += 1
+                        except Exception as ce:
+                            logger.warning(
+                                f"[CS동기화] 쿠팡 고객센터 문의 {cc_inq_id} 저장 실패: {ce}"
+                            )
+
+                    if cc_synced > 0:
+                        logger.info(
+                            f"[CS동기화] 쿠팡 고객센터({cp_label}): {cc_synced}건 동기화"
+                        )
+                    synced += cc_synced
+                except Exception as e:
+                    logger.warning(f"[CS동기화] 쿠팡 고객센터({cp_label}) 실패: {e}")
+                    errors.append(f"쿠팡 고객센터({cp_label}): {e}")
         except Exception as e:
             logger.warning(f"[CS동기화] 쿠팡 계정 조회 실패: {e}")
 

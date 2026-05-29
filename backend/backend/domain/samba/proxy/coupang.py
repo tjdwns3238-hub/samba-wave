@@ -1838,6 +1838,56 @@ class CoupangClient:
         logger.info(f"[쿠팡] CS 문의 조회 완료: {len(all_inquiries)}건 (최근 {days}일)")
         return all_inquiries
 
+    async def get_call_center_inquiries(
+        self,
+        days: int = 7,
+        status: str = "NONE",
+        max_per_page: int = 30,
+    ) -> list[dict[str, Any]]:
+        """쿠팡 고객센터 CS 문의 조회.
+
+        쿠팡 Wing API v5: GET /v2/.../api/v5/vendors/{vendorId}/callCenterInquiries
+        status: NONE=전체, ANSWER=답변완료, NO_ANSWER=미답변, TRANSFER=미확인
+        조회 기간 최대 7일, pageSize 최대 30.
+        """
+        if days > 7:
+            logger.warning(f"[쿠팡] 고객센터 CS 조회 days={days} 초과 — 7일로 clamp")
+            days = 7
+
+        now = datetime.now(timezone.utc)
+        since = now - timedelta(days=max(days - 1, 0))
+
+        all_inquiries: list[dict[str, Any]] = []
+
+        for page_num in range(1, 101):
+            params: dict[str, str] = {
+                "inquiryStartAt": since.strftime("%Y-%m-%d"),
+                "inquiryEndAt": now.strftime("%Y-%m-%d"),
+                "vendorId": self.vendor_id,
+                "partnerCounselingStatus": status,
+                "pageSize": str(max_per_page),
+                "pageNum": str(page_num),
+            }
+            path = f"/v2/providers/openapi/apis/api/v5/vendors/{self.vendor_id}/callCenterInquiries"
+            result = await self._call_api("GET", path, params=params)
+
+            data = result.get("data", {}) if isinstance(result, dict) else {}
+            page_items: list[dict[str, Any]] = []
+            if isinstance(data, dict):
+                items = data.get("content", [])
+                if isinstance(items, list):
+                    page_items = items
+
+            all_inquiries.extend(page_items)
+
+            if len(page_items) < max_per_page:
+                break
+
+        logger.info(
+            f"[쿠팡] 고객센터 CS 조회 완료: {len(all_inquiries)}건 (최근 {days}일)"
+        )
+        return all_inquiries
+
     async def reply_inquiry(
         self,
         inquiry_id: int,
