@@ -255,7 +255,7 @@ export default function ReturnsPage() {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
         <div>
           <h2 style={{ fontSize: '1.5rem', fontWeight: 700, color: '#E5E5E5', marginBottom: '0.25rem' }}>반품교환</h2>
-          <p style={{ fontSize: '0.875rem', color: '#888' }}>반품교환 요청을 관리합니다</p>
+          <p style={{ fontSize: '0.875rem', color: '#888' }}>반품교환 요청을 관리</p>
         </div>
       </div>
 
