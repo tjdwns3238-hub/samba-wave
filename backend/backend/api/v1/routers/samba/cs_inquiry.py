@@ -2630,6 +2630,19 @@ async def _do_sync_cs_from_markets(
                             last_vr = vendor_replies[-1]
                             cc_reply_content = str(last_vr.get("content", "") or "")
 
+                        # 목록 API 최상위 content는 "상담이력" placeholder 고정값.
+                        # 실제 문의 본문은 replies[] 중 csAgent 글의 content에 있음.
+                        csagent_replies = [
+                            r
+                            for r in replies
+                            if isinstance(r, dict) and r.get("answerType") == "csAgent"
+                        ]
+                        cc_body = ""
+                        if csagent_replies:
+                            cc_body = str(csagent_replies[0].get("content", "") or "")
+                        if not cc_body:
+                            cc_body = cc_content  # fallback: "상담이력"
+
                         raw_cc_dt = str(cc_item.get("inquiryAt", "") or "")
                         cc_parsed_date = None
                         for fmt in (
@@ -2646,9 +2659,9 @@ async def _do_sync_cs_from_markets(
                             cc_parsed_date = datetime.now(timezone.utc)
 
                         cc_content_full = (
-                            f"[{cc_receipt_cat}]\n{cc_content}".strip()
+                            f"[{cc_receipt_cat}]\n{cc_body}".strip()
                             if cc_receipt_cat
-                            else cc_content
+                            else cc_body
                         )
 
                         cc_data = {
