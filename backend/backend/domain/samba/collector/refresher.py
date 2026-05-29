@@ -702,7 +702,11 @@ async def _refresh_product_inner(
     # 소싱처 플러그인 우선 호출
     from backend.domain.samba.plugins import SOURCING_PLUGINS
 
-    plugin = SOURCING_PLUGINS.get(source_site)
+    # DB의 source_site 값과 플러그인 site_name 대소문자 불일치 방어 (예: DB 'Nike' vs site_name 'NIKE').
+    # 일치하면 첫 lookup 적중, 불일치면 .upper() fallback. enrich.py 의 동일 패턴.
+    plugin = SOURCING_PLUGINS.get(source_site) or (
+        SOURCING_PLUGINS.get(source_site.upper()) if source_site else None
+    )
     if plugin:
         product._refresh_idx = idx
         product._refresh_total = total
