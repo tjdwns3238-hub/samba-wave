@@ -33,7 +33,7 @@ export interface StoreSettingsState {
   lotteHomeReturnPlaceOptions: { value: string; label: string }[]
   networkIps: { web: string; local: string }
   networkIpStatus: string
-  coupangOutboundList: Array<{ code: string; name: string; address: string }>
+  coupangOutboundList: Array<{ code: string; name: string; address: string; deliveryCode?: string }>
   coupangInboundList: Array<{ code: string; name: string; address: string; address_detail: string; zipcode: string; phone: string }>
 }
 
@@ -56,7 +56,7 @@ export interface StoreSettingsActions {
   setLotteonDeliveryPolicyOptions: React.Dispatch<React.SetStateAction<{ value: string; label: string }[]>>
   setLotteonWarehouseOptions: React.Dispatch<React.SetStateAction<{ departure: { value: string; label: string }[]; return_: { value: string; label: string }[] }>>
   setElevenstDispatchTemplateOptions: React.Dispatch<React.SetStateAction<{ value: string; label: string }[]>>
-  setCoupangOutboundList: React.Dispatch<React.SetStateAction<Array<{ code: string; name: string; address: string }>>>
+  setCoupangOutboundList: React.Dispatch<React.SetStateAction<Array<{ code: string; name: string; address: string; deliveryCode?: string }>>>
   setCoupangInboundList: React.Dispatch<React.SetStateAction<Array<{ code: string; name: string; address: string; address_detail: string; zipcode: string; phone: string }>>>
   loadCoupangShippingPlaces: (accountId?: string) => Promise<void>
   setLotteHomeDeliveryPolicyOptions: React.Dispatch<React.SetStateAction<{ value: string; label: string }[]>>
@@ -87,7 +87,7 @@ export function useStoreSettings(): StoreSettingsState & StoreSettingsActions {
   const [elevenstDispatchTemplateOptions, setElevenstDispatchTemplateOptions] = useState<{ value: string; label: string }[]>([])
   const [networkIps, setNetworkIps] = useState({ web: '', local: '' })
   const [networkIpStatus, setNetworkIpStatus] = useState('')
-  const [coupangOutboundList, setCoupangOutboundList] = useState<Array<{ code: string; name: string; address: string }>>([])
+  const [coupangOutboundList, setCoupangOutboundList] = useState<Array<{ code: string; name: string; address: string; deliveryCode?: string }>>([])
   const [coupangInboundList, setCoupangInboundList] = useState<Array<{ code: string; name: string; address: string; address_detail: string; zipcode: string; phone: string }>>([])
   const [lotteHomeDeliveryPolicyOptions, setLotteHomeDeliveryPolicyOptions] = useState<{ value: string; label: string }[]>([])
   const [lotteHomeExtraPolicyOptions, setLotteHomeExtraPolicyOptions] = useState<{ value: string; label: string }[]>([])

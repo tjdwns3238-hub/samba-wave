@@ -633,12 +633,13 @@ class CoupangClient:
     async def get_outbound_shipping_places(self) -> list[dict[str, Any]]:
         """쿠팡 출고지 목록 조회.
 
-        GET /v2/providers/marketplace_openapi/apis/api/v1/vendor/shipping-place/outbound
-        응답 구조: { content: [{ outboundShippingPlaceCode, shippingPlaceName, placeAddresses: [...], usable }] }
+        GET /v2/providers/marketplace_openapi/apis/api/v2/vendor/shipping-place/outbound
+        응답 구조: { content: [{ outboundShippingPlaceCode, shippingPlaceName, placeAddresses: [...], remoteInfos: [...], usable }] }
+        remoteInfos[0].deliveryCode = 출고지에 등록된 택배사 코드 (CJGLS, HYUNDAI 등)
         """
         res = await self._call_api(
             "GET",
-            "/v2/providers/marketplace_openapi/apis/api/v1/vendor/shipping-place/outbound",
+            "/v2/providers/marketplace_openapi/apis/api/v2/vendor/shipping-place/outbound",
             params={"pageNum": "1", "pageSize": "50"},
         )
         items = res.get("content") if isinstance(res, dict) else None
@@ -654,6 +655,13 @@ class CoupangClient:
             first_addr = (
                 addresses[0] if addresses and isinstance(addresses[0], dict) else {}
             )
+            # remoteInfos 에서 usable한 첫 번째 항목의 택배사 코드 추출
+            remote_infos = item.get("remoteInfos") or []
+            delivery_code = ""
+            for ri in remote_infos:
+                if isinstance(ri, dict) and ri.get("usable", True):
+                    delivery_code = str(ri.get("deliveryCode", "") or "")
+                    break
             result.append(
                 {
                     "code": str(item.get("outboundShippingPlaceCode", "") or ""),
@@ -661,6 +669,7 @@ class CoupangClient:
                     "address": first_addr.get("returnAddress", "")
                     or first_addr.get("placeAddress", "")
                     or "",
+                    "deliveryCode": delivery_code,
                 }
             )
         return result
@@ -879,6 +888,7 @@ class CoupangClient:
         notice_meta: Any = None,
         brand_id: str = "",
         required_attribute_types: list[str] | None = None,
+        delivery_company_code: str = "CJGLS",
     ) -> dict[str, Any]:
         """SambaCollectedProduct → 쿠팡 상품 등록 데이터 변환.
 
@@ -1170,7 +1180,7 @@ class CoupangClient:
             "generalProductName": display_name,
             "productGroup": "",
             "deliveryMethod": "SEQUENCIAL",
-            "deliveryCompanyCode": "CJGLS",
+            "deliveryCompanyCode": delivery_company_code,
             "deliveryChargeType": "FREE",
             "deliveryCharge": 0,
             "freeShipOverAmount": 0,

@@ -998,8 +998,12 @@ class SambaShipmentService:
                     )
                     shipment = SambaShipment(
                         product_id=product_id,
-                        status="completed",
-                        result={"refresh": refresh_status} if refresh_status else None,
+                        status="skipped",
+                        update_result={"refresh": refresh_status}
+                        if refresh_status
+                        else None,
+                        transmit_result={},
+                        transmit_error={"_all": "소싱처 변동 없음 — 전송 생략"},
                     )
                     self.session.add(shipment)
                     await self.session.flush()

@@ -1576,7 +1576,7 @@ export const proxyApi = {
       success: boolean
       message: string
       data?: {
-        outboundList: Array<{ code: string; name: string; address: string }>
+        outboundList: Array<{ code: string; name: string; address: string; deliveryCode?: string }>
         inboundList: Array<{ code: string; name: string; address: string; address_detail: string; zipcode: string; phone: string }>
       } | null
     }>(

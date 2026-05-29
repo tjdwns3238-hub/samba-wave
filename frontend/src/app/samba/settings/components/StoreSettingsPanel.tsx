@@ -350,6 +350,7 @@ export function StoreSettingsPanel(props: Props) {
                         const sel = coupangOutboundList.find(o => o.code === e.target.value)
                         updateStoreField(market.key, 'outboundShippingPlaceCode', sel?.code || '')
                         updateStoreField(market.key, 'outboundShippingPlaceName', sel?.name || '')
+                        updateStoreField(market.key, 'outboundDeliveryCode', sel?.deliveryCode || '')
                       }}
                     >
                       <option value=''>버튼으로 불러오기</option>

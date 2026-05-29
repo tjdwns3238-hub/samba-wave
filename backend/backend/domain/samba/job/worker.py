@@ -1396,9 +1396,13 @@ class JobWorker:
                                 if isinstance(refresh_info, dict)
                                 else ""
                             )
+                            _skip_reason = str(tx_error.get("_all", "") or "")[:200]
+                            _reason_suffix = (
+                                f" ({_skip_reason})" if _skip_reason else ""
+                            )
                             _add_job_log(
                                 job.id,
-                                f"[{i + 1}/{total}] {prod_name}: 스킵 [{rl}]",
+                                f"[{i + 1}/{total}] {prod_name}: 스킵{_reason_suffix} [{rl}]",
                             )
                         elif r.get("error") or tx_error.get("_all"):
                             _f += 1
@@ -1409,7 +1413,10 @@ class JobWorker:
                             )
                         else:
                             _f += 1
-                            _add_job_log(job.id, f"[{i + 1}/{total}] {prod_name}: 실패")
+                            _add_job_log(
+                                job.id,
+                                f"[{i + 1}/{total}] {prod_name}: 실패 (사유 불명, status={status})",
+                            )
                     _failed_pid = (
                         pid
                         if not any_success and status not in ("skipped", "completed")

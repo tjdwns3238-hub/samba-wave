@@ -247,6 +247,11 @@ class CoupangPlugin(MarketPlugin):
             except Exception as _e:
                 logger.info(f"[쿠팡 필수 attribute] 추출 실패: {_e}")
 
+        # 출고지에 등록된 택배사 코드 (출고지 조회 시 remoteInfos[0].deliveryCode 저장)
+        outbound_delivery_code = (
+            str(extras.get("outboundDeliveryCode", "") or "") or "CJGLS"
+        )
+
         # AS 전화번호 주입은 base._apply_market_settings 에서 처리됨
         data = CoupangClient.transform_product(
             product,
@@ -256,6 +261,7 @@ class CoupangPlugin(MarketPlugin):
             notice_meta=notice_meta,
             brand_id=brand_id,
             required_attribute_types=required_attr_types,
+            delivery_company_code=outbound_delivery_code,
         )
         data["vendorId"] = vendor_id
         data["vendorUserId"] = vendor_user_id or vendor_id

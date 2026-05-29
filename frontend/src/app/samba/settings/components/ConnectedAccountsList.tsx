@@ -4,7 +4,7 @@ import { Dispatch, SetStateAction } from 'react'
 import type { SambaMarketAccount } from '@/lib/samba/api/commerce'
 import { STORE_MARKETS } from '../config'
 
-type OutboundPlace = { code: string; name: string; address: string }
+type OutboundPlace = { code: string; name: string; address: string; deliveryCode?: string }
 type InboundPlace = { code: string; name: string; address: string; address_detail: string; zipcode: string; phone: string }
 
 // 마스킹된 secret 값(****XXXX)이 form에 들어가 그대로 저장되면 DB의 진짜 값을
@@ -92,7 +92,8 @@ export function ConnectedAccountsList(props: Props) {
                   if (marketKey === 'coupang') {
                     const outCode = formData.outboundShippingPlaceCode || ''
                     const outName = formData.outboundShippingPlaceName || ''
-                    setCoupangOutboundList(outCode ? [{ code: outCode, name: outName, address: '' }] : [])
+                    const outDeliveryCode = formData.outboundDeliveryCode || ''
+                    setCoupangOutboundList(outCode ? [{ code: outCode, name: outName, address: '', deliveryCode: outDeliveryCode }] : [])
                     const retCode = formData.returnCenterCode || ''
                     const retName = formData.returnCenterName || ''
                     const retAddr = formData.returnCenterAddress || ''
