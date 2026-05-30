@@ -305,8 +305,10 @@ export default function OrdersTable(props: OrdersTableProps) {
                       }}
                       style={{
                         fontSize: '0.68rem', padding: '0.125rem 0',
-                        background: 'rgba(220,38,38,0.8)',
-                        color: '#fff', border: '1px solid #DC2626',
+                        // 취소·반품 요청 상태일 때만 빨간색, 그 외 중립 (#300)
+                        background: isCancelRequested ? 'rgba(220,38,38,0.8)' : 'rgba(80,80,80,0.5)',
+                        color: '#fff',
+                        border: isCancelRequested ? '1px solid #DC2626' : '1px solid #555',
                         borderRadius: '4px', cursor: 'pointer', textAlign: 'center',
                         fontWeight: 600,
                       }}

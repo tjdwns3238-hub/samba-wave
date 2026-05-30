@@ -6719,6 +6719,42 @@ async def sync_orders_from_markets(
 
             _mpn_global, _mpn_by_account = await _get_mpn_cache(session, _sourcing_urls)
 
+            # 소싱계정 캐시 — (tenant_id, site_name) → sourcing_account_id (#299)
+            # 주문 동기화 시 sourcing_account_id 누락/"etc" 잔존 방지용
+            # is_login_default=True 우선, 없으면 단일 계정만, 여러 개면 None(모호)
+            _sa_map: dict[tuple[str, str], str | None] = {}
+            try:
+                async with get_read_session() as _sa_sess:
+                    _sa_rows = (
+                        await _sa_sess.execute(
+                            _sa_text(
+                                "SELECT id, tenant_id, site_name, is_login_default "
+                                "FROM samba_sourcing_account WHERE is_active = true"
+                            )
+                        )
+                    ).fetchall()
+                _sa_by_key: dict[tuple[str, str], dict] = {}
+                for _sa_id, _sa_tid, _sa_site, _sa_default in _sa_rows:
+                    _k = (str(_sa_tid or ""), str(_sa_site or ""))
+                    if _k not in _sa_by_key:
+                        _sa_by_key[_k] = {"default": None, "count": 0, "first": None}
+                    info = _sa_by_key[_k]
+                    info["count"] += 1
+                    if _sa_default:
+                        info["default"] = str(_sa_id)
+                    elif info["count"] == 1:
+                        info["first"] = str(_sa_id)
+                for _k, _info in _sa_by_key.items():
+                    if _info["default"]:
+                        _sa_map[_k] = _info["default"]
+                    elif _info["count"] == 1:
+                        _sa_map[_k] = _info["first"]
+                    else:
+                        _sa_map[_k] = None  # 모호 — 보정 불가
+            except Exception as _sa_e:
+                logger.warning(f"[주문동기화] _sa_map 빌드 실패(무시): {_sa_e}")
+                _sa_map = {}
+
             # 미등록 입력 캐시 — 정확 키 매칭만 허용(2026-05-11 보완).
             # 과거 사고: 동일 (product_id, channel_name) 키 헐거움 → 시계 cp 800건 오염.
             # 보완:
@@ -6898,6 +6934,14 @@ async def sync_orders_from_markets(
                         "original_link"
                     ):
                         order_data["source_url"] = _matched["original_link"]
+                # sourcing_account_id 보충 — source_site 확정됐고 계정이 비어있으면 (#299)
+                # LOTTEON 등 source_site 매칭 성공 후 sourcing_account_id="etc"/NULL 잔존 방지
+                _cur_said = order_data.get("sourcing_account_id") or ""
+                if not _cur_said or _cur_said == "etc":
+                    _ss = order_data.get("source_site") or ""
+                    _sa_key = (_tid or "", _ss)
+                    if _ss and _sa_key in _sa_map and _sa_map[_sa_key]:
+                        order_data["sourcing_account_id"] = _sa_map[_sa_key]
                 # 매칭 검증용 임시 키 제거 (DB 저장 직전, 모델에 없는 필드)
                 order_data.pop("_pa_site_id", None)
                 order_data.pop("_pa_master_code", None)
