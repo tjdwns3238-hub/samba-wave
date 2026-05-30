@@ -5738,15 +5738,29 @@ class JobWorker:
                 ],
             }
             try:
-                saved = await svc.create_collected_product(product_data)
-                # 동일 소싱처 내 동일 원 상품명 차단/블랙리스트 → None 반환 시 카운트 제외
-                if not saved:
-                    continue
-                total_saved += 1
-                _collect_last_progress[job.id] = _time.time()  # 진행 갱신
-                await repo.update_progress(
-                    job.id, existing_count + total_saved, requested_count
+                # 장수명 session은 LOTTEON 상세 선취합(30~120s) 동안 idle in transaction
+                # → pool_recycle/idle_in_transaction_session_timeout 초과 시 greenlet_spawn 에러
+                # 전송 잡과 동일하게 fresh 단명 세션으로 격리 (#298)
+                from backend.db.orm import get_write_session as _gws
+                from backend.domain.samba.job.repository import (
+                    SambaJobRepository as _JRepo,
                 )
+
+                _did_save = False
+                async with _gws() as _save_sess:
+                    _save_svc = _get_services(_save_sess)
+                    saved = await _save_svc.create_collected_product(product_data)
+                    # 동일 소싱처 내 동일 원 상품명 차단/블랙리스트 → None 반환 시 카운트 제외
+                    if saved:
+                        _did_save = True
+                        total_saved += 1
+                        _collect_last_progress[job.id] = _time.time()  # 진행 갱신
+                        _save_repo = _JRepo(_save_sess)
+                        await _save_repo.update_progress(
+                            job.id, existing_count + total_saved, requested_count
+                        )
+                if not _did_save:
+                    continue
                 _log_b = item.get("brand", "") or ""
                 _log_n = p_name or ""
                 _log_s = item.get("style_code", "") or ""
@@ -5759,19 +5773,23 @@ class JobWorker:
                 logger.warning(f"[잡워커] {site} 저장 실패 {p_id}: {e}")
 
         # last_collected_at 갱신 + 요청수를 실제 수집수로 보정 (카테고리 중복 제거)
+        # fresh 단명 세션 사용 — 장수명 session이 idle 타임아웃으로 닫혔을 수 있음 (#298)
         from sqlalchemy import update as sa_update
-
-        actual_count = (
-            await session.execute(
-                select(_func.count()).where(CPModel.search_filter_id == filter_id)
-            )
-        ).scalar() or 0
-        update_vals: dict = {"last_collected_at": datetime.now(UTC)}
+        from backend.db.orm import get_write_session as _gws2
         from backend.domain.samba.collector.model import SambaSearchFilter as _SF
 
-        await session.execute(
-            sa_update(_SF).where(_SF.id == filter_id).values(**update_vals)
-        )
+        actual_count = 0
+        async with _gws2() as _fin_sess:
+            actual_count = (
+                await _fin_sess.execute(
+                    select(_func.count()).where(CPModel.search_filter_id == filter_id)
+                )
+            ).scalar() or 0
+            update_vals: dict = {"last_collected_at": datetime.now(UTC)}
+            await _fin_sess.execute(
+                sa_update(_SF).where(_SF.id == filter_id).values(**update_vals)
+            )
+            await _fin_sess.commit()
 
         # 정책 자동 적용
         policy_msg = ""
