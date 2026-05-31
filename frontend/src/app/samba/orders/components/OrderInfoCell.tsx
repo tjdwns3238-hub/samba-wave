@@ -381,6 +381,7 @@ export default function OrderInfoCell(props: Props) {
             {o.customer_note?.trim() || '-'}
           </span>
         </div>
+      {o.source !== 'lottehome' && (
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.8rem' }}>
         <span style={{ color: '#666', whiteSpace: 'nowrap' }}>타마켓주문링크</span>
         <input
@@ -399,6 +400,7 @@ export default function OrderInfoCell(props: Props) {
           style={{ flex: 1, fontSize: '0.75rem', padding: '0.125rem 0.375rem', background: '#1A1A1A', border: '1px solid #444', color: '#E5E5E5', borderRadius: '4px', fontFamily: 'monospace', minWidth: 0 }}
         />
       </div>
+      )}
     </td>
   )
 }
