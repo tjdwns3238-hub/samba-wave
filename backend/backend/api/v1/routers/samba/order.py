@@ -9324,7 +9324,10 @@ def _parse_lottehome_order(
         "tracking_number": tracking_number,
         "paid_at": paid_at,
         "source": "lottehome",
-        "shipment_id": order_no,
+        # 주문번호(shipment_id) = 상품상세번호(OrdProdCode/OrgOrdDtlSn = ord_dtl_sn).
+        # 과거엔 OrdNo(예: 20260529C08552)를 넣어 상품주문번호(order_number)와 중복됐음.
+        # ord_dtl_sn은 ext_order_number 콜론 뒤 부분과 동일 → 백필값과 일치 보장.
+        "shipment_id": ord_dtl_sn or order_no,
         "ext_order_number": ext_order_number,
     }
 
