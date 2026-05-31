@@ -176,7 +176,8 @@ export default function AnalyticsPage() {
     textAlign: 'center',
     whiteSpace: 'nowrap',
     position: 'sticky',
-    top: 0,
+    // 앱 헤더(69px) + 섹션 제목 높이(41px) 밑에 컬럼 제목행 고정 — 페이지 스크롤 시에도 유지
+    top: 'calc(var(--header-h, 69px) + 41px)',
     background: '#1A1A1A',
     zIndex: 2,
   }
@@ -242,7 +243,7 @@ export default function AnalyticsPage() {
           borderBottom: '1px solid #2D2D2D',
         }}>{title}</div>
         <div style={{ ...card, padding: '1.25rem', borderTopLeftRadius: 0, borderTopRightRadius: 0 }}>
-        <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 220px)' }}>
+        <div style={{ overflow: 'visible' }}>
           <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: `${(columns.length + 2) * 120}px` }}>
             <thead>
               <tr>
