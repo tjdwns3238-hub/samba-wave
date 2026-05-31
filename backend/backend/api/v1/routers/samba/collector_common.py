@@ -222,11 +222,28 @@ def _build_product_data(
 
 
 def _trim_history(history: list) -> list:
-    """price_history를 최초 수집 1개 + 최근 4개 = 최대 5개로 제한."""
-    if len(history) <= 5:
+    """price_history dedup + cap.
+
+    - dedup: history[0](최신)과 history[1] 의 sale_price/original_price/cost/sale_status
+      가 모두 동일하면 새 snapshot(history[0]) 제거. 가격/상태 변동 흔적만 보존하여
+      변동 없는 routine ping(autotune/enrich/refresh) 이 cap 을 채우지 않도록.
+    - cap: 최초 수집 1개 + 최근 49개 = 최대 50개.
+    """
+    if isinstance(history, list) and len(history) >= 2:
+        curr = history[0] if isinstance(history[0], dict) else {}
+        prev = history[1] if isinstance(history[1], dict) else {}
+        same = (
+            curr.get("sale_price") == prev.get("sale_price")
+            and curr.get("original_price") == prev.get("original_price")
+            and curr.get("cost") == prev.get("cost")
+            and curr.get("sale_status") == prev.get("sale_status")
+        )
+        if same:
+            history = history[1:]
+    if len(history) <= 50:
         return history
     # history[0]이 최신, history[-1]이 최초
-    return history[:4] + [history[-1]]
+    return history[:49] + [history[-1]]
 
 
 # ── KREAM 가격이력 스냅샷 ──
