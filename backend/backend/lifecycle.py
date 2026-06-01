@@ -1174,6 +1174,22 @@ async def _start_lotteon_ghost_reconciler() -> None:
     )
 
 
+_ssg_status_reconciler_task: asyncio.Task | None = None
+
+
+async def _start_ssg_status_reconciler() -> None:
+    """SSG 반려/영구판매중지 상품 잔존 일일 자동 감지 잡 — 24시간 주기 (issue #308)."""
+    global _ssg_status_reconciler_task
+    from backend.domain.samba.proxy.ssg_status_reconciler import (
+        status_reconciler_loop,
+    )
+
+    _ssg_status_reconciler_task = asyncio.create_task(status_reconciler_loop())
+    logging.getLogger("backend.lifecycle").info(
+        "[lifecycle] SSG 반려/판매중지 잔존 reconciler 시작"
+    )
+
+
 _coupang_pid_reconciler_task: asyncio.Task | None = None
 
 
@@ -1353,6 +1369,7 @@ async def lifespan(app: FastAPI):
         await _start_elevenst_ghost_reconciler()
         await _start_filters_warmup()
         await _start_coupang_pid_reconciler()
+        await _start_ssg_status_reconciler()
     _validate_startup_settings()
 
     try:
