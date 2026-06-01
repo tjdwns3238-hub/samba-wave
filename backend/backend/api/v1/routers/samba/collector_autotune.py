@@ -3545,6 +3545,20 @@ async def _autotune_loop(device_id: str):
                         active_sites = []
                     else:
                         active_sites = [s for s in active_sites if s in my_sites]
+                        # 데몬은 TRACKING_ONLY 사이트(무신사/GSShop 등)의 가격수집(오토튠) 미지원 —
+                        # 송장(tracking)만 처리한다. 데몬 allowed_sites 에 무신사가 있어도(송장 폴링용)
+                        # 오토튠 사이클은 스폰하지 않는다. 안 막으면 데몬·확장앱 중복 오토튠 발생.
+                        # (오토튠 잡은 owner=device 강제라 _resolve_job_owner 가드를 우회 → 여기서 차단)
+                        if (device_id or "").startswith("samba-daemon-"):
+                            from backend.domain.samba.proxy.sourcing_queue import (
+                                TRACKING_ONLY_DAEMON_SITES,
+                            )
+
+                            active_sites = [
+                                s
+                                for s in active_sites
+                                if s not in TRACKING_ONLY_DAEMON_SITES
+                            ]
 
                     # 서킷브레이커 제외
                     active_sites = [
