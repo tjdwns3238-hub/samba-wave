@@ -474,19 +474,19 @@ class SmartStorePlugin(MarketPlugin):
             try:
                 existing_data = await client.get_product(existing_no)
                 origin = existing_data.get("originProduct", {})
-                # statusType 보강 — GET 응답 origin에 statusType이 누락된 경우,
-                # channelProducts[].statusType 또는 transform 기본값("SALE")으로 채움.
-                # pop으로 channelProducts 제거 전에 먼저 추출해야 함.
-                if not origin.get("statusType"):
+                # 원상품 수정(PUT) statusType 은 SALE/SUSPENSION 만 입력 가능(공식 문서).
+                # UNADMISSION/OUTOFSTOCK/WAIT 등 GET 응답의 입력불가 statusType → SALE 교정.
+                # dispatcher.py:305 보강과 동일 패턴 — pop으로 channelProducts 제거 전 추출.
+                _PUT_ALLOWED_STATUS = {"SALE", "SUSPENSION"}
+                _cur_status = origin.get("statusType") or ""
+                if _cur_status not in _PUT_ALLOWED_STATUS:
                     ch_list = existing_data.get("channelProducts") or []
                     ch_status = None
                     if ch_list and isinstance(ch_list, list):
-                        ch_status = (ch_list[0] or {}).get("statusType")
-                    origin["statusType"] = (
-                        ch_status
-                        or data.get("originProduct", {}).get("statusType")
-                        or "SALE"
-                    )
+                        _ch_st = (ch_list[0] or {}).get("statusType")
+                        if _ch_st in _PUT_ALLOWED_STATUS:
+                            ch_status = _ch_st
+                    origin["statusType"] = ch_status or "SALE"
                 # 읽기전용 필드 제거
                 for k in [
                     "productNo",
