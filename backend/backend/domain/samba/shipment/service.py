@@ -2502,6 +2502,7 @@ class SambaShipmentService:
         policy_id = product.get("applied_policy_id")
         top_img = ""
         bottom_img = ""
+        main_image_index = 0  # 대표이미지 번호(0-base) — 템플릿에서 로드 (#309)
         # 이미지 포함 설정 (기본값: 상단/대표/추가/상세/하단 포함)
         img_checks: dict[str, bool] = {
             "topImg": True,
@@ -2553,6 +2554,7 @@ class SambaShipmentService:
                     img_checks.update(tpl.img_checks)
                 if tpl.img_order:
                     img_order = tpl.img_order
+                main_image_index = int(getattr(tpl, "main_image_index", 0) or 0)
                 logger.info(
                     f"[상세HTML] 템플릿 로드 — 상단:{bool(top_img)}, 하단:{bool(bottom_img)}, checks:{img_checks}"
                 )
@@ -2560,6 +2562,22 @@ class SambaShipmentService:
                 logger.warning(f"[상세HTML] 템플릿 {template_id} 조회 실패")
 
         images = product.get("images") or []
+        # 대표이미지 선택 + 썸네일 단일화 (#309)
+        # 1) main_image_index(대표이미지 번호)가 가리키는 이미지를 맨 앞으로 →
+        #    상세HTML의 main / 마켓 썸네일 대표이미지를 일치시킴 (dead field 활성화)
+        # 2) 추가이미지(sub) 제외 템플릿(img_checks.sub=False)이면 대표 1장으로 제한 →
+        #    마켓 썸네일 carousel 단일화. 마켓 플러그인(smartstore/elevenst 등)이
+        #    읽는 product["images"]에도 반영해 썸네일이 detail_template 설정을 따르게 함.
+        if images:
+            if 0 < main_image_index < len(images):
+                images = (
+                    [images[main_image_index]]
+                    + images[:main_image_index]
+                    + images[main_image_index + 1 :]
+                )
+            if not img_checks.get("sub", False):
+                images = images[:1]
+            product["images"] = images
         detail_images = product.get("detail_images") or []
         # 추가이미지(sub)에서 출력된 URL을 추적 → detail에서 중복 제외
         # 단, sub가 실제로 출력되는 경우에만 필터링(detail만 단독 사용일 때 무필터 정상 노출)

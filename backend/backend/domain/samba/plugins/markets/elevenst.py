@@ -432,6 +432,20 @@ class ElevenstPlugin(MarketPlugin):
                 xml_data_for_put = _re.sub(
                     r"<dispCtgrNo>[^<]*</dispCtgrNo>", "", xml_data, count=1
                 )
+                # 이미지 슬롯 클리어 (#310): 이미지 개수 축소 시(예: 4장→1장) 미전송된
+                # prdImage02~04 슬롯에 옛 이미지가 잔존. 11번가 PUT은 누락 슬롯을
+                # 기존값으로 유지하므로, 안 쓰는 슬롯을 빈 태그로 명시 전송해 강제 클리어.
+                # prdImage01 이 있을 때(이미지 전송 케이스)만 보강 — 경량XML/무이미지 PUT은 무영향.
+                if "</prdImage01>" in xml_data_for_put:
+                    _missing_slots = "".join(
+                        f"<prdImage{_n}></prdImage{_n}>"
+                        for _n in ("02", "03", "04")
+                        if f"<prdImage{_n}>" not in xml_data_for_put
+                    )
+                    if _missing_slots:
+                        xml_data_for_put = xml_data_for_put.replace(
+                            "</prdImage01>", "</prdImage01>" + _missing_slots, 1
+                        )
                 try:
                     result = await client.update_product(existing_no, xml_data_for_put)
                 except Exception as _put_e:
