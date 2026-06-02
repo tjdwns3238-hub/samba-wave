@@ -513,7 +513,7 @@ const ProductCard = React.memo(function ProductCard({
       // 롯데홈쇼핑: 추가수수료율 역산 + 10원 단위 올림
       if (marketName === '롯데홈쇼핑') {
         const lhExtraFeeRate = Number((v as Record<string, unknown>).extraFeeRate || 0)
-        if (lhExtraFeeRate > 0) {
+        if (lhExtraFeeRate > 0 && lhExtraFeeRate < 100) {
           const before = displayPrice
           displayPrice = Math.ceil(before / (1 - lhExtraFeeRate / 100))
           const extraAmt = displayPrice - before

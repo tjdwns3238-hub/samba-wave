@@ -87,9 +87,9 @@ def _transform_for_lottehome(
     images = [_sanitize_image_url(u) for u in (product.get("images") or [])]
     images = [u for u in images if u]
     sale_price = int(product.get("sale_price", 0) or 0)
-    # 추가수수료율 역산
+    # 추가수수료율 역산 (0 < rate < 100 가드 — 100 이상이면 0 나눗셈/음수 방지)
     extra_fee_rate = float(creds.get("extraFeeRate") or 0)
-    if extra_fee_rate > 0 and sale_price > 0:
+    if 0 < extra_fee_rate < 100 and sale_price > 0:
         sale_price = _math.ceil(sale_price / (1 - extra_fee_rate / 100))
     # 판매가 끝자리 0 필수 (API 에러 1062)
     if sale_price % 10 != 0:
@@ -531,7 +531,7 @@ class LotteHomePlugin(MarketPlugin):
             results = {"success": True, "updated": []}
             sale_price = int(product.get("sale_price", 0) or 0)
             extra_fee_rate = float(auth_creds.get("extraFeeRate") or 0)
-            if extra_fee_rate > 0 and sale_price > 0:
+            if 0 < extra_fee_rate < 100 and sale_price > 0:
                 sale_price = _math.ceil(sale_price / (1 - extra_fee_rate / 100))
             if sale_price % 10 != 0:
                 sale_price = (sale_price // 10 + 1) * 10
