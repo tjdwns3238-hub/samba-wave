@@ -379,7 +379,7 @@ export default function PoliciesPage() {
   // 롯데홈쇼핑: 저장된 정책 + MD상품군 초기 로드
   useEffect(() => {
     request<{ success: boolean; data: Record<string, unknown> }>(`${API_BASE}/api/v1/samba/proxy/lottehome/policy`)
-      .then(res => { if (res.success && res.data && Object.keys(res.data).length > 0) { const raw = res.data as Record<string, unknown>; const loaded = { ...defaultLottePolicy, ...raw }; if (!loaded.brandMappings?.length && (raw.brndNo as string)) { loaded.brandMappings = [{ brnd_no: raw.brndNo as string, brnd_nm: (raw.brndNm as string) || '' }] } setLottePolicy({ ...loaded, optionStockMgmt: (loaded.optionStockMgmt as string) || '사용함' }) } })
+      .then(res => { if (res.success && res.data && Object.keys(res.data).length > 0) { const raw = res.data as Record<string, unknown>; const loaded = { ...defaultLottePolicy, ...raw }; if (!loaded.brandMappings?.length && (raw.brndNo as string)) { loaded.brandMappings = [{ brnd_no: raw.brndNo as string, brnd_nm: (raw.brndNm as string) || '' }] } setLottePolicy({ ...loaded, optionStockMgmt: (loaded.optionStockMgmt as string) || '사용함' }); if (loaded.extraFeeRate) { setMarketPolicies(prev => ({ ...prev, '롯데홈쇼핑': { ...(prev['롯데홈쇼핑'] || {}), extraFeeRate: Number(loaded.extraFeeRate) || 0 } })) } } })
       .catch(() => {})
     setLotteMdLoading(true)
     request<{ success: boolean; data: unknown }>(`${API_BASE}/api/v1/samba/proxy/lottehome/md-groups`)
