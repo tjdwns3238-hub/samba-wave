@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef, Fragment } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { accountApi, orderApi, type SambaMarketAccount } from '@/lib/samba/api/commerce'
 import { returnApi, type SambaReturn } from '@/lib/samba/api/support'
 import { showAlert, showConfirm } from '@/components/samba/Modal'
@@ -13,6 +13,16 @@ import {
   fmtMD, getAccountOptionLabel, tdCenter,
 } from './constants'
 import { ReturnDetailModal } from './components/ReturnDetailModal'
+
+// 완료내역(completion_detail) 옵션 + 색상 (다크테마: 옅은 배경 + 글자색)
+const COMPLETION_DEFAULT = '대기중'
+const COMPLETION_OPTIONS = ['대기중', '취소완료', '반품완료', '교환완료']
+const COMPLETION_COLORS: Record<string, { bg: string; fg: string }> = {
+  '대기중': { bg: 'rgba(255,217,61,0.12)', fg: '#FFD93D' },   // 노랑
+  '취소완료': { bg: 'rgba(255,107,107,0.12)', fg: '#FF6B6B' }, // 빨강
+  '반품완료': { bg: 'rgba(247,131,172,0.14)', fg: '#F783AC' }, // 핑크
+  '교환완료': { bg: 'rgba(76,154,255,0.12)', fg: '#4C9AFF' },  // 파랑
+}
 
 export default function ReturnsPage() {
   useEffect(() => { document.title = 'SAMBA-반품관리' }, [])
@@ -47,6 +57,10 @@ export default function ReturnsPage() {
 
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+
+  // 신규 금액 입력칸 (백엔드 저장 없이 로컬 표시용) — 행 id 기준
+  const [customerAmounts, setCustomerAmounts] = useState<Record<string, string>>({})
+  const [companyAmounts, setCompanyAmounts] = useState<Record<string, string>>({})
 
   const [siteFilter, setSiteFilter] = useState('')
   const [pageSize, setPageSize] = useState(50)
@@ -227,8 +241,8 @@ export default function ReturnsPage() {
   // completion_detail 기준 통계
   const completionCounts = {
     total: returns.length,
-    requested: returns.filter(r => (r.completion_detail || '진행중') === '진행중').length,
-    completed: returns.filter(r => ['취소', '교환', '반품'].includes(r.completion_detail || '')).length,
+    requested: returns.filter(r => (r.completion_detail || COMPLETION_DEFAULT) === '대기중').length,
+    completed: returns.filter(r => ['취소완료', '반품완료', '교환완료'].includes(r.completion_detail || '')).length,
     rejected: returns.filter(r => (r.completion_detail || '') === '거부').length,
   }
 
@@ -362,7 +376,7 @@ export default function ReturnsPage() {
               ])
             })()}
           </select>
-          <select style={{ ...inputStyle, width: '110px', padding: '0.22rem 0.4rem', fontSize: '0.75rem' }} value={siteFilter} onChange={e => setSiteFilter(e.target.value)}><option value="">전체내역</option>{['진행중','취소','교환','반품','거부'].map(s => <option key={s} value={s}>{s}</option>)}</select>
+          <select style={{ ...inputStyle, width: '110px', padding: '0.22rem 0.4rem', fontSize: '0.75rem' }} value={siteFilter} onChange={e => setSiteFilter(e.target.value)}><option value="">전체내역</option>{COMPLETION_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}</select>
           <select style={{ ...inputStyle, width: '92px', padding: '0.22rem 0.4rem', fontSize: '0.75rem' }} value={pageSize} onChange={e => setPageSize(Number(e.target.value))}>
             <option value={50}>50개 보기</option><option value={100}>100개 보기</option><option value={200}>200개 보기</option><option value={500}>500개 보기</option>
           </select>
@@ -436,7 +450,7 @@ export default function ReturnsPage() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
               <thead>
                 <tr style={{ background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid #1E1E1E' }}>
-                  <th rowSpan={2} style={{ width: '36px', textAlign: 'center', padding: '0.3rem 0.5rem', verticalAlign: 'middle' }}>
+                  <th style={{ width: '36px', textAlign: 'center', padding: '0.3rem 0.5rem', verticalAlign: 'middle' }}>
                     <input
                       type="checkbox"
                       checked={returns.length > 0 && selectedIds.size === returns.length}
@@ -447,21 +461,14 @@ export default function ReturnsPage() {
                       style={{ width: '13px', height: '13px', cursor: 'pointer', accentColor: '#F59E0B' }}
                     />
                   </th>
-                  <th rowSpan={2} style={{ textAlign: 'center', padding: '0.5rem 0.625rem', color: '#888', fontWeight: 500, fontSize: '0.75rem', whiteSpace: 'nowrap', verticalAlign: 'middle' }}>사진</th>
-                  {['고객', '사업자', '주문번호', '마켓', 'CS', '주문일', '정산금액', '환수금액', '수익', '전체내역'].map((h, i) => (
-                    <th key={i} style={{ textAlign: 'center', padding: '0.5rem 0.625rem', color: '#888', fontWeight: 500, fontSize: '0.75rem', whiteSpace: 'nowrap' }}>{h}</th>
-                  ))}
-                  <th colSpan={2} style={{ textAlign: 'center', padding: '0.5rem 0.625rem', color: '#888', fontWeight: 500, fontSize: '0.75rem', whiteSpace: 'nowrap' }}>고객주문</th>
-                </tr>
-                <tr style={{ background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid #2D2D2D' }}>
-                  {['체크날짜', '전화', '상품명', '메모', 'CS링크', 'CS접수일', '지역', '상품위치', '상태', '반품신청한곳', '원주문'].map((h, i) => (
+                  {['사진', '고객', '사업자', '주문번호', '마켓', '주문일', '고객', '회사', '완료내역', '상품명', '체크날짜', '고객전화번호', '지역', '메모', '반품링크', 'CS접수일', '상품위치', '반품신청한곳', '상태', '고객주문', '원주문'].map((h, i) => (
                     <th key={i} style={{ textAlign: 'center', padding: '0.5rem 0.625rem', color: '#888', fontWeight: 500, fontSize: '0.75rem', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {returns.filter(r => {
-                  if (siteFilter && (r.completion_detail || '진행중') !== siteFilter) return false
+                  if (siteFilter && (r.completion_detail || COMPLETION_DEFAULT) !== siteFilter) return false
                   if (marketFilter) {
                     if (marketFilter.startsWith('type:')) {
                       const mType = marketFilter.replace('type:', '')
@@ -476,9 +483,8 @@ export default function ReturnsPage() {
                   return true
                 }).map((r, idx) => {
                   return (
-                    <Fragment key={r.id}>
-                      <tr>
-                        <td rowSpan={2} style={{ width: '36px', textAlign: 'center', padding: '0.5rem', verticalAlign: 'middle' }}>
+                      <tr key={r.id} style={{ borderBottom: '1px solid rgba(45,45,45,0.5)' }}>
+                        <td style={{ width: '36px', textAlign: 'center', padding: '0.5rem', verticalAlign: 'middle' }}>
                           <div style={{ fontSize: '0.675rem', color: '#666', marginBottom: '2px' }}>{idx + 1}</div>
                           <input
                             type="checkbox"
@@ -492,7 +498,7 @@ export default function ReturnsPage() {
                             style={{ width: '13px', height: '13px', cursor: 'pointer', accentColor: '#F59E0B' }}
                           />
                         </td>
-                        <td rowSpan={2} style={{ padding: '0.625rem 0.5rem', textAlign: 'center', verticalAlign: 'middle' }}>
+                        <td style={{ padding: '0.625rem 0.5rem', textAlign: 'center', verticalAlign: 'middle' }}>
                         {r.product_image ? (
                           <img
                             src={r.product_image}
@@ -517,76 +523,32 @@ export default function ReturnsPage() {
                       <td style={tdCenter}>
                         <span>{r.market || '-'}</span>
                       </td>
-                      <td style={{ ...tdCenter, fontSize: '0.75rem' }}>
-                        {r.market_order_status?.includes('교환') && !r.market_order_status?.includes('완료') && !r.market_order_status?.includes('거부') ? (
-                          <div style={{ display: 'flex', gap: '0.25rem', justifyContent: 'center' }}>
-                            <button onClick={() => setExchangeActionItem(r)} style={{ padding: '0.15rem 0.4rem', borderRadius: '8px', fontSize: '0.68rem', fontWeight: 600, background: 'rgba(76,154,255,0.15)', color: '#4C9AFF', border: '1px solid rgba(76,154,255,0.3)', cursor: 'pointer' }}>교환승인</button>
-                            <button onClick={() => handleExchangeAction(r, 'reject')} style={{ padding: '0.15rem 0.4rem', borderRadius: '8px', fontSize: '0.68rem', fontWeight: 600, background: 'rgba(255,107,107,0.15)', color: '#FF6B6B', border: '1px solid rgba(255,107,107,0.3)', cursor: 'pointer' }}>교환거부</button>
-                          </div>
-                        ) : r.market_order_status?.includes('반품') && !r.market_order_status?.includes('완료') && !r.market_order_status?.includes('거부') ? (
-                          <div style={{ display: 'flex', gap: '0.25rem', justifyContent: 'center' }}>
-                            <button onClick={() => handleReturnAction(r, 'approve')} style={{ padding: '0.15rem 0.4rem', borderRadius: '8px', fontSize: '0.68rem', fontWeight: 600, background: 'rgba(76,154,255,0.15)', color: '#4C9AFF', border: '1px solid rgba(76,154,255,0.3)', cursor: 'pointer' }}>반품승인</button>
-                            <button onClick={() => handleReturnAction(r, 'reject')} style={{ padding: '0.15rem 0.4rem', borderRadius: '8px', fontSize: '0.68rem', fontWeight: 600, background: 'rgba(255,107,107,0.15)', color: '#FF6B6B', border: '1px solid rgba(255,107,107,0.3)', cursor: 'pointer' }}>반품거부</button>
-                          </div>
-                        ) : r.market_order_status?.includes('취소') && !r.market_order_status?.includes('완료') ? (
-                          <button onClick={() => handleCancelApprove(r)} style={{ padding: '0.15rem 0.5rem', borderRadius: '12px', fontSize: '0.72rem', fontWeight: 600, background: 'rgba(255,80,80,0.15)', color: '#FF5050', border: '1px solid rgba(255,80,80,0.3)', cursor: 'pointer' }}>{r.market_order_status}</button>
-                        ) : (
-                          <span style={{ color: r.market_order_status?.includes('완료') ? '#51CF66' : r.market_order_status?.includes('거부') ? '#FF6B6B' : '#E5E5E5' }}>{r.market_order_status || '-'}</span>
-                        )}
-                      </td>
                       <td style={{ ...tdCenter, color: '#888' }}>{fmtMD(r.order_date)}</td>
                       <td style={{ ...tdCenter, padding: '0.375rem' }}>
                         <input
                           type="text"
-                          value={r.settlement_amount != null ? fmtNum(r.settlement_amount) : ''}
-                          placeholder="0"
-                          onFocus={(e) => { e.target.value = String(r.settlement_amount ?? '') }}
-                          onChange={(e) => {
-                            const raw = e.target.value.replace(/[^0-9.-]/g, '')
-                            if (raw === '') { setReturns(prev => prev.map(x => x.id === r.id ? { ...x, settlement_amount: undefined } : x)); return }
-                            if (raw === '-') return
-                            const num = parseFloat(raw)
-                            if (!isNaN(num)) setReturns(prev => prev.map(x => x.id === r.id ? { ...x, settlement_amount: num } : x))
-                          }}
-                          onBlur={async (e) => {
-                            const num = parseFloat(e.target.value.replace(/,/g, ''))
-                            if (!isNaN(num)) {
-                              try { await returnApi.patch(r.id, { settlement_amount: num }) } catch (_e) { /* 무시 */ }
-                            }
-                          }}
+                          value={customerAmounts[r.id] || ''}
+                          placeholder=""
+                          onChange={(e) => setCustomerAmounts(prev => ({ ...prev, [r.id]: e.target.value }))}
                           style={{ width: '80px', padding: '0.3rem 0.5rem', background: '#1A1A1A', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#E5E5E5', fontSize: '0.8rem', textAlign: 'right' }}
                         />
                       </td>
                       <td style={{ ...tdCenter, padding: '0.375rem' }}>
                         <input
                           type="text"
-                          value={r.recovery_amount != null ? fmtNum(r.recovery_amount) : ''}
-                          placeholder="0"
-                          onFocus={(e) => { e.target.value = String(r.recovery_amount ?? '') }}
-                          onChange={(e) => {
-                            const raw = e.target.value.replace(/[^0-9.-]/g, '')
-                            if (raw === '') { setReturns(prev => prev.map(x => x.id === r.id ? { ...x, recovery_amount: undefined } : x)); return }
-                            if (raw === '-') return
-                            const num = parseFloat(raw)
-                            if (!isNaN(num)) setReturns(prev => prev.map(x => x.id === r.id ? { ...x, recovery_amount: num } : x))
-                          }}
-                          onBlur={async (e) => {
-                            const num = parseFloat(e.target.value.replace(/,/g, ''))
-                            if (!isNaN(num)) {
-                              try { await returnApi.patch(r.id, { recovery_amount: num }) } catch (_e) { /* 무시 */ }
-                            }
-                          }}
+                          value={companyAmounts[r.id] || ''}
+                          placeholder=""
+                          onChange={(e) => setCompanyAmounts(prev => ({ ...prev, [r.id]: e.target.value }))}
                           style={{ width: '80px', padding: '0.3rem 0.5rem', background: '#1A1A1A', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#E5E5E5', fontSize: '0.8rem', textAlign: 'right' }}
                         />
                       </td>
-                      <td style={{ ...tdCenter, fontSize: '0.8rem' }}>
-                        {(r.settlement_amount != null || r.recovery_amount != null)
-                          ? fmtNum((r.settlement_amount ?? 0) - (r.recovery_amount ?? 0))
-                          : '-'}
-                      </td>
                       <td style={{ ...tdCenter, padding: '0.375rem' }}>
+                        {(() => {
+                          const cd = r.completion_detail || COMPLETION_DEFAULT
+                          const cc = COMPLETION_COLORS[cd]
+                          return (
                         <select
-                          value={r.completion_detail || '진행중'}
+                          value={cd}
                           onChange={async (e) => {
                             const val = e.target.value
                             setReturns(prev => prev.map(x => x.id === r.id ? { ...x, completion_detail: val } : x))
@@ -594,33 +556,14 @@ export default function ReturnsPage() {
                               await returnApi.patch(r.id, { completion_detail: val })
                             } catch (_e) { /* 무시 */ }
                           }}
-                          style={{ padding: '0.2rem 0.3rem', background: '#1A1A1A', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#E5E5E5', fontSize: '0.75rem', cursor: 'pointer', outline: 'none' }}
+                          style={{ padding: '0.2rem 0.3rem', background: cc?.bg || '#1A1A1A', border: '1px solid #2D2D2D', borderRadius: '4px', color: cc?.fg || '#E5E5E5', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer', outline: 'none' }}
                         >
-                          <option value="진행중">진행중</option>
-                          <option value="취소">취소</option>
-                          <option value="교환">교환</option>
-                          <option value="반품">반품</option>
-                          <option value="거부">거부</option>
+                          {COMPLETION_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
                         </select>
+                          )
+                        })()}
                       </td>
-                      <td colSpan={2} style={{ ...tdCenter, padding: '0.375rem' }}>
-                        <select
-                          value={r.customer_order_no || 'return_incomplete'}
-                          onChange={async (e) => {
-                            const val = e.target.value
-                            try {
-                              await returnApi.patch(r.id, { customer_order_no: val })
-                              setReturns(prev => prev.map(x => x.id === r.id ? { ...x, customer_order_no: val } : x))
-                            } catch (_e) { /* 무시 */ }
-                          }}
-                          style={{ padding: '0.2rem 0.3rem', background: '#1A1A1A', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#E5E5E5', fontSize: '0.75rem', cursor: 'pointer', outline: 'none' }}
-                        >
-                          <option value="return_incomplete">미완료</option>
-                          <option value="return_complete">완료</option>
-                        </select>
-                      </td>
-                      </tr>
-                      <tr style={{ borderBottom: '1px solid rgba(45,45,45,0.5)' }}>
+                      <td style={{ ...tdCenter, maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.product_name || '-'}</td>
                       <td style={{ ...tdCenter, padding: '0.375rem' }}>
                         <div
                           onClick={() => {
@@ -646,7 +589,15 @@ export default function ReturnsPage() {
                         />
                       </td>
                       <td style={tdCenter}>{r.customer_phone || '-'}</td>
-                      <td style={{ ...tdCenter, maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.product_name || '-'}</td>
+                      <td style={tdCenter}>
+                        {r.region ? (
+                          <span
+                            onClick={() => setAddressModal({ region: r.region || '', address: r.customer_address || '', phone: r.customer_phone || '', customer: r.customer_name || '' })}
+                            style={{ color: '#E5E5E5', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: '#3D3D3D', textUnderlineOffset: '3px' }}
+                            title={r.customer_address || '주소 정보 없음'}
+                          >{r.region}</span>
+                        ) : '-'}
+                      </td>
                       <td style={{ ...tdCenter, padding: '0.375rem' }}>
                         <input
                           type="text"
@@ -668,15 +619,6 @@ export default function ReturnsPage() {
                         {r.return_link ? <a href={r.return_link} target="_blank" rel="noopener noreferrer" style={{ color: '#4C9AFF', textDecoration: 'none' }}>링크</a> : '-'}
                       </td>
                       <td style={{ ...tdCenter, color: '#888' }}>{fmtMD(r.return_request_date || r.created_at)}</td>
-                      <td style={tdCenter}>
-                        {r.region ? (
-                          <span
-                            onClick={() => setAddressModal({ region: r.region || '', address: r.customer_address || '', phone: r.customer_phone || '', customer: r.customer_name || '' })}
-                            style={{ color: '#E5E5E5', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: '#3D3D3D', textUnderlineOffset: '3px' }}
-                            title={r.customer_address || '주소 정보 없음'}
-                          >{r.region}</span>
-                        ) : '-'}
-                      </td>
                       <td style={{ ...tdCenter, padding: '0.375rem' }}>
                         <select
                           value={r.product_location || '고객'}
@@ -693,6 +635,18 @@ export default function ReturnsPage() {
                           <option value="사무실">사무실</option>
                           <option value="원주문">원주문</option>
                           <option value="배송미완료">배송미완료</option>
+                        </select>
+                      </td>
+                      <td style={{ ...tdCenter, padding: '0.375rem' }}>
+                        <select value={r.return_source || '원주문'} onChange={async (e) => {
+                          try {
+                            await returnApi.patch(r.id, { return_source: e.target.value })
+                            loadReturns()
+                          } catch {}
+                        }} style={{ fontSize: '0.72rem', padding: '2px 4px', background: '#1A1A1A', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#E5E5E5', cursor: 'pointer' }}>
+                          <option value="원주문">원주문</option>
+                          <option value="홈픽">홈픽</option>
+                          <option value="자동회수">자동회수</option>
                         </select>
                       </td>
                       <td style={{ ...tdCenter, padding: '0.375rem' }}>
@@ -713,15 +667,19 @@ export default function ReturnsPage() {
                         </select>
                       </td>
                       <td style={{ ...tdCenter, padding: '0.375rem' }}>
-                        <select value={r.return_source || '원주문'} onChange={async (e) => {
-                          try {
-                            await returnApi.patch(r.id, { return_source: e.target.value })
-                            loadReturns()
-                          } catch {}
-                        }} style={{ fontSize: '0.72rem', padding: '2px 4px', background: '#1A1A1A', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#E5E5E5', cursor: 'pointer' }}>
-                          <option value="원주문">원주문</option>
-                          <option value="홈픽">홈픽</option>
-                          <option value="자동회수">자동회수</option>
+                        <select
+                          value={r.customer_order_no || 'return_incomplete'}
+                          onChange={async (e) => {
+                            const val = e.target.value
+                            try {
+                              await returnApi.patch(r.id, { customer_order_no: val })
+                              setReturns(prev => prev.map(x => x.id === r.id ? { ...x, customer_order_no: val } : x))
+                            } catch (_e) { /* 무시 */ }
+                          }}
+                          style={{ padding: '0.2rem 0.3rem', background: '#1A1A1A', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#E5E5E5', fontSize: '0.75rem', cursor: 'pointer', outline: 'none' }}
+                        >
+                          <option value="return_incomplete">미완료</option>
+                          <option value="return_complete">완료</option>
                         </select>
                       </td>
                       <td style={{ ...tdCenter, padding: '0.375rem' }}>
@@ -741,11 +699,10 @@ export default function ReturnsPage() {
                         </select>
                       </td>
                       </tr>
-                    </Fragment>
                   )
                 })}
                 {returns.length === 0 && (
-                  <tr><td colSpan={12} style={{ padding: '3rem', textAlign: 'center', color: '#555' }}>반품/교환 내역이 없습니다</td></tr>
+                  <tr><td colSpan={22} style={{ padding: '3rem', textAlign: 'center', color: '#555' }}>반품/교환 내역이 없습니다</td></tr>
                 )}
               </tbody>
             </table>
