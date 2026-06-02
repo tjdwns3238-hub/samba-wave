@@ -773,6 +773,10 @@ class SambaShipmentService:
 
         logger.info(f"[메모리] 전송시작: {_mem_mb()}MB")
 
+        # commit 후 ORM 객체가 expired → _dispatch_one 내 lazy load 시도 → greenlet_spawn
+        # expire_on_commit=False로 이 세션에서 읽은 객체들이 commit 후에도 유효하게 유지
+        self.session.sync_session.expire_on_commit = False
+
         from backend.domain.samba.account.model import SambaMarketAccount
         from backend.domain.samba.account.repository import SambaMarketAccountRepository
         from backend.domain.samba.collector.repository import (
