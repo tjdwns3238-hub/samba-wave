@@ -2050,57 +2050,72 @@ class SambaShipmentService:
                     _imm_nos = res.get("product_nos") or {}
                     _imm_snap = res.get("sent_snapshot")
                     if _imm_nos or _imm_snap:
+                        # 즉시저장은 별도 세션에서 — self.session commit 시
+                        # 세션 내 모든 ORM 객체(account 등)가 expired되어
+                        # 이후 account.market_type 접근 시 greenlet_spawn 에러 발생.
                         try:
-                            if _imm_nos:
-                                # 신규 등록: registered_accounts + market_product_nos 갱신
-                                _pr_now = await product_repo.get_async(product_id)
-                                if _pr_now:
-                                    _imm_reg = list(
-                                        set(
-                                            (_pr_now.registered_accounts or [])
-                                            + [account_id]
-                                        )
-                                    )
-                                    _imm_mpn = dict(_pr_now.market_product_nos or {})
-                                    _imm_mpn.update(_imm_nos)
-                                    await product_repo.update_async(
-                                        product_id,
-                                        registered_accounts=_imm_reg,
-                                        market_product_nos=_imm_mpn,
-                                        status="registered",
-                                    )
-                                    # update_async 내부에서 commit 완료
-                            if _imm_snap:
-                                # last_sent_data: 계정 하나만 atomic merge
-                                # (전체 덮어쓰기 시 다른 그룹 동시 전송과 race condition 발생)
-                                import json as _imm_j  # noqa: F811
-                                from sqlalchemy import text as _imm_sa_text  # noqa: F811
+                            import json as _imm_j  # noqa: F811
+                            from backend.db.orm import (
+                                get_write_session as _get_imm_session,
+                            )
+                            from backend.domain.samba.collector.repository import (
+                                SambaCollectedProductRepository as _ImmCPRepo,
+                            )
+                            from sqlalchemy import text as _imm_sa_text  # noqa: F811
 
-                                await self.session.execute(
-                                    _imm_sa_text(
-                                        "UPDATE samba_collected_product"
-                                        " SET last_sent_data = ("
-                                        "  COALESCE(CAST(last_sent_data AS jsonb), '{}'::jsonb)"
-                                        "  || CAST(:updates AS jsonb))::json,"
-                                        " updated_at = NOW()"
-                                        " WHERE id = :pid"
-                                    ),
-                                    {
-                                        "updates": _imm_j.dumps(
-                                            {account_id: _imm_snap}
+                            async with _get_imm_session() as _imm_s:
+                                if _imm_nos:
+                                    _pr_now = await _ImmCPRepo(_imm_s).get_async(
+                                        product_id
+                                    )
+                                    if _pr_now:
+                                        _imm_reg = list(
+                                            set(
+                                                (_pr_now.registered_accounts or [])
+                                                + [account_id]
+                                            )
+                                        )
+                                        _imm_mpn = dict(
+                                            _pr_now.market_product_nos or {}
+                                        )
+                                        _imm_mpn.update(_imm_nos)
+                                        from sqlalchemy import update as _imm_upd
+
+                                        from backend.domain.samba.collector.model import (
+                                            SambaCollectedProduct as _ImmCP,
+                                        )
+
+                                        await _imm_s.execute(
+                                            _imm_upd(_ImmCP)
+                                            .where(_ImmCP.id == product_id)
+                                            .values(
+                                                registered_accounts=_imm_reg,
+                                                market_product_nos=_imm_mpn,
+                                                status="registered",
+                                            )
+                                        )
+                                if _imm_snap:
+                                    await _imm_s.execute(
+                                        _imm_sa_text(
+                                            "UPDATE samba_collected_product"
+                                            " SET last_sent_data = ("
+                                            "  COALESCE(CAST(last_sent_data AS jsonb), '{}'::jsonb)"
+                                            "  || CAST(:updates AS jsonb))::json,"
+                                            " updated_at = NOW()"
+                                            " WHERE id = :pid"
                                         ),
-                                        "pid": product_id,
-                                    },
-                                )
-                                await self.session.commit()
+                                        {
+                                            "updates": _imm_j.dumps(
+                                                {account_id: _imm_snap}
+                                            ),
+                                            "pid": product_id,
+                                        },
+                                    )
+                                await _imm_s.commit()
                         except Exception as _ie:
                             logger.warning(
                                 f"[전송] {market_type} 즉시저장 실패 (무시): {_ie}"
                             )
-                            try:
-                                await self.session.rollback()
-                            except Exception:
-                                pass
 
                     action = "수정" if existing_product_no else "등록"
                     _plugin_msg = result.get("message", "")
