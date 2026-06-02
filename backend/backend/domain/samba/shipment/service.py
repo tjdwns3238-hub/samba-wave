@@ -2125,7 +2125,7 @@ class SambaShipmentService:
                     _err = f"전송 타임아웃 또는 동시성 오류 ({market_type})"
                     logger.error(f"[전송] 계정 {account_id} 세마포어 누출: {exc}")
                 else:
-                    logger.error(f"[전송] 계정 {account_id} 예외: {exc}")
+                    logger.error(f"[전송] 계정 {account_id} 예외: {exc}", exc_info=True)
                 res["error"] = _err
                 try:
                     await self.session.rollback()
