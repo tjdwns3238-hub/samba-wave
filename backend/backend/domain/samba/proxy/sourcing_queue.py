@@ -783,6 +783,19 @@ class SourcingQueue:
                 )
                 for i, s in enumerate(_sites):
                     params[f"dsite_{i}"] = s.upper()
+            else:
+                # 데몬 dequeue 차단 — 무신사/GSShop 등은 trace(배송조회)가 member.one SSO +
+                # app_atk/mss_mac/cf_clearance 토큰을 요구해 헤드리스 데몬으론 못 뚫는다
+                # (2026-06-01 실측). owner='' 로 두면 항상 켜진 데몬이 먼저 가로채 로그인/trace
+                # 실패 → 확장앱이 못 받음. 데몬은 이 사이트 tracking dequeue 차단 → 확장앱 전담.
+                _tds = sorted(TRACKING_ONLY_DAEMON_SITES)
+                if _tds:
+                    _tph = ", ".join(f":tdsite_{i}" for i in range(len(_tds)))
+                    conditions.append(
+                        f"NOT (job_type = 'tracking' AND UPPER(site) IN ({_tph}))"
+                    )
+                    for i, s in enumerate(_tds):
+                        params[f"tdsite_{i}"] = s.upper()
 
             # site 필터 — 케이싱 무관 매칭.
             # detail 잡 site='ABCmart'(혼합)인데 tracking 잡 site='ABCMART'(대문자)라
