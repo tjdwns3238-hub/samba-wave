@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef, Fragment } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { accountApi, orderApi, type SambaMarketAccount } from '@/lib/samba/api/commerce'
 import { returnApi, type SambaReturn } from '@/lib/samba/api/support'
 import { showAlert, showConfirm } from '@/components/samba/Modal'
@@ -436,7 +436,7 @@ export default function ReturnsPage() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
               <thead>
                 <tr style={{ background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid #1E1E1E' }}>
-                  <th rowSpan={2} style={{ width: '36px', textAlign: 'center', padding: '0.3rem 0.5rem', verticalAlign: 'middle' }}>
+                  <th style={{ width: '36px', textAlign: 'center', padding: '0.3rem 0.5rem', verticalAlign: 'middle' }}>
                     <input
                       type="checkbox"
                       checked={returns.length > 0 && selectedIds.size === returns.length}
@@ -447,14 +447,7 @@ export default function ReturnsPage() {
                       style={{ width: '13px', height: '13px', cursor: 'pointer', accentColor: '#F59E0B' }}
                     />
                   </th>
-                  <th rowSpan={2} style={{ textAlign: 'center', padding: '0.5rem 0.625rem', color: '#888', fontWeight: 500, fontSize: '0.75rem', whiteSpace: 'nowrap', verticalAlign: 'middle' }}>사진</th>
-                  {['고객', '사업자', '주문번호', '마켓', 'CS', '주문일', '정산금액', '환수금액', '수익', '전체내역'].map((h, i) => (
-                    <th key={i} style={{ textAlign: 'center', padding: '0.5rem 0.625rem', color: '#888', fontWeight: 500, fontSize: '0.75rem', whiteSpace: 'nowrap' }}>{h}</th>
-                  ))}
-                  <th colSpan={2} style={{ textAlign: 'center', padding: '0.5rem 0.625rem', color: '#888', fontWeight: 500, fontSize: '0.75rem', whiteSpace: 'nowrap' }}>고객주문</th>
-                </tr>
-                <tr style={{ background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid #2D2D2D' }}>
-                  {['체크날짜', '전화', '상품명', '메모', 'CS링크', 'CS접수일', '지역', '상품위치', '상태', '반품신청한곳', '원주문'].map((h, i) => (
+                  {['사진', '고객', '사업자', '주문번호', '마켓', 'CS', '주문일', '정산금액', '환수금액', '수익', '전체내역', '고객주문', '체크날짜', '전화', '상품명', '메모', 'CS링크', 'CS접수일', '지역', '상품위치', '상태', '반품신청한곳', '원주문'].map((h, i) => (
                     <th key={i} style={{ textAlign: 'center', padding: '0.5rem 0.625rem', color: '#888', fontWeight: 500, fontSize: '0.75rem', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
@@ -476,9 +469,8 @@ export default function ReturnsPage() {
                   return true
                 }).map((r, idx) => {
                   return (
-                    <Fragment key={r.id}>
-                      <tr>
-                        <td rowSpan={2} style={{ width: '36px', textAlign: 'center', padding: '0.5rem', verticalAlign: 'middle' }}>
+                      <tr key={r.id} style={{ borderBottom: '1px solid rgba(45,45,45,0.5)' }}>
+                        <td style={{ width: '36px', textAlign: 'center', padding: '0.5rem', verticalAlign: 'middle' }}>
                           <div style={{ fontSize: '0.675rem', color: '#666', marginBottom: '2px' }}>{idx + 1}</div>
                           <input
                             type="checkbox"
@@ -492,7 +484,7 @@ export default function ReturnsPage() {
                             style={{ width: '13px', height: '13px', cursor: 'pointer', accentColor: '#F59E0B' }}
                           />
                         </td>
-                        <td rowSpan={2} style={{ padding: '0.625rem 0.5rem', textAlign: 'center', verticalAlign: 'middle' }}>
+                        <td style={{ padding: '0.625rem 0.5rem', textAlign: 'center', verticalAlign: 'middle' }}>
                         {r.product_image ? (
                           <img
                             src={r.product_image}
@@ -603,7 +595,7 @@ export default function ReturnsPage() {
                           <option value="거부">거부</option>
                         </select>
                       </td>
-                      <td colSpan={2} style={{ ...tdCenter, padding: '0.375rem' }}>
+                      <td style={{ ...tdCenter, padding: '0.375rem' }}>
                         <select
                           value={r.customer_order_no || 'return_incomplete'}
                           onChange={async (e) => {
@@ -619,8 +611,6 @@ export default function ReturnsPage() {
                           <option value="return_complete">완료</option>
                         </select>
                       </td>
-                      </tr>
-                      <tr style={{ borderBottom: '1px solid rgba(45,45,45,0.5)' }}>
                       <td style={{ ...tdCenter, padding: '0.375rem' }}>
                         <div
                           onClick={() => {
@@ -741,11 +731,10 @@ export default function ReturnsPage() {
                         </select>
                       </td>
                       </tr>
-                    </Fragment>
                   )
                 })}
                 {returns.length === 0 && (
-                  <tr><td colSpan={12} style={{ padding: '3rem', textAlign: 'center', color: '#555' }}>반품/교환 내역이 없습니다</td></tr>
+                  <tr><td colSpan={24} style={{ padding: '3rem', textAlign: 'center', color: '#555' }}>반품/교환 내역이 없습니다</td></tr>
                 )}
               </tbody>
             </table>
