@@ -78,7 +78,7 @@ except ImportError:
 # ====================================================================
 # 데몬 버전 — build.ps1 가 갱신. 자동 업데이트 비교 기준.
 # ====================================================================
-DAEMON_VERSION = "1.4.28"
+DAEMON_VERSION = "1.4.29"
 
 
 # ── 가격수집 도메인 화이트리스트 ───────────────────────────────────────────
@@ -1390,17 +1390,41 @@ _FAILED_LOGIN_COOLDOWN_SEC = 1800  # 30분
 
 
 async def logout_site(page: Page, handler: SiteHandler) -> None:
-    """계정 전환용 정식 로그아웃 — 서버 세션 expire + Set-Cookie 쿠키 정리."""
-    if not handler.logout_url:
-        return
+    """계정 전환용 로그아웃 — logout URL(best-effort) + 등록도메인 쿠키 강제 클리어.
+
+    [2026-06-03 근본원인 확정] SSG/a-rt(ABCmart·GrandStage) 등은 logout URL 을 호출해도
+    실제 세션이 안 끊긴다(실측: logout 후에도 로그인 유지). 계정 스왑 시 옛 세션이 남아
+    login 페이지가 홈으로 리다이렉트 → 로그인 폼 미표시 → fill 실패 → "계정 로그인 실패".
+    → 해당 사이트 등록도메인(ssg.com/a-rt.com/lotteon.com) 쿠키를 직접 제거해 강제 로그아웃.
+    타 사이트 세션은 보존(도메인 한정). 쿠키 클리어 후 login 페이지가 정상적으로 폼 노출.
+    """
+    if handler.logout_url:
+        try:
+            await page.goto(
+                handler.logout_url, wait_until="domcontentloaded", timeout=20_000
+            )
+            await page.wait_for_timeout(1_000)
+        except Exception as exc:
+            logger.warning(
+                "%s 로그아웃 URL 실패(무시): %s", handler.site, str(exc)[:100]
+            )
+
+    # 등록도메인 쿠키 강제 클리어 — logout URL 무효 사이트 대응 (정석 fix).
     try:
-        await page.goto(
-            handler.logout_url, wait_until="domcontentloaded", timeout=20_000
-        )
-        await page.wait_for_timeout(1_500)
-        logger.info("%s 로그아웃 완료 (계정 전환)", handler.site)
+        from urllib.parse import urlparse
+        import re as _re
+
+        _src = handler.home_url or handler.login_url or ""
+        _host = (urlparse(_src).hostname or "").lower()
+        _parts = _host.split(".")
+        _reg = ".".join(_parts[-2:]) if len(_parts) >= 2 else _host
+        if _reg:
+            # ssg.com / .ssg.com / member.ssg.com 등 등록도메인 하위 전부 매칭
+            _pat = _re.compile(r"(^|\.)" + _re.escape(_reg) + r"$")
+            await page.context.clear_cookies(domain=_pat)
+            logger.info("%s 쿠키 클리어(%s) — 강제 로그아웃 완료", handler.site, _reg)
     except Exception as exc:
-        logger.warning("%s 로그아웃 실패(무시): %s", handler.site, str(exc)[:100])
+        logger.warning("%s 쿠키 클리어 실패(무시): %s", handler.site, str(exc)[:100])
 
 
 async def ensure_logged_in_as_account(
@@ -1448,10 +1472,11 @@ async def ensure_logged_in_as_account(
         logger.error("%s 자격증명 조회 실패 account_id=%s", site, account_id or "기본")
         return False
 
-    # 다른 계정 로그인 중이면 먼저 로그아웃 (세션 정리)
-    if last and last != account_id:
-        await logout_site(page, handler)
-        _last_tracking_account.pop(site, None)
+    # 로그인 전 항상 강제 로그아웃(등록도메인 쿠키 클리어) — 옛/다른 계정 세션이 남아있으면
+    # login 페이지가 홈으로 리다이렉트돼 폼이 안 떠 fill 실패 → "로그인 실패"로 이어지던
+    # 근본원인 차단(2026-06-03 확정). 같은 계정+세션 살아있음은 위 fast-path 에서 이미 return.
+    await logout_site(page, handler)
+    _last_tracking_account.pop(site, None)
 
     ok = await auto_login_site(page, handler, cred)
     if ok:
