@@ -248,9 +248,25 @@ class CoupangPlugin(MarketPlugin):
                 logger.info(f"[쿠팡 필수 attribute] 추출 실패: {_e}")
 
         # 출고지에 등록된 택배사 코드 (출고지 조회 시 remoteInfos[0].deliveryCode 저장)
-        outbound_delivery_code = (
-            str(extras.get("outboundDeliveryCode", "") or "") or "CJGLS"
-        )
+        # #327: 저장값 없으면 출고지 조회 API 로 실제 택배사 코드 취득 — CJGLS 강제 폴백 제거.
+        # 한진 등 다른 택배사 출고지 계정이 "도서산간 등록 택배사만 선택 가능" 에러로 실패하던 문제.
+        outbound_delivery_code = str(extras.get("outboundDeliveryCode", "") or "")
+        if not outbound_delivery_code and outbound_code:
+            try:
+                _places = await client.get_outbound_shipping_places()
+                for _p in _places:
+                    if str(_p.get("code") or "") == outbound_code and _p.get(
+                        "deliveryCode"
+                    ):
+                        outbound_delivery_code = str(_p["deliveryCode"])
+                        logger.info(
+                            f"[쿠팡] 출고지 택배사 코드 자동 취득: {outbound_code} → {outbound_delivery_code}"
+                        )
+                        break
+            except Exception as _e:
+                logger.warning(f"[쿠팡] 출고지 택배사 코드 조회 실패(무시): {_e}")
+        if not outbound_delivery_code:
+            outbound_delivery_code = "CJGLS"  # 최후 폴백
 
         # AS 전화번호 주입은 base._apply_market_settings 에서 처리됨
         data = CoupangClient.transform_product(

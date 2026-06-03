@@ -308,13 +308,61 @@ async def _send_11st(order, account, courier, tracking, session):
     if not api_key:
         return False, "11번가 API Key 누락"
 
+    dlv_etprs_cd = _CARRIER_MAP.get(courier, courier)
+    is_direct = (courier or "").replace(" ", "") == "직접배송"
+    client = ElevenstClient(api_key)
+
+    # #328: 취소요청 상태 주문은 일반 송장등록 API(sendDeliveryInfo)를 11번가가 무시함.
+    # 이미 발송했다면 취소거부+송장입력 API(cancelreqreject)를 호출해야 실제 반영됨.
+    # 클레임번호(ord_prd_cn_seq)는 samba_order 에 컬럼이 없고 samba_return.clm_req_seq 에 저장됨.
+    if (getattr(order, "shipping_status", "") or "") == "취소요청":
+        from sqlalchemy import select as _sa_select
+        from backend.domain.samba.returns.model import SambaReturn
+
+        _ret = (
+            (
+                await session.execute(
+                    _sa_select(SambaReturn)
+                    .where(SambaReturn.order_id == order.id)
+                    .where(SambaReturn.type == "cancel")
+                    .order_by(SambaReturn.created_at.desc())
+                )
+            )
+            .scalars()
+            .first()
+        )
+        _clm_seq = str((_ret.clm_req_seq if _ret else None) or "")
+        _prd_seq = str(
+            (_ret.ord_prd_seq if _ret else None)
+            or getattr(order, "ord_prd_seq", None)
+            or ""
+        )
+        if _clm_seq and order.order_number and _prd_seq:
+            rejected = await client.reject_cancel(
+                ord_prd_cn_seq=_clm_seq,
+                ord_no=str(order.order_number),
+                ord_prd_seq=_prd_seq,
+                dlv_mthd_cd="03" if is_direct else "01",
+                dlv_etprs_cd=dlv_etprs_cd,
+                invc_no=tracking,
+                reject_reason_cd="01",  # 01=이미발송
+                reject_reason="이미 발송 완료",
+            )
+            return (
+                (True, "11번가 취소거부+송장 등록 완료")
+                if rejected
+                else (False, "11번가 취소거부 실패")
+            )
+        return (
+            False,
+            "11번가 취소요청 주문 — 클레임번호 미확보로 취소거부 불가 (주문동기화 후 재시도)",
+        )
+
+    # 정상 발송 경로 — dlvNo(배송번호) 필수
     dlv_no = order.shipment_id or ""
     if not dlv_no:
         return False, "11번가 배송번호(dlvNo) 누락"
 
-    dlv_etprs_cd = _CARRIER_MAP.get(courier, courier)
-    is_direct = (courier or "").replace(" ", "") == "직접배송"
-    client = ElevenstClient(api_key)
     sent = await client.ship_order(
         dlv_no=dlv_no,
         invc_no=tracking,
