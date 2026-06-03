@@ -571,7 +571,14 @@ class SSGClient:
         result_obj = detail.get("result", detail)
         if not isinstance(result_obj, dict):
             return ""
-        mdc = result_obj.get("mainDisplayCategories")
+        # mainDisplayCategories 는 result.itemBase 하위에 중첩됨(프로덕션 실측).
+        # 방어적으로 result 직하도 함께 확인.
+        item_base = result_obj.get("itemBase")
+        mdc = None
+        if isinstance(item_base, dict):
+            mdc = item_base.get("mainDisplayCategories")
+        if mdc is None:
+            mdc = result_obj.get("mainDisplayCategories")
         if isinstance(mdc, dict):
             mdc = [mdc]
         if not isinstance(mdc, list):
