@@ -5021,9 +5021,14 @@ async def sync_orders_from_markets(
                     logger.info(f"[롯데ON] 취소 클레임 조회: {len(cancel_claims)}건")
                     cancel_step_map = {
                         "02": ("취소요청", "cancel_requested"),
+                        # 21=취소완료 (롯데ON 공식문서 odPrgsStepCd: 02 요청/21 취소완료/22 철회).
+                        # #326: od_seq 정밀매칭 + 전체취소(rmdrQty=0) + shipped_guard 로 안전.
+                        # 배송완료/구매확정 등 종결·정산 주문은 shipped_guard 가 차단.
+                        "21": ("취소완료", "cancelled"),
                     }
                     cancel_priority = {
                         "취소요청": 1,
+                        "취소완료": 3,  # 종결 — 반품/교환요청보다 우선
                     }
                     # 배송 진행 단계 보호 — 송장출력 이후로 진행한 주문은 좀비/지연
                     # cancel claim 으로 '취소요청'으로 되돌리지 않음 ('취소처리중'/'취소완료'
@@ -5037,6 +5042,9 @@ async def sync_orders_from_markets(
                     }
                     for claim in cancel_claims:
                         cn_od_no = claim.get("odNo", "")
+                        # od_seq 정밀매칭 — 다중 품목 주문에서 취소된 od_seq 만 정확히 갱신.
+                        # (od_no-only 매칭 시 같은 주문의 배송완료 다른 품목을 오취소할 위험, #326)
+                        cn_od_seq = str(claim.get("odSeq", "") or "")
                         step_cd_c = str(claim.get("odPrgsStepCd", "") or "")
                         mapped = cancel_step_map.get(step_cd_c)
                         if not mapped or not cn_od_no:
@@ -5057,15 +5065,18 @@ async def sync_orders_from_markets(
                         cn_ship_status, cn_status = mapped
                         found_in_data_c = False
                         for od in orders_data:
-                            if od.get("od_no") == cn_od_no:
+                            if od.get("od_no") == cn_od_no and (
+                                not cn_od_seq or str(od.get("od_seq", "")) == cn_od_seq
+                            ):
                                 cur_ss = od.get("shipping_status", "")
+                                # 취소요청·취소완료 모두 배송 진행/종결 상태는 보호 (정산 주문 오취소 차단)
                                 if (
-                                    cn_ship_status == "취소요청"
+                                    cn_ship_status in ("취소요청", "취소완료")
                                     and cur_ss in _lo_shipped_guard
                                 ):
                                     logger.info(
                                         f"[롯데ON][취소클레임] 배송 진행 상태 보호: {cn_od_no} "
-                                        f"{cur_ss} → 취소요청 차단"
+                                        f"{cur_ss} → {cn_ship_status} 차단"
                                     )
                                     found_in_data_c = True
                                     break
@@ -5074,30 +5085,47 @@ async def sync_orders_from_markets(
                                 if cur_p == 0 or new_p >= cur_p:
                                     od["shipping_status"] = cn_ship_status
                                     od["status"] = cn_status
+                                    if cn_status == "cancelled":
+                                        # 정산 finalize — _finalize_cancelled 관례와 동일
+                                        # (cost/shipping_fee/profit 0, revenue 는 건드리지 않음, #326)
+                                        od["cost"] = 0
+                                        od["shipping_fee"] = 0
+                                        od["profit"] = 0
                                 found_in_data_c = True
                                 break
                         if not found_in_data_c:
                             from sqlalchemy import text as _sa_text_cn
 
-                            _cn_row = await session.execute(
-                                _sa_text_cn(
-                                    "SELECT id FROM samba_order "
-                                    "WHERE source = 'lotteon' AND od_no = :od_no LIMIT 1"
-                                ),
-                                {"od_no": cn_od_no},
-                            )
+                            # od_seq 정밀매칭 — claim.odSeq 있으면 정확한 품목 row 만 조회
+                            if cn_od_seq:
+                                _cn_row = await session.execute(
+                                    _sa_text_cn(
+                                        "SELECT id FROM samba_order "
+                                        "WHERE source = 'lotteon' AND od_no = :od_no "
+                                        "AND od_seq = :od_seq LIMIT 1"
+                                    ),
+                                    {"od_no": cn_od_no, "od_seq": cn_od_seq},
+                                )
+                            else:
+                                _cn_row = await session.execute(
+                                    _sa_text_cn(
+                                        "SELECT id FROM samba_order "
+                                        "WHERE source = 'lotteon' AND od_no = :od_no LIMIT 1"
+                                    ),
+                                    {"od_no": cn_od_no},
+                                )
                             _cn_id = (_cn_row.fetchone() or [None])[0]
                             existing_c = (
                                 await svc.repo.get_async(_cn_id) if _cn_id else None
                             )
                             if existing_c:
                                 if (
-                                    cn_ship_status == "취소요청"
+                                    cn_ship_status in ("취소요청", "취소완료")
                                     and existing_c.shipping_status in _lo_shipped_guard
                                 ):
                                     logger.info(
                                         f"[롯데ON][취소클레임] 배송 진행 상태 보호(DB): {cn_od_no} "
-                                        f"{existing_c.shipping_status} → 취소요청 차단"
+                                        f"{existing_c.shipping_status} → {cn_ship_status} 차단"
                                     )
                                     continue
                                 cur_p = cancel_priority.get(
@@ -5107,13 +5135,21 @@ async def sync_orders_from_markets(
                                 if cur_p == 0 or new_p >= cur_p:
                                     # status도 함께 갱신 — orders_data 분기와 일치 (2026-05-20)
                                     # 누락 시 status=cancelled인데 ship=교환요청/반품요청 잔존 사고
-                                    await svc.update_order(
-                                        existing_c.id,
-                                        {
-                                            "shipping_status": cn_ship_status,
-                                            "status": cn_status,
-                                        },
-                                    )
+                                    _cn_upd = {
+                                        "shipping_status": cn_ship_status,
+                                        "status": cn_status,
+                                    }
+                                    if cn_status == "cancelled":
+                                        # 정산 finalize — _finalize_cancelled 관례와 동일
+                                        # (cost/shipping_fee/profit 0, revenue 유지, #326)
+                                        _cn_upd.update(
+                                            {
+                                                "cost": 0,
+                                                "shipping_fee": 0,
+                                                "profit": 0,
+                                            }
+                                        )
+                                    await svc.update_order(existing_c.id, _cn_upd)
                                     logger.info(
                                         f"[롯데ON][취소클레임] DB 직접 업데이트: {cn_od_no} → "
                                         f"{cn_status}/{cn_ship_status}"
@@ -5147,6 +5183,10 @@ async def sync_orders_from_markets(
                         found_in_data_r = False
                         for od in orders_data:
                             if od.get("od_no") == rt_od_no:
+                                # 취소완료(종결)는 반품클레임이 덮어쓰지 않음 (#326 — 취소가 권위)
+                                if od.get("status") == "cancelled":
+                                    found_in_data_r = True
+                                    break
                                 cur_p = return_priority.get(
                                     od.get("shipping_status", ""), 0
                                 )
@@ -5171,6 +5211,9 @@ async def sync_orders_from_markets(
                                 await svc.repo.get_async(_rt_id) if _rt_id else None
                             )
                             if existing_r:
+                                # 취소완료(종결)는 반품클레임이 덮어쓰지 않음 (#326)
+                                if existing_r.status == "cancelled":
+                                    continue
                                 cur_p = return_priority.get(
                                     existing_r.shipping_status, 0
                                 )
