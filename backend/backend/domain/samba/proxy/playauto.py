@@ -94,8 +94,13 @@ class PlayAutoClient:
         url: str,
         body: dict | list | None = None,
         params: dict | None = None,
+        read_timeout: float | None = None,
     ) -> Any:
-        """API 호출 공통 메서드."""
+        """API 호출 공통 메서드.
+
+        read_timeout: 이 호출에 한해 read 타임아웃을 덮어씀(초). 신규 등록처럼
+        EMP 서버 처리가 무거워 기본 60초를 넘기는 호출에 사용.
+        """
         client = self._get_client()
         headers = self._headers()
 
@@ -104,6 +109,9 @@ class PlayAutoClient:
             kwargs["json"] = body
         if params is not None:
             kwargs["params"] = params
+        if read_timeout is not None:
+            # connect 는 기본(15초) 유지, read 만 상향
+            kwargs["timeout"] = httpx.Timeout(read_timeout, connect=15.0)
 
         # 연결 단계 실패(ConnectError/ConnectTimeout/PoolTimeout)는 서버 도달 전이라
         # 재시도 안전 → 1회 재시도. ReadTimeout 등 응답 단계 실패는 등록 중복 우려로 재시도 안 함.
@@ -174,7 +182,9 @@ class PlayAutoClient:
         """
         url = f"{EMP_BASE_URL}/prods"
         body = {"data": products}
-        result = await self._call_api("POST", url, body=body)
+        # 신규 등록은 이미지/다옵션 풀 페이로드라 EMP 처리가 60초를 넘기는 경우가 있음.
+        # 워커 한도 300초 안에서 read 150초로 상향 (수정 PATCH 는 가벼워 기본 60초 유지).
+        result = await self._call_api("POST", url, body=body, read_timeout=150.0)
         logger.info(f"[플레이오토] 상품 등록 응답: {result}")
         return result if isinstance(result, list) else [result]
 

@@ -1812,7 +1812,12 @@ class SambaShipmentService:
                 # 스킵 판단
                 cur_price = int(acct_product.get("sale_price") or 0)
                 cur_cost_int = int(acct_product.get("cost") or 0)
-                last_sent = (product_row.last_sent_data or {}).get(account_id)
+                # last_sent_data 가 dict 아닌 오염값(과거 jsonb 병합 버그로 배열/JSON null
+                # 저장된 경우)이면 빈 dict 취급 — .get() 크래시 방지
+                _lsd_raw = product_row.last_sent_data
+                last_sent = (
+                    _lsd_raw.get(account_id) if isinstance(_lsd_raw, dict) else None
+                )
                 if last_sent:
                     last_price = (int(last_sent.get("sale_price") or 0) // 100) * 100
                     last_cost_sent = int(last_sent.get("cost") or 0)
@@ -2144,7 +2149,8 @@ class SambaShipmentService:
                                         _imm_sa_text(
                                             "UPDATE samba_collected_product"
                                             " SET last_sent_data = ("
-                                            "  COALESCE(CAST(last_sent_data AS jsonb), '{}'::jsonb)"
+                                            "  CASE WHEN jsonb_typeof(CAST(last_sent_data AS jsonb)) = 'object'"
+                                            "       THEN CAST(last_sent_data AS jsonb) ELSE '{}'::jsonb END"
                                             "  || CAST(:updates AS jsonb))::json,"
                                             " updated_at = NOW()"
                                             " WHERE id = :pid"
@@ -2197,7 +2203,10 @@ class SambaShipmentService:
         # ORM lazy load 없이 안전하게 참조할 수 있도록 순수 Python 타입으로 추출
         _row_mpn = dict(product_row.market_product_nos or {})
         _row_reg = list(product_row.registered_accounts or [])
-        _row_lsd = dict(product_row.last_sent_data or {})
+        # last_sent_data 가 dict 아닌 오염값(과거 jsonb 병합 버그로 배열/JSON null
+        # 저장)이면 빈 dict 취급 — dict() 크래시로 전송 전체가 막히는 것 방지
+        _lsd_src = product_row.last_sent_data
+        _row_lsd = dict(_lsd_src) if isinstance(_lsd_src, dict) else {}
         # greenlet 방지: product_row 도 세션에서 분리(expunge).
         # _dispatch_one 시작부 connection refresh(SELECT 1 + rollback)가 세션 내 모든
         # ORM 을 expire 시키는데, product_row.name/source_site/tenant_id/market_product_nos 등을

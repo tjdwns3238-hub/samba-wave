@@ -1308,7 +1308,8 @@ async def _site_autotune_loop(device_id: str, site: str):
                             _stmt = _alm_text(
                                 "UPDATE samba_collected_product"
                                 " SET last_sent_data = ("
-                                "  COALESCE(CAST(last_sent_data AS jsonb), '{}'::jsonb)"
+                                "  CASE WHEN jsonb_typeof(CAST(last_sent_data AS jsonb)) = 'object'"
+                                "       THEN CAST(last_sent_data AS jsonb) ELSE '{}'::jsonb END"
                                 "  || CAST(:updates AS jsonb))::json,"
                                 " updated_at = NOW()"
                                 " WHERE id = :pid"
