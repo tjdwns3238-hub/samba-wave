@@ -623,3 +623,6 @@ session-report-*.html
 
 # 일회성 스크립트/로그
 tmp/
+
+# 카테고리 학습데이터 - 운영 중 자동 재생성, fork별 DB 상이 (issue #333)
+backend/backend/domain/samba/category/rules_exported.py
