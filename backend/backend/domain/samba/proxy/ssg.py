@@ -550,6 +550,41 @@ class SSGClient:
             params={"itemId": item_id},
         )
 
+    async def get_item_detail(self, item_id: str) -> dict[str, Any]:
+        """상품 상세 조회 — getItemList(요약) 와 달리 전체 필드 반환.
+
+        SSG Open API: GET /item/0.1/online/{itemId} (프로덕션 실측 확인).
+        응답: result.{itemBase, sites, mainDisplayCategories[...], ...}
+          mainDisplayCategories: [{siteNo, dispCtgId, ...}] — 6005(SSG.COM)/6004 전시카테고리.
+        """
+        return await self._call_api("GET", f"/item/0.1/online/{item_id}")
+
+    def extract_main_disp_ctg(self, detail: dict[str, Any], site_no: str) -> str:
+        """상세조회 응답에서 특정 siteNo 의 메인 전시카테고리 dispCtgId 추출.
+
+        b21b361d(SSG.COM opt-in) 이전 등록분은 6005 전시카테고리를 이미 보유 →
+        수정 시 그대로 보존하지 않으면 SSG 가 "SSG.COM몰 메인매장 카테고리 필수" 거부.
+        반환: dispCtgId 문자열 (없으면 빈 문자열).
+        """
+        if not isinstance(detail, dict):
+            return ""
+        result_obj = detail.get("result", detail)
+        if not isinstance(result_obj, dict):
+            return ""
+        mdc = result_obj.get("mainDisplayCategories")
+        if isinstance(mdc, dict):
+            mdc = [mdc]
+        if not isinstance(mdc, list):
+            return ""
+        for ent in mdc:
+            if not isinstance(ent, dict):
+                continue
+            if str(ent.get("siteNo") or "") == str(site_no):
+                cid = ent.get("dispCtgId")
+                if cid:
+                    return str(cid)
+        return ""
+
     async def get_item_approval_status(
         self, item_id: str, div_cd: str = "00"
     ) -> list[dict[str, Any]]:

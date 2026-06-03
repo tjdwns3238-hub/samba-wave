@@ -324,6 +324,27 @@ class SSGPlugin(MarketPlugin):
             except Exception as _e:
                 logger.warning(f"[SSG] SSG.COM(6005) 전시카테고리 조회 실패: {_e}")
 
+        # 6005 전시카테고리 보존(회귀 #312 보정) — 수정(existing_no) 인데 위 조회로
+        # main_category_id 를 못 채운 경우, 기존 등록 아이템이 이미 6005 카테고리를
+        # 보유하면 그대로 보존한다. b21b361d 가 6005 조회를 ssgComEnabled opt-in(기본 off)
+        # 으로 바꾼 뒤, 그 이전 6005 등록분을 수정하면 dispCtgs 에서 6005 가 빠져
+        # SSG 가 "SSG.COM몰 메인매장 카테고리 1개 이상 필수" 로 거부하던 문제 차단.
+        # 6004 전용 아이템은 6005 mainDisplayCategory 가 없어 main_category_id 빈값 유지 →
+        # 의도치 않은 6005 재등록 없음. 신규등록(existing_no 없음)은 상세조회 대상 아님.
+        if existing_no and not main_category_id:
+            try:
+                _detail = await client.get_item_detail(existing_no)
+                _kept = client.extract_main_disp_ctg(_detail, "6005")
+                if _kept:
+                    main_category_id = _kept
+                    main_cat_candidates = [_kept]
+                    logger.info(
+                        f"[SSG] 기존 6005 전시카테고리 보존: "
+                        f"itemId={existing_no} dispCtgId={_kept}"
+                    )
+            except Exception as _e:
+                logger.warning(f"[SSG] 기존 6005 카테고리 보존 조회 실패(무시): {_e}")
+
         # 무신사 등 referer 차단 CDN URL을 R2로 미러링
         # — SSG는 등록 URL을 자체 서버가 fetch하므로 핫링크 차단 시 워터마크 이미지로 캐싱됨
         try:
