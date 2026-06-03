@@ -78,7 +78,7 @@ except ImportError:
 # ====================================================================
 # 데몬 버전 — build.ps1 가 갱신. 자동 업데이트 비교 기준.
 # ====================================================================
-DAEMON_VERSION = "1.4.30"
+DAEMON_VERSION = "1.4.31"
 
 
 # ── 가격수집 도메인 화이트리스트 ───────────────────────────────────────────
@@ -1388,6 +1388,97 @@ _last_tracking_account: dict[str, str] = {}
 _failed_login_accounts: dict[str, float] = {}
 _FAILED_LOGIN_COOLDOWN_SEC = 1800  # 30분
 
+# ── 계정별 세션 쿠키 재사용 (2026-06-04) ───────────────────────────────────
+# SSG 등이 반복 자동 로그인을 "비정상 자동접근(이상 환경)"으로 감지 → 계정 보안잠금
+# (findIdPw 리다이렉트 + "비번 변경 후 이용" alert). 헤드리스 핑거프린트는 깨끗
+# (webdriver=False, 캡차 없음)이므로 트리거는 서버측 로그인 빈도/패턴.
+# → 계정별 도메인 쿠키를 저장하고, 다음 잡에서 fresh 로그인 대신 저장세션을 복원해
+# 로그인 횟수를 최소화한다(재시작 후도 재사용하도록 파일 영속). site|account → cookies.
+_account_session_cookies: dict[str, list] = {}
+
+
+def _sessions_file() -> Path:
+    return _install_dir() / "account_sessions.json"
+
+
+def _load_account_sessions() -> None:
+    try:
+        fp = _sessions_file()
+        if fp.exists():
+            data = json.loads(fp.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                _account_session_cookies.update(
+                    {k: v for k, v in data.items() if isinstance(v, list)}
+                )
+            logger_print(f"세션 캐시 로드: {len(_account_session_cookies)}계정")
+    except Exception as exc:
+        logger_print(f"세션 캐시 로드 실패(무시): {exc}")
+
+
+def _persist_account_sessions() -> None:
+    try:
+        _sessions_file().write_text(
+            json.dumps(_account_session_cookies), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
+def _handler_cookie_domain(handler: "SiteHandler") -> tuple[str, Any]:
+    """handler 등록도메인(reg) + 그 하위 매칭 정규식 패턴 반환."""
+    from urllib.parse import urlparse
+    import re as _re
+
+    src = handler.home_url or handler.login_url or ""
+    host = (urlparse(src).hostname or "").lower()
+    parts = host.split(".")
+    reg = ".".join(parts[-2:]) if len(parts) >= 2 else host
+    pat = _re.compile(r"(^|\.)" + _re.escape(reg) + r"$") if reg else None
+    return reg, pat
+
+
+async def _save_account_session(
+    page: Page, handler: SiteHandler, account_id: str
+) -> None:
+    """로그인 성공 후 해당 계정의 등록도메인 쿠키를 저장(메모리+파일) — 다음 잡 재사용용."""
+    reg, _pat = _handler_cookie_domain(handler)
+    if not reg:
+        return
+    try:
+        cookies = await page.context.cookies()
+        dom = [c for c in cookies if (c.get("domain") or "").lstrip(".").endswith(reg)]
+        if dom:
+            key = f"{handler.site}|{account_id or '_default'}"
+            _account_session_cookies[key] = dom
+            _persist_account_sessions()
+            logger.info(
+                "%s 계정 %s 세션 저장(%d쿠키) — 재로그인 최소화",
+                handler.site,
+                account_id,
+                len(dom),
+            )
+    except Exception as exc:
+        logger.debug("%s 세션 저장 실패(무시): %s", handler.site, str(exc)[:80])
+
+
+async def _restore_account_session(
+    page: Page, handler: SiteHandler, account_id: str
+) -> bool:
+    """현재 도메인 쿠키 클리어 후 대상 계정 저장세션 복원. 복원 쿠키 있으면 True."""
+    reg, pat = _handler_cookie_domain(handler)
+    if not pat:
+        return False
+    key = f"{handler.site}|{account_id or '_default'}"
+    saved = _account_session_cookies.get(key)
+    try:
+        await page.context.clear_cookies(domain=pat)  # 옛/다른 계정 세션 제거
+        if saved:
+            await page.context.add_cookies(saved)
+            return True
+    except Exception as exc:
+        logger.debug("%s 세션 복원 실패(무시): %s", handler.site, str(exc)[:80])
+    return False
+
 
 async def logout_site(page: Page, handler: SiteHandler) -> None:
     """계정 전환용 로그아웃 — logout URL(best-effort) + 등록도메인 쿠키 강제 클리어.
@@ -1472,16 +1563,33 @@ async def ensure_logged_in_as_account(
         logger.error("%s 자격증명 조회 실패 account_id=%s", site, account_id or "기본")
         return False
 
-    # 로그인 전 항상 강제 로그아웃(등록도메인 쿠키 클리어) — 옛/다른 계정 세션이 남아있으면
-    # login 페이지가 홈으로 리다이렉트돼 폼이 안 떠 fill 실패 → "로그인 실패"로 이어지던
-    # 근본원인 차단(2026-06-03 확정). 같은 계정+세션 살아있음은 위 fast-path 에서 이미 return.
-    await logout_site(page, handler)
     _last_tracking_account.pop(site, None)
+
+    # [세션 재사용, 2026-06-04] 대상 계정의 저장세션을 복원하고 로그인 상태면 fresh 로그인을
+    # 생략한다 → 반복 자동 로그인을 최소화해 SSG 등의 "비정상 자동접근" 계정잠금을 회피.
+    # _restore 가 등록도메인 쿠키를 먼저 클리어하므로 옛/다른 계정 세션 잔존 문제도 해소.
+    restored = await _restore_account_session(page, handler, account_id)
+    if restored and await is_site_logged_in(page, handler):
+        logger.info(
+            "%s 계정 %s 저장세션 복원 — fresh 로그인 생략(봇감지 회피)",
+            site,
+            account_id,
+        )
+        _last_tracking_account[site] = account_id or "_default"
+        _failed_login_accounts.pop(_fkey, None)
+        return True
+
+    # 저장세션 없음/만료 → 깨끗한 상태에서 fresh 로그인 (옛/만료 쿠키 제거 후).
+    # logout URL 무효 사이트도 도메인 쿠키 클리어로 폼 정상 노출(2026-06-03 fix 유지).
+    await logout_site(page, handler)
 
     ok = await auto_login_site(page, handler, cred)
     if ok:
         _last_tracking_account[site] = account_id or "_default"
         _failed_login_accounts.pop(_fkey, None)  # 성공 → 쿨다운 해제
+        await _save_account_session(
+            page, handler, account_id
+        )  # 세션 저장 → 다음 잡 재사용
     else:
         # auth 실패 → 쿨다운 시작 (잡마다 재로그인 폭주로 인한 계정 차단 차단)
         _failed_login_accounts[_fkey] = time.time()
@@ -2445,6 +2553,9 @@ async def run_daemon(args: argparse.Namespace) -> int:
         profile_dir,
         allowed_sites_header,
     )
+
+    # 계정별 저장세션 로드 — 재시작 후에도 세션 재사용으로 재로그인 최소화(봇감지 회피).
+    _load_account_sessions()
 
     async with httpx.AsyncClient() as http_client:
         # 자동 업데이트 체크 — 신버전 감지 시 즉시 종료(supervisor가 신버전 다운로드 트리거)
