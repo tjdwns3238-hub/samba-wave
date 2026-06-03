@@ -78,7 +78,7 @@ except ImportError:
 # ====================================================================
 # 데몬 버전 — build.ps1 가 갱신. 자동 업데이트 비교 기준.
 # ====================================================================
-DAEMON_VERSION = "1.4.27"
+DAEMON_VERSION = "1.4.28"
 
 
 # ── 가격수집 도메인 화이트리스트 ───────────────────────────────────────────
@@ -1303,6 +1303,19 @@ async def auto_login_site(
         logger.warning("%s 로그인 form fill 실패: %s", handler.site, res)
         return False
 
+    # 로그인 제출 후 리다이렉트/세션 설정이 끝나도록 정착 대기 (3초).
+    # 직후 is_site_logged_in 이 home_url 로 goto 하는데, 로그인 POST 가 아직
+    # 진행 중이면 그 goto 가 로그인 네비게이션을 끊어 세션이 안 잡히는 race 방지.
+    await page.wait_for_timeout(3_000)
+    # 제출 직후 페이지 상태 스냅샷 — 실패 시 진짜 원인(캡차/에러문구/로그인폼 잔존) 진단용.
+    _post_url = page.url
+    try:
+        _post_body = (
+            await page.evaluate("(document.body?.innerText||'').slice(0,400)")
+        ).replace("\n", " ")
+    except Exception:
+        _post_body = ""
+
     # 로그인 후 세션 안정화 대기. 최대 15초.
     for _ in range(15):
         await page.wait_for_timeout(1_000)
@@ -1310,7 +1323,10 @@ async def auto_login_site(
             logger.info("%s 자동로그인 성공", handler.site)
             return True
     logger.warning(
-        "%s 자동로그인 — 15초 후에도 확정 안 됨 (CAPTCHA 의심)", handler.site
+        "%s 자동로그인 — 15초 후에도 확정 안 됨. 제출직후 url=%s body=%s",
+        handler.site,
+        _post_url,
+        _post_body[:300],
     )
     return False
 
@@ -1566,13 +1582,10 @@ async def extract_tracking(
             if _TRACE_NEEDLE in _cur:
                 _reached = True
                 break
-            if (
-                not _relogged
-                and "member.one.musinsa.com/login" in _cur
-                and credential
-            ):
+            if not _relogged and "member.one.musinsa.com/login" in _cur and credential:
                 logger.info(
-                    "%s 배송조회 → member.one SSO 튕김 — in-place 재로그인", handler.site
+                    "%s 배송조회 → member.one SSO 튕김 — in-place 재로그인",
+                    handler.site,
                 )
                 _relogged = await _relogin_in_place(page, handler, credential)
             await page.wait_for_timeout(500)
@@ -2598,12 +2611,18 @@ async def run_daemon(args: argparse.Namespace) -> int:
             _PAGE_RECYCLE = int(os.environ.get("DAEMON_PAGE_RECYCLE", "10"))
             # 유휴(잡 없음)가 이 초를 넘으면 page 를 닫아 렌더러 메모리를 즉시 회수한다.
             # 백엔드 503/잡 고갈 시 누수 메모리를 계속 쥐고 있던 문제 해결(다음 잡에서 재생성).
-            _IDLE_PAGE_CLOSE_SEC = int(os.environ.get("DAEMON_IDLE_PAGE_CLOSE_SEC", "90"))
+            _IDLE_PAGE_CLOSE_SEC = int(
+                os.environ.get("DAEMON_IDLE_PAGE_CLOSE_SEC", "90")
+            )
 
             async def _site_worker(site: str, wid: str, wpage: Page) -> None:
                 _idle_at = 0.0
-                _idle_since = 0.0  # 유휴 시작 시각 — _IDLE_PAGE_CLOSE_SEC 초과 시 page 닫음
-                _page_open = True  # 현재 wpage 가 열려있는지 (유휴 닫힘 후 잡 오면 재생성)
+                _idle_since = (
+                    0.0  # 유휴 시작 시각 — _IDLE_PAGE_CLOSE_SEC 초과 시 page 닫음
+                )
+                _page_open = (
+                    True  # 현재 wpage 가 열려있는지 (유휴 닫힘 후 잡 오면 재생성)
+                )
                 _done = 0  # 처리한 잡 수 — _PAGE_RECYCLE 마다 page 재생성(메모리 리셋)
                 try:
                     while not state.should_die():
@@ -2640,7 +2659,10 @@ async def run_daemon(args: argparse.Namespace) -> int:
                                 )
                                 _idle_at = _now
                             # 유휴 지속 시 page 닫아 렌더러 메모리 회수 (다음 잡에서 재생성)
-                            if _page_open and (_now - _idle_since) > _IDLE_PAGE_CLOSE_SEC:
+                            if (
+                                _page_open
+                                and (_now - _idle_since) > _IDLE_PAGE_CLOSE_SEC
+                            ):
                                 try:
                                     await wpage.close()
                                 except Exception:
