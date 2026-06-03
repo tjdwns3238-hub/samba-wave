@@ -26,7 +26,11 @@
     if (!preferred) return
     try {
       const data = await chrome.storage.local.get(['proxyUrl'])
-      if (data.proxyUrl !== preferred) {
+      // 사용자가 팝업에서 입력한 값은 절대 덮어쓰지 않는다 — proxyUrl 이 비어있을 때만
+      // 자동설정. (localhost:3000/samba 페이지가 한 번이라도 로드되면 사용자가 입력한
+      // production URL 까지 localhost:28080 로 강제 리셋하던 버그 차단. 그 브라우저가
+      // 프로덕션과 끊겨 무신사 쿠키/수집이 죽던 원인.)
+      if (!data.proxyUrl) {
         await chrome.storage.local.set({ proxyUrl: preferred })
       }
     } catch {}
