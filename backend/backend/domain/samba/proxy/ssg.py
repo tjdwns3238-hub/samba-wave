@@ -598,6 +598,52 @@ class SSGClient:
             params["itemNm"] = keyword
         return await self._call_api("GET", "/item/0.1/getItemList.ssg", params=params)
 
+    async def find_live_item_id_by_spl_ven(self, spl_ven_item_id: str) -> str:
+        """splVenItemId(공급업체상품ID=수집상품 id)로 기존 live 등록 itemId 검색 (#321).
+
+        insertItem 은 비멱등(호출마다 새 itemId) → itemNm 포맷이 바뀌면 동일 상품이
+        2개 itemId 로 중복등록됨. 안정키 splVenItemId 로 미리 찾아 update 전환.
+
+        - getItemList splVenItemId 검색 지원 (공식문서 + 프로덕션 실측 확인).
+        - 방어: SSG 가 미지원 param 을 무시하고 전체를 반환하는 경우 대비
+          splVenItemId 정확일치만 채택.
+        - sellStatCd=90(삭제) 은 제외, 살아있는 등록만 채택.
+        반환: 매칭 itemId (없으면 빈 문자열).
+        """
+        if not spl_ven_item_id:
+            return ""
+        resp = await self._call_api(
+            "GET",
+            "/item/0.1/getItemList.ssg",
+            params={
+                "page": "1",
+                "pageSize": "20",
+                "splVenItemId": str(spl_ven_item_id),
+            },
+        )
+        result_obj = resp.get("result", resp) if isinstance(resp, dict) else {}
+        items_raw = result_obj.get("items") if isinstance(result_obj, dict) else None
+        if isinstance(items_raw, dict):
+            iv = items_raw.get("item")
+        else:
+            iv = items_raw
+        if isinstance(iv, dict):
+            items = [iv]
+        elif isinstance(iv, list):
+            items = [x for x in iv if isinstance(x, dict)]
+        else:
+            items = []
+        for it in items:
+            # 정확일치 방어 (param 무시 시 오adopt 차단)
+            if str(it.get("splVenItemId") or "") != str(spl_ven_item_id):
+                continue
+            if str(it.get("sellStatCd") or "") == "90":  # 삭제 제외
+                continue
+            iid = it.get("itemId")
+            if iid:
+                return str(iid)
+        return ""
+
     async def get_product_count(self, site_no: str = "6004") -> int:
         """전체 등록 상품 수 조회 (페이지네이션으로 전체 카운트).
 
@@ -1382,6 +1428,10 @@ class SSGClient:
             "brandId": matched_brand_id,
             "stdCtgId": effective_std_cat,
             "mdlNm": style_no or None,
+            # 공급업체상품ID = 수집상품 id (안정 멱등키, #321). insertItem 비멱등 대응 —
+            # itemNm 포맷이 바뀌어도 splVenItemId 로 기존 등록을 찾아 중복등록 차단.
+            # getItemList splVenItemId 검색 지원(공식문서+프로덕션 실측 확인).
+            **({"splVenItemId": str(product.get("id"))} if product.get("id") else {}),
             "manufcoNm": manufacturer,
             **({"prodManufCntryId": resolved_origin} if resolved_origin else {}),
             "sites": self._wrap_list_always_array(

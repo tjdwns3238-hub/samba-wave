@@ -380,6 +380,23 @@ class SSGPlugin(MarketPlugin):
                 "message": f"SSG 상품 데이터 변환 실패: {str(e)[:200]}",
             }
 
+        # 선제 멱등 가드(#321) — 신규등록 직전 splVenItemId(=수집상품 id)로 기존 live 등록 검색.
+        # SSG insertItem 은 비멱등(호출마다 새 itemId)이라, itemNm 포맷이 코드 변경으로
+        # 바뀌면 동일 상품이 2개 itemId 로 중복등록됨. 안정키로 미리 찾아 update 전환.
+        if not existing_no:
+            _spl_id = str(product.get("id") or "")
+            if _spl_id:
+                try:
+                    _found = await client.find_live_item_id_by_spl_ven(_spl_id)
+                    if _found:
+                        logger.info(
+                            f"[SSG] 멱등가드 — splVenItemId={_spl_id} 기존 등록 발견 → "
+                            f"update 전환: itemId={_found}"
+                        )
+                        existing_no = _found
+                except Exception as e:
+                    logger.warning(f"[SSG] splVenItemId 선제검색 실패(무시): {e}")
+
         # 기존 상품번호가 있으면 수정, 없으면 신규등록
         if existing_no:
             data["itemId"] = existing_no
@@ -547,4 +564,9 @@ class SSGPlugin(MarketPlugin):
                     }
 
         action = "수정" if existing_no else "등록"
-        return {"success": True, "message": f"SSG {action} 성공", "data": result}
+        _ret = {"success": True, "message": f"SSG {action} 성공", "data": result}
+        # 멱등가드/수정 경로 — itemId 를 결과에 실어 market_product_nos 백필 보장(#321).
+        # (선제검색으로 찾은 itemId 는 DB 미저장 상태이므로 명시 전달 필요)
+        if existing_no:
+            _ret["product_no"] = existing_no
+        return _ret
