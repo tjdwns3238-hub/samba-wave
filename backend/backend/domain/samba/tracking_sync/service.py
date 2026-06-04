@@ -238,6 +238,17 @@ async def enqueue_for_order(order_id: str, *, force: bool = False) -> dict[str, 
             }
         if not order.sourcing_order_number:
             return {"success": False, "error": "소싱처 주문번호가 없습니다"}
+        # 주문 매칭 계정이 '기타(etc)'/미매핑이면 송장수집 패스.
+        # 어느 소싱처 계정으로 로그인해야 하는지 모르면 기본계정으로 시도해도
+        # 그 계정 주문이 아니라 로그인/조회 실패(특히 a-rt GrandStage 서브도메인
+        # 세션 302). 계정 매핑 후 재시도하면 됨. (사용자 지시 2026-06-04)
+        _acc_norm = (order.sourcing_account_id or "").strip().lower()
+        if _acc_norm in ("", "etc"):
+            return {
+                "success": True,
+                "skipped": True,
+                "reason": "주문 매칭 계정이 '기타(미매핑)'라 송장수집 패스 — 소싱처 계정 매핑 후 재시도",
+            }
         # 까대기 주문은 자체 직배라 소싱처 운송장 추출 불가 — 명시적 거부
         _tags = f",{(order.action_tag or '').strip()},"
         if ",kkadaegi," in _tags:
