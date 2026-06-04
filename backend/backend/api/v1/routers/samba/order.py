@@ -2727,6 +2727,43 @@ async def approve_cancel(
         logger.info(f"[취소승인][롯데ON] {order.order_number} {message}")
         return {"ok": True, "message": f"롯데ON {message}"}
 
+    elif account.market_type == "lottehome":
+        # 롯데홈쇼핑 취소 → registDeliver(proc_gubun=imps) 발송불가 처리
+        # order_number 형식: "ord_no:ord_dtl_sn"
+        from backend.domain.samba.proxy.lottehome import LotteHomeClient
+
+        raw = order.order_number or ""
+        parts = raw.split(":")
+        if len(parts) < 2 or not parts[0] or not parts[1]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"롯데홈쇼핑 주문번호 형식 오류 (ord_no:ord_dtl_sn 필요, 현재값={raw!r})",
+            )
+        ord_no, ord_dtl_sn = parts[0], parts[1]
+
+        extras = account.additional_fields or {}
+        user_id = extras.get("userId", "") or account.seller_id or ""
+        password = extras.get("password", "")
+        agnc_no = extras.get("agncNo", "")
+        env = extras.get("env", "prod")
+        if not user_id:
+            raise HTTPException(status_code=400, detail="롯데홈쇼핑 로그인 정보 없음")
+
+        client = LotteHomeClient(user_id, password, agnc_no, env)
+        try:
+            res = await client.register_deliver(ord_no, ord_dtl_sn, "imps")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"롯데홈쇼핑 발송불가 처리 실패: {e}")
+        if not res.get("ok"):
+            raise HTTPException(status_code=500, detail=f"롯데홈쇼핑 발송불가 처리 실패: result={res.get('result')}")
+
+        await svc.update_order(
+            order_id,
+            {"shipping_status": "취소완료", "status": "cancelled"},
+        )
+        logger.info(f"[취소승인][롯데홈쇼핑] {ord_no}:{ord_dtl_sn} 발송불가(imps) 처리 완료")
+        return {"ok": True, "message": "롯데홈쇼핑 발송불가 처리 완료"}
+
     else:
         raise HTTPException(
             status_code=400, detail=f"{account.market_type} 취소승인 미지원"
@@ -3090,6 +3127,43 @@ async def seller_cancel(
             f"(reason={body.reason_code}/{middle_code})"
         )
         return {"ok": True, "message": "쿠팡 판매자 취소 완료"}
+
+    elif account.market_type == "lottehome":
+        # 롯데홈쇼핑은 판매자 취소 = registDeliver(proc_gubun=imps) 발송불가 처리
+        # order_number 형식: "ord_no:ord_dtl_sn"
+        from backend.domain.samba.proxy.lottehome import LotteHomeClient
+
+        raw = order.order_number or ""
+        parts = raw.split(":")
+        if len(parts) < 2 or not parts[0] or not parts[1]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"롯데홈쇼핑 주문번호 형식 오류 (ord_no:ord_dtl_sn 필요, 현재값={raw!r})",
+            )
+        ord_no, ord_dtl_sn = parts[0], parts[1]
+
+        extras = account.additional_fields or {}
+        user_id = extras.get("userId", "") or account.seller_id or ""
+        password = extras.get("password", "")
+        agnc_no = extras.get("agncNo", "")
+        env = extras.get("env", "prod")
+        if not user_id:
+            raise HTTPException(status_code=400, detail="롯데홈쇼핑 로그인 정보 없음")
+
+        client = LotteHomeClient(user_id, password, agnc_no, env)
+        try:
+            res = await client.register_deliver(ord_no, ord_dtl_sn, "imps")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"롯데홈쇼핑 발송불가 처리 실패: {e}")
+        if not res.get("ok"):
+            raise HTTPException(status_code=500, detail=f"롯데홈쇼핑 발송불가 처리 실패: result={res.get('result')}")
+
+        await svc.update_order(
+            order_id,
+            {"shipping_status": "취소완료", "status": "cancelled"},
+        )
+        logger.info(f"[판매자취소][롯데홈쇼핑] {ord_no}:{ord_dtl_sn} 발송불가(imps) 처리 완료")
+        return {"ok": True, "message": "롯데홈쇼핑 발송불가 처리 완료"}
 
     raise HTTPException(
         status_code=400, detail=f"{account.market_type} 판매자 취소 미지원"
