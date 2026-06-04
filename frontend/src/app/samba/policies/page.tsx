@@ -387,6 +387,20 @@ export default function PoliciesPage() {
       .catch(() => {}).finally(() => setLotteMdLoading(false))
   }, [])
 
+  // lottehome_policy.extraFeeRate → market_policies['롯데홈쇼핑'] 동기화 저장
+  // editingId(정책 선택) 시점에 sync해야 latestMarketPoliciesRef가 갱신된 후 autosave에 반영됨
+  useEffect(() => {
+    if (!editingId || !lottePolicy.extraFeeRate) return
+    const feeRate = Number(lottePolicy.extraFeeRate) || 0
+    if (!feeRate) return
+    setMarketPolicies(prev => {
+      const lh = prev['롯데홈쇼핑'] as MarketPolicyForm | undefined
+      if (Number(lh?.extraFeeRate) === feeRate) return prev
+      return { ...prev, '롯데홈쇼핑': { ...(prev['롯데홈쇼핑'] || {}), extraFeeRate: feeRate } as MarketPolicyForm }
+    })
+    triggerAutoSave()
+  }, [editingId, lottePolicy.extraFeeRate]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // 롯데홈쇼핑 전시카테고리 (MD상품군 변경 시 로드)
   useEffect(() => {
     if (!lottePolicy.mdGsgrNo) { setLotteCategories([]); setLotteStdCategories([]); return }
