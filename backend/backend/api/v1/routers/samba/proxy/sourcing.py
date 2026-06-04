@@ -242,7 +242,7 @@ async def sourcing_collect_queue(request: Request) -> Any:
 # ====================================================================
 
 # build/release 시 갱신. 데몬이 시작 시 비교하여 신버전이면 자기 종료(다음 시작 시 갱신).
-AUTOTUNE_DAEMON_LATEST_VERSION = "1.4.32"
+AUTOTUNE_DAEMON_LATEST_VERSION = "1.4.33"
 # asset 명에 버전 박힘 (`samba-v{ver}.exe`) — 지침: 데몬 설치파일명 버전 노출 필수.
 AUTOTUNE_DAEMON_DOWNLOAD_URL = (
     f"https://github.com/sbk0674-web/samba-wave/releases/download/"
@@ -540,7 +540,10 @@ async def _lotteon_approve_or_direct_cancel(client, ord_row) -> tuple[bool, str]
                 return False, f"3006 후 클레임 재조회 실패: {e}"
             matched = _match(claims2)
             if not matched:
-                return False, "3006: 직접취소 거부 + 클레임 매칭 실패 — 운영자 확인 필요"
+                return (
+                    False,
+                    "3006: 직접취소 거부 + 클레임 매칭 실패 — 운영자 확인 필요",
+                )
             # ↓ 아래 승인 흐름으로 이어짐
         else:
             return False, message
@@ -555,7 +558,9 @@ async def _lotteon_approve_or_direct_cancel(client, ord_row) -> tuple[bool, str]
         return True, "이미 취소 처리된 클레임"
 
     claim = pending[0]
-    matched_od_no = str(claim.get("odNo", "") or "") or (candidates[0] if candidates else raw)
+    matched_od_no = str(claim.get("odNo", "") or "") or (
+        candidates[0] if candidates else raw
+    )
     try:
         await client.approve_cancel(
             od_no=matched_od_no,
