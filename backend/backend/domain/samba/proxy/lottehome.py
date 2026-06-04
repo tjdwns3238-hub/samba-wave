@@ -705,7 +705,10 @@ class LotteHomeClient:
         for tp, target in (("10", shipping_places), ("20", return_places)):
             try:
                 cert_key = await self._ensure_auth()
-                tp_params: dict[str, Any] = {"subscriptionId": cert_key, "dlvp_tp_cd": tp}
+                tp_params: dict[str, Any] = {
+                    "subscriptionId": cert_key,
+                    "dlvp_tp_cd": tp,
+                }
                 if self.agnc_no:
                     tp_params["agnc_no"] = self.agnc_no
                 res = await self._call_api_auto_retry(

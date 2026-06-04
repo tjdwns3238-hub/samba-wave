@@ -815,6 +815,25 @@ async def dashboard_stats(
     lm = (await session.execute(last_month_q)).one()
 
     # 최근 7일 일별 집계
+    # 미발송(송장 미입력) 조건 — 송장수집 모달 카운트와 동일 기준:
+    #   tracking_number 비어있음 + 취소/반품/교환 상태 제외 + 배송완료 키워드 제외
+    from backend.domain.samba.order.model import (
+        EXCLUDED_ORDER_STATUSES,
+        SHIPPED_SHIPPING_STATUS_KEYWORDS,
+    )
+
+    _ship_col = func.coalesce(SambaOrder.shipping_status, "")
+    unshipped_cond = and_(
+        or_(
+            SambaOrder.tracking_number == None,  # noqa: E711
+            SambaOrder.tracking_number == "",
+        ),
+        or_(
+            SambaOrder.status == None,  # noqa: E711
+            SambaOrder.status.notin_(EXCLUDED_ORDER_STATUSES),
+        ),
+        *[_ship_col.notlike(f"%{kw}%") for kw in SHIPPED_SHIPPING_STATUS_KEYWORDS],
+    )
     daily_q = (
         select(
             func.date(order_date).label("day"),
@@ -838,6 +857,12 @@ async def dashboard_stats(
                     else_=0,
                 )
             ).label("fulfillment_count"),
+            func.sum(
+                case(
+                    (unshipped_cond, 1),
+                    else_=0,
+                )
+            ).label("unshipped_count"),
         )
         .where(SambaOrder.paid_at != None, order_date >= week_ago)  # noqa: E711
         .group_by(func.date(order_date))
@@ -862,6 +887,7 @@ async def dashboard_stats(
                 "count": int(row.count) if row else 0,
                 "fulfillmentSales": float(row.fulfillment_sales) if row else 0,
                 "fulfillmentCount": int(row.fulfillment_count) if row else 0,
+                "unshippedCount": int(row.unshipped_count) if row else 0,
             }
         )
 
