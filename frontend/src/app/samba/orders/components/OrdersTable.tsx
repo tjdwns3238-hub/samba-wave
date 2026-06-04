@@ -292,7 +292,8 @@ export default function OrdersTable(props: OrdersTableProps) {
                     <button
                       onClick={async () => {
                         const isPlayauto = (o.source === 'playauto' || o.channel_name?.toLowerCase().includes('플레이오토'))
-                                                const confirmMsg = isPlayauto ? '플레이오토는 EMP에서 직접 주문취소하셔야 합니다' : '주문취소하시겠습니까?'
+                        const isLotteHome = o.channel_name?.includes('롯데홈')
+                        const confirmMsg = isPlayauto ? '플레이오토는 EMP에서 직접 주문취소하셔야 합니다' : isLotteHome ? '롯데홈쇼핑 발송불가 처리하시겠습니까? (롯데홈쇼핑 마켓에 발송불가로 등록됩니다)' : '주문취소하시겠습니까?'
                         const yes = await showConfirm(confirmMsg)
                         if (!yes) return
                         try {
