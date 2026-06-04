@@ -112,6 +112,14 @@ class SambaDetailTemplate(SQLModel, table=True):
     img_order: Optional[list] = Field(
         default=None, sa_column=Column(JSON, nullable=True)
     )
+    # 마켓 썸네일/갤러리(Image1~N) 추가이미지 포함 여부 (#342)
+    # 상세페이지 img_checks.sub 와 독립 — 상세는 상세대로, 갤러리는 이 토글대로.
+    # 기본 True = #309 이전 동작(갤러리에 추가이미지 전부). 기존 데이터는
+    # 마이그레이션에서 img_checks.sub 값으로 backfill 하여 현행 동작 보존.
+    gallery_include_sub: bool = Field(
+        default=True,
+        sa_column=Column(Boolean, nullable=False, server_default="true"),
+    )
 
     # Timestamps
     created_at: datetime = Field(

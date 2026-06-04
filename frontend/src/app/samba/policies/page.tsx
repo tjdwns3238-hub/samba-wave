@@ -1607,7 +1607,7 @@ export default function PoliciesPage() {
           const IMG_ITEMS = [
             { id: 'topImg', label: '상단이미지', color: '#FF8C00', bg: 'rgba(255,140,0,0.05)', border: 'rgba(255,140,0,0.3)' },
             { id: 'main', label: '대표이미지', color: '#4C9AFF', bg: 'rgba(76,154,255,0.05)', border: 'rgba(76,154,255,0.3)' },
-            { id: 'sub', label: '대표추가이미지', color: '#51CF66', bg: 'rgba(81,207,102,0.05)', border: 'rgba(81,207,102,0.3)' },
+            { id: 'sub', label: '대표추가이미지 (상세페이지)', color: '#51CF66', bg: 'rgba(81,207,102,0.05)', border: 'rgba(81,207,102,0.3)' },
             { id: 'title', label: '상품제목', color: '#FFD93D', bg: 'rgba(255,217,61,0.05)', border: 'rgba(255,217,61,0.3)' },
             { id: 'option', label: '옵션이미지', color: '#888', bg: 'rgba(136,136,136,0.05)', border: 'rgba(136,136,136,0.3)' },
             { id: 'detail', label: '상세이미지', color: '#CC5DE8', bg: 'rgba(204,93,232,0.05)', border: 'rgba(204,93,232,0.3)' },
@@ -1672,6 +1672,27 @@ export default function PoliciesPage() {
                     }}
                     style={{ ...inputStyle, width: '50px', textAlign: 'center' }} />
                   <span style={{ color: '#888', fontSize: '0.8125rem' }}>번 째 이미지 사용</span>
+                </div>
+                {/* 대표추가이미지(갤러리) 토글 — 마켓 썸네일/갤러리 추가이미지 포함 여부 (#342) */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                  <span style={{ color: '#888', fontSize: '0.8125rem', minWidth: '80px' }}>대표추가이미지</span>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={t.gallery_include_sub ?? true}
+                      onChange={async (e) => {
+                        const checked = e.target.checked
+                        setDetailTemplates(prev => prev.map(x => x.id === t.id ? { ...x, gallery_include_sub: checked } : x))
+                        try {
+                          await detailTemplateApi.update(t.id, { gallery_include_sub: checked } as Partial<SambaDetailTemplate>)
+                        } catch (err) {
+                          console.error('gallery_include_sub 저장 실패:', err)
+                        }
+                      }}
+                      style={{ accentColor: '#51CF66' }}
+                    />
+                    <span style={{ color: '#bbb', fontSize: '0.8rem' }}>마켓 썸네일·갤러리에 추가이미지 포함</span>
+                  </label>
                 </div>
                 {/* 상단/하단 이미지 URL 입력 */}
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: '1rem' }}>

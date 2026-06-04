@@ -2014,6 +2014,8 @@ export interface SambaDetailTemplate {
   bottom_image_s3_key?: string;
   img_checks?: Record<string, boolean>;
   img_order?: string[];
+  // 마켓 썸네일/갤러리(Image1~N) 추가이미지 포함 여부 — 상세 sub와 독립 (#342)
+  gallery_include_sub?: boolean;
   created_at: string;
   updated_at: string;
 }

@@ -2634,6 +2634,9 @@ class SambaShipmentService:
         top_img = ""
         bottom_img = ""
         main_image_index = 0  # 대표이미지 번호(0-base) — 템플릿에서 로드 (#309)
+        # 마켓 썸네일/갤러리(Image1~N) 추가이미지 포함 여부 — 상세 sub와 독립 (#342)
+        # 기본 True = 갤러리에 추가이미지 전부(템플릿 없으면 현행 동작 유지)
+        gallery_include_sub = True
         # 이미지 포함 설정 (기본값: 상단/대표/추가/상세/하단 포함)
         img_checks: dict[str, bool] = {
             "topImg": True,
@@ -2686,34 +2689,39 @@ class SambaShipmentService:
                 if tpl.img_order:
                     img_order = tpl.img_order
                 main_image_index = int(getattr(tpl, "main_image_index", 0) or 0)
+                gallery_include_sub = bool(getattr(tpl, "gallery_include_sub", True))
                 logger.info(
-                    f"[상세HTML] 템플릿 로드 — 상단:{bool(top_img)}, 하단:{bool(bottom_img)}, checks:{img_checks}"
+                    f"[상세HTML] 템플릿 로드 — 상단:{bool(top_img)}, 하단:{bool(bottom_img)}, "
+                    f"checks:{img_checks}, gallery_sub:{gallery_include_sub}"
                 )
             else:
                 logger.warning(f"[상세HTML] 템플릿 {template_id} 조회 실패")
 
         images = product.get("images") or []
-        # 대표이미지 선택 + 썸네일 단일화 (#309)
-        # 1) main_image_index(대표이미지 번호)가 가리키는 이미지를 맨 앞으로 →
-        #    상세HTML의 main / 마켓 썸네일 대표이미지를 일치시킴 (dead field 활성화)
-        # 2) 추가이미지(sub) 제외 템플릿(img_checks.sub=False)이면 대표 1장으로 제한 →
-        #    마켓 썸네일 carousel 단일화. 마켓 플러그인(smartstore/elevenst 등)이
-        #    읽는 product["images"]에도 반영해 썸네일이 detail_template 설정을 따르게 함.
+        # 대표이미지 선택 (#309) — main_image_index가 가리키는 이미지를 맨 앞으로.
+        # 상세HTML main / 마켓 썸네일 대표이미지 일치. 갤러리·상세 공통 적용.
+        if images and 0 < main_image_index < len(images):
+            images = (
+                [images[main_image_index]]
+                + images[:main_image_index]
+                + images[main_image_index + 1 :]
+            )
+
+        # 마켓 썸네일/갤러리(Image1~N) 소스 — gallery_include_sub 토글만 따름 (#342).
+        # 상세페이지 img_checks.sub 와 분리 → "상세는 1장, 갤러리는 추가이미지 전부"가
+        # 표현 가능. False면 #309처럼 대표 1장으로 단일화.
         if images:
-            if 0 < main_image_index < len(images):
-                images = (
-                    [images[main_image_index]]
-                    + images[:main_image_index]
-                    + images[main_image_index + 1 :]
-                )
-            if not img_checks.get("sub", False):
-                images = images[:1]
-            product["images"] = images
+            product["images"] = images if gallery_include_sub else images[:1]
+
+        # 상세페이지 Content 용 이미지 (#342) — img_checks.sub 만 따름.
+        # product["images"](갤러리 소스)는 건드리지 않고 로컬 복사본으로만 단일화.
+        detail_imgs = images if img_checks.get("sub", False) else images[:1]
+
         detail_images = product.get("detail_images") or []
         # 추가이미지(sub)에서 출력된 URL을 추적 → detail에서 중복 제외
         # 단, sub가 실제로 출력되는 경우에만 필터링(detail만 단독 사용일 때 무필터 정상 노출)
-        sub_will_emit = img_checks.get("sub", False) and len(images) > 1
-        sub_set = set(images[1:]) if sub_will_emit else set()
+        sub_will_emit = img_checks.get("sub", False) and len(detail_imgs) > 1
+        sub_set = set(detail_imgs[1:]) if sub_will_emit else set()
 
         # img_order 순서대로, img_checks가 True인 항목만 생성
         for item_id in img_order:
@@ -2721,10 +2729,10 @@ class SambaShipmentService:
                 continue
             if item_id == "topImg" and top_img:
                 parts.append(img_tag.format(url=top_img))
-            elif item_id == "main" and images:
-                parts.append(img_tag.format(url=images[0]))
+            elif item_id == "main" and detail_imgs:
+                parts.append(img_tag.format(url=detail_imgs[0]))
             elif item_id == "sub":
-                for sub_img in images[1:]:
+                for sub_img in detail_imgs[1:]:
                     parts.append(img_tag.format(url=sub_img))
             elif item_id == "title":
                 name = product.get("name", "")
@@ -2739,10 +2747,10 @@ class SambaShipmentService:
                         continue
                     parts.append(img_tag.format(url=d_img))
                     detail_emitted += 1
-                # 폴백: detail에 1장도 안 들어갔으면 추가이미지(images[1:])로 채움
+                # 폴백: detail에 1장도 안 들어갔으면 추가이미지(detail_imgs[1:])로 채움
                 # — detail_images 비어있거나 모두 sub_set와 중복인 경우 대비
                 if detail_emitted == 0:
-                    fallback_imgs = images[1:] or images[:1]
+                    fallback_imgs = detail_imgs[1:] or detail_imgs[:1]
                     for s_img in fallback_imgs:
                         parts.append(img_tag.format(url=s_img))
                     if fallback_imgs:
