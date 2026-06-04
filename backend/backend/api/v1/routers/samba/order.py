@@ -834,6 +834,20 @@ async def dashboard_stats(
         ),
         *[_ship_col.notlike(f"%{kw}%") for kw in SHIPPED_SHIPPING_STATUS_KEYWORDS],
     )
+    # 발송 조건 — 운송장 입력됨 또는 배송완료 키워드 + 취소/반품/교환 상태 제외
+    shipped_cond = and_(
+        or_(
+            and_(
+                SambaOrder.tracking_number != None,  # noqa: E711
+                SambaOrder.tracking_number != "",
+            ),
+            *[_ship_col.like(f"%{kw}%") for kw in SHIPPED_SHIPPING_STATUS_KEYWORDS],
+        ),
+        or_(
+            SambaOrder.status == None,  # noqa: E711
+            SambaOrder.status.notin_(EXCLUDED_ORDER_STATUSES),
+        ),
+    )
     daily_q = (
         select(
             func.date(order_date).label("day"),
@@ -857,6 +871,12 @@ async def dashboard_stats(
                     else_=0,
                 )
             ).label("fulfillment_count"),
+            func.sum(
+                case(
+                    (shipped_cond, 1),
+                    else_=0,
+                )
+            ).label("shipped_count"),
             func.sum(
                 case(
                     (unshipped_cond, 1),
@@ -887,6 +907,7 @@ async def dashboard_stats(
                 "count": int(row.count) if row else 0,
                 "fulfillmentSales": float(row.fulfillment_sales) if row else 0,
                 "fulfillmentCount": int(row.fulfillment_count) if row else 0,
+                "shippedCount": int(row.shipped_count) if row else 0,
                 "unshippedCount": int(row.unshipped_count) if row else 0,
             }
         )

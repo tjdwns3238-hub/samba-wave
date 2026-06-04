@@ -113,7 +113,7 @@ export interface OrderDashboardStats {
   thisMonth: { count: number; sales: number; fulfillmentSales: number; fulfillmentCount: number; fulfillment: number }
   lastMonth: { count: number; sales: number; fulfillmentSales: number; fulfillmentCount: number; fulfillment: number }
   salesChange: number
-  weekly: { date: string; sales: number; count: number; fulfillmentSales: number; fulfillmentCount: number; unshippedCount: number; newRegistered: number | null; marketDeleted: number; registeredCount: number | null; collectedCount: number }[]
+  weekly: { date: string; sales: number; count: number; fulfillmentSales: number; fulfillmentCount: number; shippedCount: number; unshippedCount: number; newRegistered: number | null; marketDeleted: number; registeredCount: number | null; collectedCount: number }[]
   monthly: { month: number; sales: number; fulfillmentSales: number }[]
   marketRegisteredCount: number
 }

@@ -136,6 +136,7 @@ export default function SambaDashboard() {
     totalSale: w.sales,
     fulfillmentSale: w.fulfillmentSales,
     rate: w.sales > 0 ? Math.round(w.fulfillmentSales / w.sales * 100) : 0,
+    shippedCount: w.shippedCount ?? 0,
     unshippedCount: w.unshippedCount ?? 0,
     newRegistered: w.newRegistered as number | null | undefined,
     marketDeleted: w.marketDeleted ?? 0,
@@ -276,6 +277,7 @@ export default function SambaDashboard() {
                 <th style={{ textAlign: 'right', padding: '0.625rem 0', color: '#888', fontWeight: 500 }}>총매출</th>
                 <th style={{ textAlign: 'right', padding: '0.625rem 0', color: '#888', fontWeight: 500 }}>이행매출</th>
                 <th style={{ textAlign: 'right', padding: '0.625rem 0', color: '#888', fontWeight: 500 }}>이행율</th>
+                <th style={{ textAlign: 'right', padding: '0.625rem 0', color: '#888', fontWeight: 500 }}>발송</th>
                 <th style={{ textAlign: 'right', padding: '0.625rem 0', color: '#888', fontWeight: 500 }}>미발송</th>
                 <th style={{ textAlign: 'right', padding: '0.625rem 0', color: '#888', fontWeight: 500 }}>신규등록</th>
                 <th style={{ textAlign: 'right', padding: '0.625rem 0', color: '#888', fontWeight: 500 }}>마켓삭제</th>
@@ -290,6 +292,7 @@ export default function SambaDashboard() {
                   <td style={{ padding: '0.625rem 0', textAlign: 'right', color: '#E5E5E5' }}>₩{fmtNum(d.totalSale)}</td>
                   <td style={{ padding: '0.625rem 0', textAlign: 'right', color: '#E5E5E5' }}>₩{fmtNum(d.fulfillmentSale)}</td>
                   <td style={{ padding: '0.625rem 0', textAlign: 'right', color: '#E5E5E5' }}>{d.rate}%</td>
+                  <td style={{ padding: '0.625rem 0', textAlign: 'right', color: '#4ADE80' }}>{fmtNum(d.shippedCount)}</td>
                   <td style={{ padding: '0.625rem 0', textAlign: 'right', color: d.unshippedCount > 0 ? '#FF6B6B' : '#E5E5E5' }}>{fmtNum(d.unshippedCount)}</td>
                   <td style={{ padding: '0.625rem 0', textAlign: 'right', color: '#E5E5E5' }}>{d.newRegistered == null ? '—' : fmtNum(d.newRegistered)}</td>
                   <td style={{ padding: '0.625rem 0', textAlign: 'right', color: '#E5E5E5' }}>{fmtNum(d.marketDeleted)}</td>
