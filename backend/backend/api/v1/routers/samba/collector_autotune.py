@@ -2744,40 +2744,27 @@ async def _site_autotune_loop(device_id: str, site: str):
                                                     f"{_idx_pfx}{_label}: {_action_text} 전송완료{_t}",
                                                 )
                                         else:
-                                            _fail_msg = str(
-                                                _acc_err or _row_error or "결과없음"
-                                            )[:200]
-                                            # 진단: "결과없음"(빈 transmit 결과) 근본원인 추적용.
-                                            # _acc_err/_row_error 가 둘 다 없는데 실패 판정 =
-                                            # results 가 비었거나(_tx_row None) 계정 키 누락.
-                                            # 다음 간헐 실패 때 transmit 결과 구조를 그대로 덤프.
-                                            if not (_acc_err or _row_error):
-                                                try:
-                                                    _diag_results = (
-                                                        _tx_result or {}
-                                                    ).get("results") or []
-                                                    log.warning(
-                                                        "[오토튠][결과없음 진단] site=%s pid=%s acc=%s | "
-                                                        "tx_row=%s results_len=%d tx_keys=%s | "
-                                                        "row_status=%s acc_status=%s row_keys=%s | "
-                                                        "tx_result_head=%s",
-                                                        _site,
-                                                        _pid,
-                                                        _acc[:16],
-                                                        "None"
-                                                        if _tx_row is None
-                                                        else "present",
-                                                        len(_diag_results),
-                                                        list((_tx_result or {}).keys()),
-                                                        _row_status,
-                                                        _acc_status,
-                                                        list(_tx_row.keys())
-                                                        if isinstance(_tx_row, dict)
-                                                        else None,
-                                                        str(_tx_result)[:400],
+                                            # 실제 에러가 transmit_error['_all'](상품단위 —
+                                            # 예: "전송 300초 타임아웃", "이미 전송 중")에 저장되는
+                                            # 경우가 있어 계정키 조회만으론 None → 과거 "결과없음"
+                                            # 오표시. _all 및 임의 비어있지 않은 transmit_error 값을
+                                            # 폴백으로 읽어 진짜 사유를 노출.
+                                            _all_err = None
+                                            if isinstance(_tx_row, dict):
+                                                _te = (
+                                                    _tx_row.get("transmit_error") or {}
+                                                )
+                                                if isinstance(_te, dict):
+                                                    _all_err = _te.get("_all") or next(
+                                                        (v for v in _te.values() if v),
+                                                        None,
                                                     )
-                                                except Exception:
-                                                    pass
+                                            _fail_msg = str(
+                                                _acc_err
+                                                or _row_error
+                                                or _all_err
+                                                or "결과없음"
+                                            )[:200]
                                             _log_line(
                                                 _site,
                                                 _pid,
