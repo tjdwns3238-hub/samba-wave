@@ -406,12 +406,16 @@ async def reply_cs_inquiry(
                     if elevenst_api_key:
                         elevenst_client = ElevenstClient(elevenst_api_key)
                         if inquiry.inquiry_type == "urgent_inquiry":
-                            # 긴급알리미는 답변 불가 → 확인처리(상태 03)로 처리
+                            # 긴급알리미: 답변 텍스트 있으면 answerCtnt 로 답변처리(200),
+                            # 없으면 공지 확인처리(100). 답변대기 건은 answerCtnt 필수.
                             await elevenst_client.confirm_alimi(
-                                inquiry.market_inquiry_no
+                                inquiry.market_inquiry_no,
+                                answer=body.reply or None,
                             )
                             market_sent = True
-                            market_msg = "확인처리완료"
+                            market_msg = (
+                                "답변 전송 완료" if body.reply else "확인처리완료"
+                            )
                         else:
                             prd_no = (
                                 inquiry.market_answer_no

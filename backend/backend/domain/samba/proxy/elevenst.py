@@ -1840,19 +1840,34 @@ class ElevenstClient:
 
         return True
 
-    async def confirm_alimi(self, emer_ntce_seq: str) -> bool:
-        """긴급알리미 확인처리.
+    async def confirm_alimi(
+        self, emer_ntce_seq: str, answer: str | None = None
+    ) -> bool:
+        """긴급알리미 확인/답변처리.
 
         API: PUT https://api.11st.co.kr/rest/alimi/alimianswer
-        result_code 100(공지확인) / 200(답변확인) = 성공
+        Request: confirmYn(Y/N) + emerNtceSeq + answerCtnt(답변처리건 필수)
+        result_code 100(공지확인 성공) / 200(답변처리 성공) = 성공
+
+        answer 가 있으면 answerCtnt 로 답변 텍스트 전송(답변대기 건). 없으면
+        기존대로 공지 확인처리만 수행. (필드명 answerCtnt = 11번가 공식 명세 확정,
+        답변처리건에 누락 시 -10004 "답변내용이 입력되어있지 않습니다" 발생)
         """
         import re as _re2
 
         url = "https://api.11st.co.kr/rest/alimi/alimianswer"
         headers = {**self._headers(), "Content-Type": "application/xml; charset=UTF-8"}
+        # answerCtnt 는 XML body 라 URL 인코딩이 아닌 XML 이스케이프 필요(& < >)
+        answer_xml = ""
+        if answer and answer.strip():
+            _esc = (
+                answer.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            )
+            answer_xml = f"<answerCtnt>{_esc}</answerCtnt>"
         xml_body = (
             f"<?xml version='1.0' encoding='UTF-8'?>"
-            f"<request><confirmYn>Y</confirmYn><emerNtceSeq>{emer_ntce_seq}</emerNtceSeq></request>"
+            f"<request><confirmYn>Y</confirmYn>"
+            f"<emerNtceSeq>{emer_ntce_seq}</emerNtceSeq>{answer_xml}</request>"
         )
         client = _get_elevenst_http_client(self.api_key)
         resp = await client.put(url, headers=headers, content=xml_body.encode("utf-8"))
