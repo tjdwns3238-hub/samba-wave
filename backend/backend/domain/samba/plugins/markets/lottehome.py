@@ -571,35 +571,57 @@ class LotteHomePlugin(MarketPlugin):
                 try:
                     # 캐시 우선 — 없을 때만 searchGoodsViewListOpenApi 호출
                     # (searchStockList는 33MB 응답으로 타임아웃 발생 → goods view로 대체)
-                    item_no_map: dict[str, str] = _item_no_cache.get(existing_no, {})
-                    if not item_no_map:
-                        goods_view = await client.search_goods_view(existing_no)
-                        goods_info = (
-                            goods_view.get("data", {})
-                            .get("Result", {})
-                            .get("GoodsInfo", {})
+                    # 멤버십 체크(in)로 음성캐시 동작 보장 — 빈 dict 는 falsy 라
+                    # truthiness 로 판단하면 옵션 매칭 0건 상품을 매 사이클 재호출하게 됨.
+                    if existing_no in _item_no_cache:
+                        item_no_map: dict[str, str] = _item_no_cache[existing_no]
+                        logger.debug(
+                            f"[롯데홈쇼핑] item_no_map 캐시 히트: {existing_no} ({len(item_no_map)}개 옵션)"
                         )
+                    else:
+                        item_no_map = {}
+                        goods_view = await client.search_goods_view(existing_no)
+                        # 응답 구조 방어 — 형제 호출처(qa_poller/collector_autotune)와 동일하게
+                        # Result/GoodsInfo 래퍼가 없는 응답도 fallback 으로 흡수(엄격 체이닝 시
+                        # 래퍼 없으면 {} → 재고 스킵되어 원버그 재현).
+                        data = goods_view.get("data", {})
+                        result_data = (
+                            data.get("Result", data) if isinstance(data, dict) else {}
+                        )
+                        goods_info = (
+                            result_data.get("GoodsInfo", result_data)
+                            if isinstance(result_data, dict)
+                            else {}
+                        )
+                        if not isinstance(goods_info, dict):
+                            goods_info = {}
                         item_info_list = goods_info.get("ItemInfo", [])
                         if isinstance(item_info_list, dict):
                             item_info_list = [item_info_list]
 
                         lotte_opt_names: set[str] = set()
-                        for it in item_info_list if isinstance(item_info_list, list) else []:
+                        for it in (
+                            item_info_list if isinstance(item_info_list, list) else []
+                        ):
                             corp_item_no = str(it.get("CorpItemNo", "")).strip()
                             item_no = str(it.get("ItemNo", "")).strip()
                             if corp_item_no and item_no:
                                 item_no_map[corp_item_no] = item_no
                                 lotte_opt_names.add(corp_item_no)
 
+                        # 빈 결과도 음성캐시로 저장 → 다음 사이클 재호출 방지
+                        # (search_goods_view 매 사이클 폭주 차단, IP 차단 예방).
+                        # 옵션이 나중에 등록되면 프로세스 재시작(배포) 시 갱신됨.
+                        _item_no_cache[existing_no] = item_no_map
                         if item_no_map:
-                            _item_no_cache[existing_no] = item_no_map
                             logger.info(
                                 f"[롯데홈쇼핑] item_no_map 캐시 저장: {existing_no} → {lotte_opt_names}"
                             )
-                    else:
-                        logger.debug(
-                            f"[롯데홈쇼핑] item_no_map 캐시 히트: {existing_no} ({len(item_no_map)}개 옵션)"
-                        )
+                        else:
+                            logger.info(
+                                f"[롯데홈쇼핑] item_no_map 빈 결과 음성캐시: {existing_no} "
+                                f"(옵션 매칭 0건, 재호출 방지)"
+                            )
 
                     if not item_no_map:
                         logger.warning(
@@ -648,7 +670,9 @@ class LotteHomePlugin(MarketPlugin):
                                 f"[롯데홈쇼핑] 재고 전송: {lotte_opt} item_no={item_no} stock={stock_val}"
                             )
                             try:
-                                await client.update_stock(existing_no, item_no, stock_val)
+                                await client.update_stock(
+                                    existing_no, item_no, stock_val
+                                )
                                 stock_updated = True
                             except Exception as _se:
                                 logger.error(
