@@ -585,6 +585,10 @@ class LotteonClient:
         reg_strt_dttm / reg_end_dttm: yyyymmdd 포맷, 즉시할인 도입 시점(2026-04-17) 이후로 기본 설정.
         sl_stat_cd: SALE/SOUT/END 등 판매상태 필터 (None이면 전체).
         """
+        # trGrpCd/trNo 는 계정마다 달라 폴백 불가 — identity 미세팅이면 자동 획득.
+        # 라우터가 test_auth() 선행 호출을 빼먹어도 INVALID_INPUT 으로 죽지 않도록 방어.
+        if not self.tr_no:
+            await self.test_auth()
         body: dict[str, Any] = {
             "trGrpCd": self.tr_grp_cd,
             "trNo": self.tr_no,

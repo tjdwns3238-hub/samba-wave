@@ -1743,6 +1743,8 @@ async def cleanup_lotteon_orphans(
                 }
 
         client = LotteonClient(api_key)
+        # trGrpCd/trNo 획득 (필수) — 누락 시 list INVALID_INPUT
+        await client.test_auth()
         market_spds: set[str] = set()
         market_info: dict[str, dict] = {}
         page = 1
