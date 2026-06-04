@@ -78,7 +78,7 @@ except ImportError:
 # ====================================================================
 # 데몬 버전 — build.ps1 가 갱신. 자동 업데이트 비교 기준.
 # ====================================================================
-DAEMON_VERSION = "1.4.33"
+DAEMON_VERSION = "1.4.34"
 
 
 # ── 가격수집 도메인 화이트리스트 ───────────────────────────────────────────
@@ -1388,6 +1388,13 @@ _last_tracking_account: dict[str, str] = {}
 _failed_login_accounts: dict[str, float] = {}
 _FAILED_LOGIN_COOLDOWN_SEC = 1800  # 30분
 
+# 로그인 실패 횟수 — 5회 누적되면 그 계정 영구 차단(재시도 끝). 시간 쿨다운으로
+# 계속 재시도하면 SSG가 잠금을 못 풀어 영구화됨. 5회 실패 = 비번 틀림/계정 잠김
+# 확정 → 더 안 찌른다. 로그인 성공 시 0으로 리셋. 사용자가 ssg.com 비번 재설정 +
+# samba 동일화 후 데몬 재시작하면 해제(또는 성공 1회로 자동 리셋). (사용자 지시 2026-06-05)
+_login_fail_count: dict[str, int] = {}
+_LOGIN_FAIL_MAX = 5
+
 # 송장 로그인+스크랩 사이트별 직렬화 Lock (2026-06-04 SSG 계정잠금 근본fix).
 # 한 데몬의 송장 워커 N개(SSG#1/#2/#3)가 단일 BrowserContext(쿠키함)를 공유하는데,
 # 서로 다른 계정 잡을 동시에 처리하면 워커A 로그인 직후 워커B 가 쿠키 클리어(로그아웃)
@@ -1553,16 +1560,30 @@ async def ensure_logged_in_as_account(
     site = handler.site
     _fkey = f"{site}|{account_id or '_default'}"
 
-    # auth 실패 쿨다운 — 직전 로그인 실패한 계정은 재시도 스킵(사이트 계정 차단 방지).
+    # 5회 누적 실패 = 영구 차단(재시도 끝). 더 찌르면 SSG 잠금이 안 풀린다.
+    # 비번 재설정+samba 동일화 후 데몬 재시작 또는 로그인 1회 성공으로만 해제.
+    if _login_fail_count.get(_fkey, 0) >= _LOGIN_FAIL_MAX:
+        logger.warning(
+            "%s 계정 %s 로그인 %d회 실패 — 영구 차단(재시도 안 함). "
+            "ssg.com 비번 재설정 + samba 동일화 후 데몬 재시작 필요.",
+            site,
+            account_id or "기본",
+            _login_fail_count.get(_fkey, 0),
+        )
+        return False
+
+    # auth 실패 쿨다운(5회 미만 전용) — 직전 로그인 실패한 계정은 재시도 스킵(폭주 차단).
     _ft = _failed_login_accounts.get(_fkey, 0.0)
     if _ft:
         _elapsed = time.time() - _ft
         if _elapsed < _FAILED_LOGIN_COOLDOWN_SEC:
             logger.warning(
-                "%s 계정 %s 로그인 실패 쿨다운 — 재시도 스킵(차단 방지, %d초 남음). 비번 확인 필요.",
+                "%s 계정 %s 로그인 실패 쿨다운 — 재시도 스킵(%d초 남음, 누적 %d/%d회).",
                 site,
                 account_id or "기본",
                 int(_FAILED_LOGIN_COOLDOWN_SEC - _elapsed),
+                _login_fail_count.get(_fkey, 0),
+                _LOGIN_FAIL_MAX,
             )
             return False
         _failed_login_accounts.pop(_fkey, None)  # 쿨다운 만료 → 1회 재시도 허용
@@ -1595,6 +1616,7 @@ async def ensure_logged_in_as_account(
         )
         _last_tracking_account[site] = account_id or "_default"
         _failed_login_accounts.pop(_fkey, None)
+        _login_fail_count.pop(_fkey, None)  # 세션복원 성공 → 실패 카운트 리셋
         return True
 
     # 저장세션 없음/만료 → 깨끗한 상태에서 fresh 로그인 (옛/만료 쿠키 제거 후).
@@ -1605,11 +1627,13 @@ async def ensure_logged_in_as_account(
     if ok:
         _last_tracking_account[site] = account_id or "_default"
         _failed_login_accounts.pop(_fkey, None)  # 성공 → 쿨다운 해제
+        _login_fail_count.pop(_fkey, None)  # 성공 → 실패 카운트 리셋
         await _save_account_session(
             page, handler, account_id
         )  # 세션 저장 → 다음 잡 재사용
     else:
-        # auth 실패 → 쿨다운 시작 (잡마다 재로그인 폭주로 인한 계정 차단 차단)
+        # auth 실패 → 카운트++ (5회 누적 시 영구 차단) + 30분 쿨다운
+        _login_fail_count[_fkey] = _login_fail_count.get(_fkey, 0) + 1
         _failed_login_accounts[_fkey] = time.time()
         logger.warning(
             "%s 계정 %s 로그인 실패 — %d분 쿨다운(재시도 차단). 비번 확인 필요.",
