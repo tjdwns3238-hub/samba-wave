@@ -2356,12 +2356,15 @@ class JobWorker:
             job_type="collect",
         )
 
-        # 이미 수집된 site_product_id 전체 로드 (dedup용)
+        # 이미 수집된 site_product_id 전체 로드 (dedup용) — 유니크 제약과 동일 scope (#350).
+        # search_filter_id 범위 한정 시 타 그룹·과거 수집분 누락 → 중복 INSERT greenlet 연쇄.
+        _mu_tid = getattr(job, "tenant_id", None)
+        _mu_where = [CPModel.source_site == "MUSINSA"]
+        _mu_where.append(
+            CPModel.tenant_id == _mu_tid if _mu_tid else CPModel.tenant_id.is_(None)
+        )
         existing_result = await session.execute(
-            select(CPModel.site_product_id).where(
-                CPModel.source_site == "MUSINSA",
-                CPModel.search_filter_id.in_(filter_ids),
-            )
+            select(CPModel.site_product_id).where(*_mu_where)
         )
         existing_ids: set[str] = {row[0] for row in existing_result.all()}
 
@@ -2848,12 +2851,18 @@ class JobWorker:
         )
         await repo.update_progress(job.id, 0, max(len(all_items), 1))
 
-        # 이미 수집된 상품 제외
+        # 이미 수집된 상품 제외 — 유니크 제약(COALESCE(tenant),source_site,spid)과 동일
+        # scope 로 조회 (#350). search_filter_id 범위로만 보면 자동생성 filter·타 그룹·
+        # 과거 수집분을 놓쳐 중복 INSERT → UniqueViolation → rollback greenlet 연쇄로
+        # Job 전체 실패. tenant+source_site scope 로 INSERT 전 중복 차단.
+        _existing_where = [CPModel.source_site.in_(["ABCmart", "GrandStage"])]
+        _existing_where.append(
+            CPModel.tenant_id == _auto_tenant_id
+            if _auto_tenant_id
+            else CPModel.tenant_id.is_(None)
+        )
         existing_result = await session.execute(
-            select(CPModel.site_product_id).where(
-                CPModel.source_site.in_(["ABCmart", "GrandStage"]),
-                CPModel.search_filter_id.in_(filter_ids),
-            )
+            select(CPModel.site_product_id).where(*_existing_where)
         )
         existing_ids: set[str] = {row[0] for row in existing_result.all()}
 
@@ -3194,12 +3203,15 @@ class JobWorker:
                 job_type="collect",
             )
 
-        # 시작 시 기존 수집 ID 로드 (전 페이지 dedup)
+        # 시작 시 기존 수집 ID 로드 (전 페이지 dedup) — 유니크 제약과 동일 scope (#350).
+        # search_filter_id 범위 한정 시 타 그룹·과거 수집분 누락 → 중복 INSERT greenlet 연쇄.
+        _ssg_tid = getattr(job, "tenant_id", None)
+        _ssg_where = [CPModel.source_site == "SSG"]
+        _ssg_where.append(
+            CPModel.tenant_id == _ssg_tid if _ssg_tid else CPModel.tenant_id.is_(None)
+        )
         existing_result = await session.execute(
-            select(CPModel.site_product_id).where(
-                CPModel.source_site == "SSG",
-                CPModel.search_filter_id.in_(filter_ids),
-            )
+            select(CPModel.site_product_id).where(*_ssg_where)
         )
         existing_ids: set[str] = {row[0] for row in existing_result.all()}
         _seen_spids: set[str] = set(existing_ids)
@@ -4077,12 +4089,15 @@ class JobWorker:
         )
         await repo.update_progress(job.id, 0, max(len(all_items), 1))
 
-        # 이미 수집된 상품 제외
+        # 이미 수집된 상품 제외 — 유니크 제약과 동일 scope (#350).
+        # search_filter_id 범위 한정 시 타 그룹·과거 수집분 누락 → 중복 INSERT greenlet 연쇄.
+        _gs_tid = getattr(job, "tenant_id", None)
+        _gs_where = [CPModel.source_site == "GSShop"]
+        _gs_where.append(
+            CPModel.tenant_id == _gs_tid if _gs_tid else CPModel.tenant_id.is_(None)
+        )
         existing_result = await session.execute(
-            select(CPModel.site_product_id).where(
-                CPModel.source_site == "GSShop",
-                CPModel.search_filter_id.in_(filter_ids),
-            )
+            select(CPModel.site_product_id).where(*_gs_where)
         )
         existing_ids: set[str] = {row[0] for row in existing_result.all()}
 
