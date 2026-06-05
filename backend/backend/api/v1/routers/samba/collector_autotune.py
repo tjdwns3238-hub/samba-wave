@@ -408,6 +408,34 @@ SITE_TRANSMIT_CONCURRENCY: dict[str, int] = {
 _autotune_transmit_sems: dict[tuple[str, str], asyncio.Semaphore] = {}
 
 
+def _market_display_price(price: int, market_type: str, extra_fee_rate: float) -> int:
+    """오토튠 로그/타임라인 표시 전용 — 실제 마켓 등록가 재현.
+
+    SSG·롯데홈쇼핑은 전송 시 플러그인(ssg.py / lottehome.py execute)이 sale_price에
+    추가수수료율을 역산해 올림한다. 변동감지용 calc_market_price에는 이 역산이 없어
+    로그가 추가수수료만큼 낮게 찍히므로, 표시값만 보정한다.
+    detection·last_sent 값은 base(역산 전) 그대로 유지 — flip-flop 방지.
+    원본 라운딩: ssg.py:146-148(100원 올림), lottehome.py:95-99(10원 올림).
+    """
+    import math as _math
+
+    p = int(price or 0)
+    if p <= 0:
+        return p
+    r = float(extra_fee_rate or 0)
+    if market_type == "ssg":
+        if r > 0:
+            p = _math.ceil(p / (1 - r / 100))
+        return _math.ceil(p / 100) * 100
+    if market_type == "lottehome":
+        if 0 < r < 100:
+            p = _math.ceil(p / (1 - r / 100))
+        if p % 10 != 0:
+            p = (p // 10 + 1) * 10
+        return p
+    return p
+
+
 def _get_transmit_sem(device_id: str = "", site: str = "") -> asyncio.Semaphore:
     """PC × 사이트별 세마포어 lazy init — 사이트별 cap 적용."""
     _site = (site or "").strip()
@@ -2157,14 +2185,31 @@ async def _site_autotune_loop(device_id: str, site: str):
                                     ) and not _price_blocked:
                                         price_changed_count += 1
                                         _all_price_pids.add(r.product_id)
+                                        # 표시 전용: 실제 마켓 등록가(추가수수료 역산 반영).
+                                        # detection/last_sent은 base값(expected_price/last_price) 유지.
+                                        _af = getattr(acc, "additional_fields", None)
+                                        _efr = 0.0
+                                        if isinstance(_af, dict):
+                                            try:
+                                                _efr = float(
+                                                    _af.get("extraFeeRate") or 0
+                                                )
+                                            except (TypeError, ValueError):
+                                                _efr = 0.0
+                                        _disp_old = _market_display_price(
+                                            last_price, market_type, _efr
+                                        )
+                                        _disp_new = _market_display_price(
+                                            expected_price, market_type, _efr
+                                        )
                                         if len(_price_tx_items) < 10:
                                             _price_tx_items.append(
                                                 {
                                                     "pid": r.product_id,
                                                     "site_product_id": product.site_product_id,
                                                     "name": (product.name or "")[:40],
-                                                    "old_price": last_price,
-                                                    "new_price": expected_price,
+                                                    "old_price": _disp_old,
+                                                    "new_price": _disp_new,
                                                 }
                                             )
                                         _last_cost_v = (
@@ -2181,7 +2226,7 @@ async def _site_autotune_loop(device_id: str, site: str):
                                             _reason_lbl = "(정책변경)"
                                         else:
                                             _reason_lbl = ""
-                                        _price_action_txt = f"가격변동{_reason_lbl} {last_price:,}→{expected_price:,} → {acc_label}"
+                                        _price_action_txt = f"가격변동{_reason_lbl} {_disp_old:,}→{_disp_new:,} → {acc_label}"
                                         _acc_items.append("price")
                                         _acc_action_parts.append(_price_action_txt)
                                         # 워룸 타임라인용 이벤트 수집 — 등록마켓 판매가 변경 기준
@@ -2189,12 +2234,12 @@ async def _site_autotune_loop(device_id: str, site: str):
                                         if r.product_id not in _price_change_events:
                                             _diff_pct = (
                                                 round(
-                                                    (expected_price - last_price)
-                                                    / last_price
+                                                    (_disp_new - _disp_old)
+                                                    / _disp_old
                                                     * 100,
                                                     1,
                                                 )
-                                                if last_price
+                                                if _disp_old
                                                 else 0
                                             )
                                             _price_change_events[r.product_id] = {
@@ -2202,8 +2247,8 @@ async def _site_autotune_loop(device_id: str, site: str):
                                                 "product_id": r.product_id,
                                                 "product_name": product.name,
                                                 "site_product_id": product.site_product_id,
-                                                "old_price": last_price,
-                                                "new_price": expected_price,
+                                                "old_price": _disp_old,
+                                                "new_price": _disp_new,
                                                 "diff_pct": _diff_pct,
                                             }
                                             # 변동 감지 즉시 DB 저장 — 사이클 미완주에도 유실 없음
@@ -2211,13 +2256,13 @@ async def _site_autotune_loop(device_id: str, site: str):
                                             await _stream_event(
                                                 "price_changed",
                                                 "info",
-                                                summary=f"가격 변동 — {_name_short} ₩{int(last_price):,}→₩{int(expected_price):,}",
+                                                summary=f"가격 변동 — {_name_short} ₩{int(_disp_old):,}→₩{int(_disp_new):,}",
                                                 source_site=product.source_site,
                                                 product_id=r.product_id,
                                                 product_name=product.name,
                                                 detail={
-                                                    "old_price": last_price,
-                                                    "new_price": expected_price,
+                                                    "old_price": _disp_old,
+                                                    "new_price": _disp_new,
                                                     "diff_pct": _diff_pct,
                                                     "site_product_id": product.site_product_id,
                                                 },
