@@ -2439,6 +2439,38 @@ class SambaShipmentService:
                 update_data.update(pending_refresh_updates)
             await product_repo.update_async(product_id, **update_data)
 
+        # 전 옵션 품절 + 마켓에 남은 등록 없음 → 수집상품 자체 DB 삭제.
+        # 첫등록 전송잡에서 전옵션 품절 상품은 등록을 안 하므로(위 1595 블록에서
+        # 미등록은 스킵), 매 잡마다 같은 품절 상품을 다시 시도하게 된다.
+        # 마켓에 남은 등록이 하나도 없으면(new_accounts 빈 값) 수집행을 정리해
+        # 반복 시도를 끊는다. lock_delete 보호 상품은 제외. 품절 최신화가
+        # 재입고(sale_status=in_stock)로 뒤집은 경우는 삭제하지 않는다.
+        _restocked = pending_refresh_updates.get("sale_status") == "in_stock"
+        if (
+            _all_sold
+            and not _restocked
+            and not new_accounts
+            and refreshed is not None
+            and not getattr(refreshed, "lock_delete", False)
+        ):
+            from sqlalchemy import delete as _del_sa
+            from backend.db.orm import get_write_session as _get_del_session
+            from backend.domain.samba.collector.model import (
+                SambaCollectedProduct as _DEL_CP,
+            )
+
+            try:
+                async with _get_del_session() as _del_s:
+                    await _del_s.execute(
+                        _del_sa(_DEL_CP).where(_DEL_CP.id == product_id)
+                    )
+                    await _del_s.commit()
+                logger.info(
+                    f"[전송] 상품 {product_id} 전 옵션 품절 + 미등록 → 수집상품 DB 삭제 완료"
+                )
+            except Exception as _del_e:
+                logger.warning(f"[전송] 전 옵션 품절 수집상품 DB 삭제 실패: {_del_e}")
+
         logger.info(
             f"Shipment {_shipment_id} 완료 status={final_status} "
             f"product={product_id} 성공={sum(1 for v in values if v == 'success')}/{len(values)}"
