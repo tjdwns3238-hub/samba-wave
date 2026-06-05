@@ -513,10 +513,22 @@ class GMarketMarketPlugin(MarketPlugin):
         master_no = await resolve_esm_master_goods_no(client, product_no) or product_no
 
         # 판매중지 — 실 호출 검증 schema (PascalCase). 'IsSell' 만으로도 ESM 측 검증 통과.
+        # delete_product 는 "판매중지 상태 필수" 전제 → 선행 판매중지로 충족.
         suspend_data = {"IsSell": {"Gmkt": False}}
         await client.update_sell_status(master_no, suspend_data)
         logger.info(f"[지마켓] 판매중지 완료: goodsNo={master_no}")
-        return {"success": True, "message": "지마켓 판매중지 완료"}
+
+        # 실삭제 — DELETE /item/v1/goods/{goodsNo}. cooldown 재시도는 delete_product 내부 처리.
+        # 삭제 실패해도 판매중지는 완료된 상태이므로 success 유지(카탈로그 노출은 이미 차단).
+        try:
+            await client.delete_product(master_no)
+            logger.info(f"[지마켓] 삭제 완료: goodsNo={master_no}")
+            return {"success": True, "message": "지마켓 판매중지+삭제 완료"}
+        except Exception as e:
+            logger.warning(
+                f"[지마켓] 삭제 실패(판매중지는 완료): goodsNo={master_no}, {e}"
+            )
+            return {"success": True, "message": f"지마켓 판매중지 완료(삭제 보류: {e})"}
 
     async def _inject_account_settings(self, session, product: dict, account) -> dict:
         """계정/정책에서 마켓별 설정 주입."""
