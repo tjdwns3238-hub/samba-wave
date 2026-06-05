@@ -129,6 +129,43 @@ class SSGPlugin(MarketPlugin):
         # 정책 브랜드 매핑 추출
         brand_mappings: list[dict] = creds.get("ssgBrandMappings") or []
 
+        # 동적 브랜드 해석 (이슈 #358) — ssgBrandMappings/하드코딩 CONTRACTED_BRANDS로
+        # 미해결인 브랜드를 계정 계약목록(listBrand) exact-match로 보강 주입.
+        # listBrand 는 계정별 계약 브랜드만 반환하므로, 그 계정이 계약한 브랜드만 복구되고
+        # 미계약 브랜드(예: 써코니·조던)는 그대로 기타(9999999999) 폴백 유지된다.
+        _brand_raw = (product.get("brand") or "").strip()
+        _mfr_raw = (product.get("manufacturer") or "").strip()
+        _cand = _brand_raw or _mfr_raw
+        if _cand:
+            _norm = SSGClient._norm_brand(_cand)
+            _already = {
+                SSGClient._norm_brand(m.get("brandNm", ""))
+                for m in brand_mappings
+                if isinstance(m, dict) and m.get("brandNm")
+            }
+            _hardcoded_ok = SSGClient.match_brand(_brand_raw)[0] != "9999999999" or (
+                _mfr_raw and SSGClient.match_brand(_mfr_raw)[0] != "9999999999"
+            )
+            if _norm not in _already and not _hardcoded_ok:
+                try:
+                    _cmap = await client.get_contracted_brand_map()
+                    _bid = _cmap.get(SSGClient._norm_brand(_brand_raw)) or (
+                        _cmap.get(SSGClient._norm_brand(_mfr_raw)) if _mfr_raw else None
+                    )
+                    if _bid:
+                        brand_mappings = list(brand_mappings) + [
+                            {"brandNm": _cand, "brandId": _bid}
+                        ]
+                        logger.info(
+                            f"[SSG] 브랜드 동적해석: {_cand!r} → brandId={_bid}"
+                        )
+                    elif _cand:
+                        logger.warning(
+                            f"[SSG] 브랜드 미해결(계약목록에 없음, 기타 폴백): {_cand!r}"
+                        )
+                except Exception as _be:  # noqa: BLE001
+                    logger.warning(f"[SSG] 브랜드 동적해석 실패(무시): {_be}")
+
         # 설정에서 마진율/배송소요일/구매수량 제한 추출 (정책값 우선, 설정값 폴백)
         margin_rate = int(creds.get("marginRate") or 0)
         shpp_rqrm_dcnt = int(creds.get("shppRqrmDcnt") or 3)

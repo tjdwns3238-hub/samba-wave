@@ -42,6 +42,12 @@ from backend.utils.logger import logger
 _infra_cache: dict[str, tuple[dict[str, Any], float]] = {}
 _INFRA_CACHE_TTL = 900  # 15분
 
+# 계정별 계약 브랜드 맵 캐시 — api_key 기준, {정규화 brandNm: str(brandId)}, TTL 10분.
+# 이슈 #358: listBrand 동적해석으로 하드코딩 CONTRACTED_BRANDS 미수록 브랜드 복구.
+# listBrand 는 계정별 계약 브랜드만 반환(전역 카탈로그 아님) — 실측 확인.
+_brand_map_cache: dict[str, tuple[dict[str, str], float]] = {}
+_BRAND_MAP_TTL = 600  # 10분
+
 # httpx 클라이언트 풀 — api_key별 재사용 (TCP 커넥션 재활용으로 SSL handshake 제거)
 # 값: (클라이언트, 마지막 사용 시간)
 _client_pool: dict[str, tuple[httpx.AsyncClient, float]] = {}
@@ -739,6 +745,60 @@ class SSGClient:
         return await self._call_api(
             "GET", "/venInfo/0.1/listBrand.ssg", params=params or None
         )
+
+    @staticmethod
+    def _norm_brand(s: str) -> str:
+        """브랜드명 정규화 — 공백 제거 + 소문자."""
+        return (s or "").strip().lower().replace(" ", "")
+
+    @staticmethod
+    def _parse_brand_list(resp: dict[str, Any]) -> list[dict[str, Any]]:
+        """listBrand 응답 평탄화.
+
+        실측 구조: {"result": {"brands": [{"brand": dict(단일)|list(복수)}]}}.
+        결과 없을 때는 brands=[""] (빈 문자열 원소) → skip.
+        """
+        out: list[dict[str, Any]] = []
+        res = resp.get("result") if isinstance(resp, dict) else None
+        for item in (res or {}).get("brands") or []:
+            if not isinstance(item, dict):
+                continue
+            b = item.get("brand")
+            if isinstance(b, dict):
+                out.append(b)
+            elif isinstance(b, list):
+                out.extend(x for x in b if isinstance(x, dict))
+        return out
+
+    async def get_contracted_brand_map(self) -> dict[str, str]:
+        """계정 계약 브랜드 {정규화 brandNm: str(brandId)} — api_key 캐시(TTL 10분).
+
+        listBrand 는 계정별 계약 브랜드만 반환(전역 카탈로그 아님, 실측 확인).
+        9999999999(기타)·useYn!=Y 제외. 실패 시 빈 dict — 호출측은 기타 폴백 유지.
+        """
+        key = self.api_key
+        cached = _brand_map_cache.get(key)
+        if cached and (time.time() - cached[1]) < _BRAND_MAP_TTL:
+            return cached[0]
+        bmap: dict[str, str] = {}
+        try:
+            resp = await self.get_brands("")
+            for b in self._parse_brand_list(resp):
+                if b.get("useYn") != "Y":
+                    continue
+                bid = b.get("brandId")
+                nm = b.get("brandNm") or ""
+                if bid is None or str(bid) == "9999999999" or not nm:
+                    continue
+                bmap[self._norm_brand(nm)] = str(bid)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[SSG] 계약 브랜드 맵 조회 실패(무시): {e}")
+            return bmap
+        _brand_map_cache[key] = (bmap, time.time())
+        logger.info(
+            f"[SSG] 계약 브랜드 맵 캐시 갱신: {len(bmap)}개 (api_key={key[:6]}…)"
+        )
+        return bmap
 
     async def get_categories(
         self,
