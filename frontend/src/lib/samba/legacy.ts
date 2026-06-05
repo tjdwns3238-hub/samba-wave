@@ -414,11 +414,14 @@ export const orderApi = {
       { method: 'POST' },
     ),
   syncTrackingBulk: (limit = 500, days = 7, force = false) => {
-    // 이 PC 의 데몬 device_id 를 전담 송장 PC 로 지정 — 여러 PC 동시 SSG 로그인 잠금 차단.
-    // (warroom 이 생성/보관하는 로컬 데몬 deviceId. 없으면 미전송 → 백엔드가 기존 설정값 사용)
+    // [2026-06-05] 송장수집 누른 이 PC 의 **확장앱 deviceId(UUID)** 를 전담 송장 PC 로 지정.
+    // 송장은 확장앱(브라우저)이 처리하므로 owner 도 확장앱 device_id 여야 get_next_job 의
+    // owner 매칭(owner_device_id = X-Device-Id)이 성립한다. 데몬 device_id(samba-daemon-)를
+    // 보내면 확장앱 UUID 와 매칭 안 돼 잡이 영영 정체 → 누른 PC 1대만 정렬순(계정별)으로
+    // 처리하게 해 계정 왔다갔다·계정불일치(WRONG_ACCOUNT)·다중 PC SSG 동시로그인 잠금 차단.
     let ownerDevice = ''
     try {
-      ownerDevice = (typeof window !== 'undefined' && window.localStorage.getItem('samba.autotune.daemon.deviceId')) || ''
+      ownerDevice = getDeviceId() || ''
     } catch {
       ownerDevice = ''
     }

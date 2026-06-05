@@ -1809,8 +1809,11 @@ async def sync_order_tracking_bulk(
     from backend.domain.samba.tracking_sync.service import enqueue_pending_orders
 
     _owner = (owner_device or "").strip()
-    # 데몬 device_id 형식만 허용 — 확장앱 device_id(다른 형식)는 데몬이 매칭 못 해 잡 미수신.
-    if _owner.startswith("samba-daemon-"):
+    # [2026-06-05 송장 확장앱 복구] 송장은 확장앱이 처리하므로 owner = 확장앱 device_id(UUID).
+    # 데몬 device_id(samba-daemon-)만 허용하던 구버전 게이트 제거 — 그 게이트가 확장앱 UUID 를
+    # ''로 떨궈 owner 미지정 적재 → 아무 PC나 잡 가로채 계정 왔다갔다·WRONG_ACCOUNT 유발.
+    # 빈값이면 설정값 사용(enqueue 내부 해석). 값 있으면 그 PC 를 전담으로 저장 + 잡 owner 지정.
+    if _owner:
         try:
             from backend.api.v1.routers.samba.proxy._helpers import _set_setting
             from backend.db.orm import get_write_session
@@ -1819,8 +1822,6 @@ async def sync_order_tracking_bulk(
                 await _set_setting(_s, "tracking_owner_device", _owner)
         except Exception:
             pass
-    else:
-        _owner = ""  # 비데몬/빈값 → 설정값 사용(enqueue 내부 해석)
 
     return await enqueue_pending_orders(
         tenant_id=tenant_id,

@@ -378,14 +378,13 @@ async def enqueue_for_order(
                 }
             _ = stale_existed  # 컨벤션 유지용
 
-        # 전담 송장 PC(데몬 device_id) 해석 — 지정 시 그 데몬만 잡 수신.
-        # 여러 PC가 같은 SSG 계정 동시 로그인 → 멀티PC 보안잠금 차단(2026-06-04).
-        # 미지정('')이면 None 적재 = 레거시(아무 데몬 수신).
-        # [2026-06-05 송장 확장앱 복구] 송장수집을 헤드리스 데몬 → 확장앱(브라우저) 방식으로
-        # 되돌림. 모든 사이트 송장을 확장앱이 처리하므로 owner 미지정(None)으로 적재 — 켜져있는
-        # 확장앱(브라우저)이 폴링해 가져간다. 데몬은 dequeue 가드에서 tracking 전체 차단됨.
-        # 멀티PC 동시 SSG 로그인 잠금 방지: 송장 돌리는 PC 1대만 확장앱 운영(사용자 룰).
-        _owner = None
+        # 전담 송장 PC 해석 — 전달받은 owner_device_id(확장앱 UUID) 존중.
+        # [2026-06-05] 직전엔 owner 미지정(None)으로 적재해 아무 확장앱이나 폴링해 가져갔으나,
+        # 여러 PC가 동시 폴링하면 get_next_job 의 계정별 정렬(site→account→created_at)이 깨져
+        # 계정 왔다갔다 + 다른 계정 로그인 PC 가 가로채 WRONG_ACCOUNT 대량 발생 + 멀티PC SSG
+        # 동시로그인 계정잠금 위험. → 송장수집 누른 PC 1대를 owner 로 박아 그 PC 만 정렬순으로
+        # 처리하게 한다. owner_device_id 빈/None 이면 종전대로 미지정(아무 PC) 적재.
+        _owner = (owner_device_id or "").strip() or None
 
         # 1) SourcingQueue에 잡 적재 — 데몬 전용 사이트는 데몬, 그 외는 확장앱 폴링
         try:
