@@ -1681,8 +1681,11 @@ async def refresh_products_bulk(
                         idx=_log_idx,
                         total=_log_total,
                     )
-                # 콜백 호출 (리프레시 직후 즉시 전송 등)
-                if on_result and not r.error:
+                # 콜백 호출 (리프레시 직후 즉시 전송 등).
+                # MUSINSA_AUTH_MISSING(무신사 쿠키 손실)은 에러지만 콜백에 전달해야
+                # 오토튠이 사이클 중단 + 경고를 띄울 수 있다. 콜백은 이 에러를
+                # early-return 처리(전송/DB갱신 없음)하므로 안전하다.
+                if on_result and (not r.error or r.error == "MUSINSA_AUTH_MISSING"):
                     try:
                         await on_result(p, r, _log_idx, _log_total)
                     except Exception as cb_err:

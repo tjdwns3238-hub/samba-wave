@@ -311,6 +311,58 @@ let _abcLoginCheckTimer = null  // ABCmart 1시간 주기 재체크 타이머
 let _lotteonLoginCheckTimer = null  // LOTTEON 1시간 주기 재체크 타이머
 let _abcLoginConfirmedAt = 0  // ABCmart 마지막 로그인 확인 시각 (ms) — 재합류 시 재체크 스킵 판단용
 
+// 무신사 자동로그인 실패(쿠키 손실) — 손실 감지 시각(ms, 0=정상). 값이 있으면
+// 폴링이 받은 무신사 잡을 drop해 진행중 잡을 중단한다.
+// 단, 재확인 인터벌(5분) 경과 시 프로브 잡을 1회 통과시켜 쿠키 복구를 자동 감지한다
+// (drop이 _processJobWithCap 상류라 통과시키지 않으면 reportLoginSuccess가 영영 안 떠
+//  플래그가 영구 고착됨 → 백엔드 _musinsa_auth_lost_recent와 동일한 프로브 패턴).
+let _musinsaCookieLostAt = 0
+let _musinsaCookieLostNotifiedAt = 0  // 데스크탑 경고 중복 차단 (ms)
+const _MUSINSA_NOTIFY_COOLDOWN_MS = 60 * 60 * 1000  // 1시간
+const _MUSINSA_LOST_RECHECK_MS = 5 * 60 * 1000  // 5분마다 프로브 잡 1회 허용
+
+// 무신사 잡을 drop해야 하는지 — 손실 후 재확인 인터벌 내면 true(drop), 경과면 false(프로브 통과).
+function _musinsaCookieLostActive() {
+  if (!_musinsaCookieLostAt) return false
+  return (Date.now() - _musinsaCookieLostAt) < _MUSINSA_LOST_RECHECK_MS
+}
+
+// 무신사 쿠키 손실 처리 — 데스크탑 경고 + 백엔드 만료 마킹 + 잡 중단 플래그.
+function _handleMusinsaCookieLost() {
+  _musinsaCookieLostAt = Date.now()
+  // 데스크탑 알림 (1시간 쿨다운)
+  const now = Date.now()
+  if (now - _musinsaCookieLostNotifiedAt >= _MUSINSA_NOTIFY_COOLDOWN_MS) {
+    _musinsaCookieLostNotifiedAt = now
+    try {
+      chrome.notifications.create('musinsa-cookie-lost', {
+        type: 'basic',
+        iconUrl: 'icon128.png',
+        title: '무신사 로그인 만료',
+        message: '무신사 쿠키가 손실되어 수집/오토튠을 중단했습니다. 무신사에 다시 로그인해 주세요.',
+        priority: 2,
+      })
+    } catch (e) {
+      console.warn('[무신사쿠키손실] 알림 실패(무시):', e?.message || e)
+    }
+  }
+  // 백엔드 만료 마킹 → 오토튠(백엔드 refresher) 무신사 갱신도 중단 + 프론트 경고
+  try {
+    apiFetch(`${PROXY_URL}/api/v1/samba/sourcing-accounts/musinsa/mark-cookie-expired`, {
+      method: 'POST',
+    }).catch(() => {})
+  } catch (_) {}
+  console.warn('[무신사쿠키손실] 자동로그인 실패 — 무신사 잡 중단 + 경고')
+}
+
+// 무신사 쿠키 복구 — 로그인 성공/확인 시 호출, 잡 재개.
+function _clearMusinsaCookieLost() {
+  if (_musinsaCookieLostAt) {
+    _musinsaCookieLostAt = 0
+    console.log('[무신사쿠키손실] 로그인 복구 감지 — 무신사 잡 재개')
+  }
+}
+
 // 사이트별 동시 처리 세마포어 — 폴링이 받은 작업을 사이트별 캡까지만 병렬 처리
 // (프론트 "동시실행" 설정값을 백엔드 status API에서 받아 적용)
 const _siteSemaphores = new Map() // site → { active: number }
@@ -2093,13 +2145,24 @@ function reportLoginFailure(externalSite, immediate = false) {
     console.log(`[로그인감지] ${externalSite} 비로그인 누적 ${_alFailureCount[externalSite]}회 → 자동로그인 트리거`)
     _alFailureCount[externalSite] = 0
     _alLastTriggerAt[externalSite] = Date.now()
-    ensureLoggedIn(key).catch(e => console.error('[자동로그인] 호출 오류:', e?.message || e))
+    ensureLoggedIn(key)
+      .then(ok => {
+        // 무신사 자동로그인 실패 = 쿠키 손실 확정 → 잡 중단 + 경고
+        if (externalSite === 'MUSINSA' && !ok) {
+          _handleMusinsaCookieLost()
+        }
+      })
+      .catch(e => console.error('[자동로그인] 호출 오류:', e?.message || e))
   })
 }
 
 function reportLoginSuccess(externalSite) {
   if (_alFailureCount[externalSite]) {
     _alFailureCount[externalSite] = 0
+  }
+  // 무신사 로그인 확인 → 쿠키 손실 플래그 해제(잡 재개)
+  if (externalSite === 'MUSINSA') {
+    _clearMusinsaCookieLost()
   }
 }
 
@@ -2233,6 +2296,12 @@ async function _pollSourcingOnceImpl() {
         break
       }
       if (!job.hasJob) break
+      // 무신사 쿠키 손실 중 — 무신사 잡만 drop(다른 소싱처는 계속).
+      // 재확인 인터벌 경과 시엔 통과시켜 프로브(쿠키 복구 자동 감지)로 쓴다.
+      if (job.site === 'MUSINSA' && _musinsaCookieLostActive()) {
+        console.warn('[소싱] 무신사 쿠키 손실 — 무신사 잡 drop(재로그인 대기)')
+        continue
+      }
       // 실제 잡 수신 = 서버가 오토튠 재개 상태 → forceStop 플래그 자동 해제
       if (_sourcingForceStop) {
         console.log('[소싱] 오토튠 재개 감지 — forceStop 해제')

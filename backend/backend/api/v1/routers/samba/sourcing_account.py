@@ -224,6 +224,30 @@ async def get_musinsa_autologin_status(
     return {"missing": False, "account_label": acc.account_label}
 
 
+@extension_router.post("/musinsa/mark-cookie-expired")
+async def mark_musinsa_cookie_expired(
+    session: AsyncSession = Depends(get_write_session_dependency),
+):
+    """확장앱이 무신사 자동로그인 실패(쿠키 손실) 감지 시 호출.
+
+    자동로그인계정(is_login_default=True)의 cookie_expired=True 마킹 →
+    refresher가 빈 쿠키로 판단(MUSINSA_AUTH_MISSING)해 오토튠 무신사 갱신을
+    중단하고 경고 이벤트로 이어진다. 프론트 autologin-status 폴링도 만료를 감지.
+    """
+    svc = _write_service(session)
+    acc = await svc.get_login_default("MUSINSA")
+    if not acc:
+        return {"ok": False, "reason": "no_login_default"}
+    extra = dict(acc.additional_fields or {})
+    extra["cookie_expired"] = True
+    extra["cookie_expired_at"] = datetime.now(timezone.utc).isoformat()
+    await svc.repo.update_async(acc.id, additional_fields=extra)
+    logger.warning(
+        f"[무신사쿠키손실] {acc.account_label}: 확장앱 자동로그인 실패 — 쿠키 만료 마킹"
+    )
+    return {"ok": True, "account_label": acc.account_label}
+
+
 @router.get("/balance-check-requested")
 async def get_balance_check_requested():
     """확장앱이 폴링으로 확인하는 잔액 체크 요청 플래그."""

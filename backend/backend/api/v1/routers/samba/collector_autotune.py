@@ -251,6 +251,15 @@ _pending_cost_increase: dict[str, float] = {}
 SITE_EMPTY_SKIP_THRESHOLD = 3  # N회 연속 빈 결과 시 해당 소싱처 60초 제외
 _site_empty_skip_until: dict[str, float] = {}  # {소싱처: 제외 해제 시각(time.time())}
 
+# 무신사 자동로그인 쿠키 손실(refresher MUSINSA_AUTH_MISSING) 추적 —
+# 오토튠 무신사 사이클 중단 + 경고용. {device_id: 손실 감지 epoch}.
+# 재확인 인터벌 경과 시 1회 프로브 사이클을 허용해 쿠키 복구를 자동 감지한다.
+_musinsa_auth_lost_at: dict[str, float] = {}
+# {device_id: 마지막 경고 발행 epoch} — 6시간 쿨다운으로 경고 폭주 차단
+_musinsa_auth_alerted_at: dict[str, float] = {}
+_MUSINSA_AUTH_RECHECK_SEC = 300.0  # 5분마다 1회 프로브 사이클 허용
+_MUSINSA_AUTH_ALERT_COOLDOWN_SEC = 6 * 60 * 60  # 경고 6시간 쿨다운
+
 # 오토튠 진행도 글로벌 카운터 — 로그 [n/total] 표시용
 # 사이클당 200건 배치이지만, 분자/분모는 "이번 회전의 전체 대상" 기준으로 누적 표시.
 # 한 바퀴 회전(분자 ≥ 분모) 시 0부터 다시 시작.
@@ -898,6 +907,37 @@ async def _patch_event_detail(event_id: str, patch: dict) -> None:
         )
 
 
+def _musinsa_auth_lost_recent(device_id: str) -> bool:
+    """무신사 쿠키 손실이 재확인 인터벌(5분) 내에 감지됐는지.
+
+    True면 무신사 사이클을 스킵한다. 인터벌 경과 시 False를 반환해 1회
+    프로브 사이클을 허용하고, 쿠키가 여전히 없으면 _on_result가 재기록한다.
+    """
+    ts = _musinsa_auth_lost_at.get(device_id, 0.0)
+    if not ts:
+        return False
+    return (time.time() - ts) < _MUSINSA_AUTH_RECHECK_SEC
+
+
+async def _mark_musinsa_auth_lost(device_id: str) -> None:
+    """무신사 쿠키 손실 기록 + 6시간 쿨다운으로 경고 이벤트 1회 발행."""
+    now_ts = time.time()
+    _musinsa_auth_lost_at[device_id] = now_ts
+    last_alert = _musinsa_auth_alerted_at.get(device_id, 0.0)
+    if now_ts - last_alert >= _MUSINSA_AUTH_ALERT_COOLDOWN_SEC:
+        _musinsa_auth_alerted_at[device_id] = now_ts
+        try:
+            await _stream_event(
+                "cookie_lost",
+                "critical",
+                summary="무신사 로그인 만료 — 오토튠 무신사 갱신 중단. 무신사 재로그인 필요.",
+                source_site="MUSINSA",
+                detail={"device_id": device_id, "reason": "cookie_expired"},
+            )
+        except Exception:
+            pass
+
+
 async def _site_autotune_loop(device_id: str, site: str):
     """소싱처별 독립 오토튠 루프 — 작업 완료 즉시 다음 사이클 재시작.
 
@@ -933,6 +973,16 @@ async def _site_autotune_loop(device_id: str, site: str):
                 # 서킷브레이커 확인
                 if _site_breaker_tripped.get(site):
                     log.info("[오토튠][%s] 서킷브레이커 작동 중 — 대기", site)
+                    await asyncio.sleep(30)
+                    continue
+
+                # 무신사 자동로그인 쿠키 손실 — 사이클 스킵(빈 쿠키로 헛도는 갱신 +
+                # 상품마다 읽기세션 폭주 방지). 재확인 인터벌(5분) 경과 시 1회 프로브
+                # 사이클을 허용해 재로그인(쿠키 복구)을 자동 감지한다.
+                if site == "MUSINSA" and _musinsa_auth_lost_recent(device_id):
+                    log.info(
+                        "[오토튠][MUSINSA] 쿠키 손실 감지 — 사이클 스킵(대기). 재로그인 시 자동 재개"
+                    )
                     await asyncio.sleep(30)
                     continue
 
@@ -1410,6 +1460,19 @@ async def _site_autotune_loop(device_id: str, site: str):
                                 _cycle_deleted_pids, \
                                 _synced_count, \
                                 _lot_verify_count
+
+                            # 무신사 자동로그인 쿠키 손실(refresher MUSINSA_AUTH_MISSING) →
+                            # 전송/DB갱신 중단 + 경고 1회. 다음 사이클부터 사이트 루프가 스킵.
+                            if getattr(r, "error", None) == "MUSINSA_AUTH_MISSING":
+                                await _mark_musinsa_auth_lost(device_id)
+                                return
+                            # 무신사 정상 응답 = 쿠키 복구 → 손실 플래그 해제(즉시 재개)
+                            if (
+                                product.source_site == "MUSINSA"
+                                and not getattr(r, "error", None)
+                                and device_id in _musinsa_auth_lost_at
+                            ):
+                                _musinsa_auth_lost_at.pop(device_id, None)
 
                             async with _session_lock:
                                 # heartbeat 갱신 — Watchdog stuck 오판 방지 (PC별)
