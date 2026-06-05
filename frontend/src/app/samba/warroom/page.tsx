@@ -661,6 +661,8 @@ export default function WarroomPage() {
   // load() 폴링 클로저에서 최신 filter/avail를 읽기 위한 ref (load deps 안정화)
   const filterSourcesOuterRef = useRef<string[] | null>(null)
   const availSourcesOuterRef = useRef<string[]>([])
+  // 데몬 id(localStorage daemonDev)를 마지막으로 재전송한 값 — 첫 감지/변경 시 1회만 재등록.
+  const reregisteredDaemonDevRef = useRef('')
 
   // 소싱처별 인터벌 설정
   const INTERVAL_SITES = [
@@ -903,6 +905,20 @@ export default function WarroomPage() {
       return result
     })
   }, [availSources, filterMarkets, saveFilters, syncAllowedSitesToExtension, registerPcAllowedSites])
+
+  // 데몬 id가 처음 감지/변경되는 순간 현재 체크 상태를 데몬에 1회 재전송 (오토튠 체크 desync 차단).
+  // 페이지 진입 직후 daemonDev(localhost:51425) 미해결 상태에서 SSG 등을 체크하면 toggleSource의
+  // 데몬 POST가 `if(daemonDev)` 거짓으로 skip돼, 화면은 체크인데 백엔드 분담엔 미반영되던 버그 fix.
+  // 명시 선택(non-null)일 때만 재전송 — null(전체/미설정)은 데몬 과배정 위험이라 제외.
+  useEffect(() => {
+    const daemonDev = (typeof window !== 'undefined' &&
+      window.localStorage.getItem('samba.autotune.daemon.deviceId')) || ''
+    if (!daemonDev || reregisteredDaemonDevRef.current === daemonDev) return
+    const fs = filterSourcesOuterRef.current
+    if (fs === null) return
+    reregisteredDaemonDevRef.current = daemonDev
+    registerPcAllowedSites(fs)
+  }, [pcDeviceId, registerPcAllowedSites])
 
   const toggleMarket = useCallback((marketType: string) => {
     setFilterMarkets(prev => {

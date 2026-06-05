@@ -423,10 +423,32 @@ export default function OrdersPage() {
   const [localDaemonId, setLocalDaemonId] = useState<string>('')
   const [ownerSaving, setOwnerSaving] = useState<boolean>(false)
   const loadTrackingOwner = useCallback(() => {
-    try {
-      const d = (typeof window !== 'undefined' && window.localStorage.getItem('samba.autotune.daemon.deviceId')) || ''
-      setLocalDaemonId(d)
-    } catch { setLocalDaemonId('') }
+    // 데몬 id를 localhost:51425(같은 PC 데몬 loopback)에서 직접 fetch — warroom 안 들른
+    // 브라우저에서도 localDaemonId 채워져 전담 토글 동작. (localStorage 읽기만 하면
+    // warroom 미방문 PC는 빈값 → 토글 비활성/ON 유지 안 됨 버그 fix)
+    ;(async () => {
+      let daemonDev = ''
+      try {
+        const ctrl = new AbortController()
+        const t = setTimeout(() => ctrl.abort(), 1500)
+        const r = await fetch('http://localhost:51425/device_id', { signal: ctrl.signal })
+        clearTimeout(t)
+        if (r.ok) {
+          const j = await r.json()
+          if (j && typeof j.device_id === 'string' && j.device_id) {
+            daemonDev = j.device_id
+            try { window.localStorage.setItem('samba.autotune.daemon.deviceId', daemonDev) } catch { /* ignore */ }
+          }
+        }
+      } catch { /* 데몬 미기동 PC — localStorage 폴백 */ }
+      if (!daemonDev) {
+        try {
+          daemonDev = (typeof window !== 'undefined' &&
+            window.localStorage.getItem('samba.autotune.daemon.deviceId')) || ''
+        } catch { daemonDev = '' }
+      }
+      setLocalDaemonId(daemonDev)
+    })()
     orderApi.getTrackingOwnerDevice().then(r => setTrackingOwnerDevice(r.tracking_owner_device || '')).catch(() => {})
   }, [])
   useEffect(() => { loadTrackingOwner() }, [loadTrackingOwner])
