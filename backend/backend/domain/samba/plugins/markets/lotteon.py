@@ -1339,18 +1339,25 @@ class LotteonPlugin(MarketPlugin):
                         s = re.sub(r"\s+", " ", s)
                         return s
 
-                    def _make_match_keys(name: str) -> set[str]:
-                        """매칭 키 양방향 생성 — 전체 라벨 + 마지막 '/' 뒤 토큰.
+                    def _make_match_keys(name: str) -> list[str]:
+                        """매칭 키 생성 — 전체 라벨 우선, 마지막 '/' 뒤 사이즈는 최후 폴백.
 
                         회귀 배경(2026-05-11 939b89ed): _pick_lotteon_itm_label이
                         2단 옵션에서 ' / ' 결합 라벨('D/NAVY / 085')을 우선 후보로
                         쓰면서, 소싱처(무신사 등) new_options의 name='085'(사이즈만)와
                         매칭이 깨졌다. 양방향 키 등록·조회로 단일/결합 라벨 둘 다 흡수.
+
+                        오버셀링 fix(issue #366): set 반환 시 순회 순서가 비결정적이라
+                        색상 간 공유되는 사이즈 단독키('26')가 전체 라벨('BK 블랙/26')보다
+                        먼저 잡혀 엉뚱한 색상(같은 사이즈 마지막 색상으로 덮어쓴 재고)에
+                        매칭 → 품절옵션 오버셀링. list 로 순서 고정(전체키 우선)해 정확 매칭.
                         """
                         s = _norm_opt(name)
-                        keys = {s}
+                        keys = [s]
                         if "/" in s:
-                            keys.add(s.rsplit("/", 1)[-1].strip())
+                            size = s.rsplit("/", 1)[-1].strip()
+                            if size and size != s and size not in keys:
+                                keys.append(size)
                         return keys
 
                     # 옵션명 → (stock, isSoldOut) 매핑 + 옵션명 → 소싱처가격 매핑 — 양방향 키 등록
