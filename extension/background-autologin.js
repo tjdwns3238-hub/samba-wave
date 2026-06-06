@@ -41,7 +41,10 @@ const AUTO_LOGIN_SITES = {
   },
   ssg: {
     name: 'SSG',
-    loginUrl: 'https://member.ssg.com/m/member/login.ssg',
+    // [2026-06-06] m/member(모바일) 페이지가 로그인폼 제거됨 — 검색창(search_shpp)만 렌더링돼
+    // selector 매칭 실패 → SSG 자동로그인 전건 실패 → 송장 timeout. PC URL(/member/login.ssg)
+    // 엔 로그인폼 정상(CDP 실측 hasIdPw=true) → m/ 제거.
+    loginUrl: 'https://member.ssg.com/member/login.ssg',
     checkUrl: 'https://www.ssg.com/myssg/activityMng/pdtEvalList.ssg?quick=pdtEvalList',
     isLoginPage: url => url.includes('login.ssg') || url.includes('/member/login'),
     loginButtonSelector: 'button[type="submit"], .btn_login, #btn_login',
