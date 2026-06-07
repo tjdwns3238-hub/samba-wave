@@ -1460,11 +1460,38 @@ const ProductCard = React.memo(function ProductCard({
                 color: '#999', border: '1px solid #2D2D2D', borderRadius: '3px', cursor: 'pointer', whiteSpace: 'nowrap',
               }}>원문링크</button>
             <button
-              onClick={() => {
+              onClick={async () => {
                 // 상세페이지 미리보기 — 백엔드 _build_detail_html과 동일한 로직
                 const imgs = p.images || []
                 const detailImgs = (p as unknown as Record<string, string[]>).detail_images || []
                 if (imgs.length === 0 && detailImgs.length === 0) { showAlert('이미지가 없습니다'); return }
+
+                // 실측표 데이터 — extra_data는 목록에서 defer되므로 없으면 단건 fetch (백엔드와 동일 포함)
+                let asz = actualSize
+                if (!asz && p.source_site === 'MUSINSA') {
+                  try {
+                    const full = await collectorApi.getProduct(p.id)
+                    const ed = (full?.extra_data as Record<string, unknown> | undefined) || {}
+                    const a = ed.actualSize as typeof actualSize
+                    if (a && Array.isArray(a.sizes) && a.sizes.length > 0) { asz = a; setActualSize(a) }
+                  } catch { /* 실측표 없으면 생략 */ }
+                }
+                // 실측표 HTML 생성 (백엔드 _build_size_chart_html과 동일 구조)
+                const sizeChartHtml = (): string => {
+                  if (!asz || !asz.sizes || asz.sizes.length === 0) return ''
+                  const cols = (asz.sizes[0].items || []).map(it => (it.name || '').trim()).filter(Boolean)
+                  if (cols.length === 0) return ''
+                  const th = 'border:1px solid #ddd;padding:8px 10px;background:#f5f5f5;font-weight:600;color:#333;white-space:nowrap;'
+                  const td = 'border:1px solid #ddd;padding:8px 10px;color:#444;text-align:center;white-space:nowrap;'
+                  const fmt = (v: number | undefined) => (v === undefined || v === null ? '-' : String(v))
+                  const head = `<th style="${th}">사이즈</th>` + cols.map(c => `<th style="${th}">${c}</th>`).join('')
+                  const rows = asz.sizes.map(sz => {
+                    const m = new Map((sz.items || []).map(it => [(it.name || '').trim(), it.value]))
+                    return `<tr><td style="${td}">${sz.name || '-'}</td>` + cols.map(c => `<td style="${td}">${fmt(m.get(c))}</td>`).join('') + '</tr>'
+                  }).join('')
+                  const title = '실측 사이즈' + (asz.typeName ? ` (${asz.typeName})` : '')
+                  return `<div style="max-width:860px;width:100%;margin:1.5rem auto;font-family:inherit;"><h3 style="font-size:1.1rem;font-weight:700;color:#333;margin:0 0 0.75rem;text-align:center;">${title}</h3><table style="border-collapse:collapse;width:100%;font-size:0.9rem;"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table><p style="font-size:0.8rem;color:#888;margin:0.5rem 0 0;text-align:center;">단위: cm</p></div>`
+                }
 
                 // 정책에서 상세 템플릿 조회 (detailTemplates에서 실제 매칭)
                 const policy = policies.find(pol => pol.id === p.applied_policy_id)
@@ -1474,12 +1501,17 @@ const ProductCard = React.memo(function ProductCard({
                 const bottomImg = tpl?.bottom_image_s3_key || ''
                 const checks: Record<string, boolean> = {
                   topImg: true, main: true, sub: true,
-                  title: false, option: false, detail: false, bottomImg: true,
+                  title: false, option: false, detail: false, sizeChart: true, bottomImg: true,
                   ...(tpl?.img_checks || {}),
                   ...(topImg ? { topImg: true } : {}),
                   ...(bottomImg ? { bottomImg: true } : {}),
                 }
-                const order = tpl?.img_order || ['topImg', 'main', 'sub', 'title', 'option', 'detail', 'bottomImg']
+                if (checks.sizeChart === undefined) checks.sizeChart = true
+                const order = (() => {
+                  const o = tpl?.img_order ? [...tpl.img_order] : ['topImg', 'main', 'sub', 'title', 'option', 'detail', 'bottomImg']
+                  if (!o.includes('sizeChart')) { const bi = o.indexOf('bottomImg'); if (bi >= 0) o.splice(bi, 0, 'sizeChart'); else o.push('sizeChart') }
+                  return o
+                })()
 
                 const imgTag = (url: string) => `<div style="text-align:center;"><img src="${url}" style="max-width:860px;width:100%;" /></div>`
                 const parts: string[] = []
@@ -1493,6 +1525,7 @@ const ProductCard = React.memo(function ProductCard({
                   else if (item === 'sub' && imgs.length > 1) { imgs.slice(1).forEach(u => parts.push(imgTag(u))) }
                   else if (item === 'title' && p.name) { parts.push(`<div style="text-align:center;padding:1rem 0;"><h2 style="color:#333;font-size:1.25rem;">${p.name}</h2></div>`) }
                   else if (item === 'detail' && detailImgs.length > 0) { detailImgs.filter(u => !subSet.has(u)).forEach(u => parts.push(imgTag(u))) }
+                  else if (item === 'sizeChart') { const sc = sizeChartHtml(); if (sc) parts.push(sc) }
                   else if (item === 'bottomImg' && bottomImg) { parts.push(imgTag(bottomImg)) }
                 }
 
