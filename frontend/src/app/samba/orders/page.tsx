@@ -420,15 +420,36 @@ export default function OrdersPage() {
   const [autoSyncHistory, setAutoSyncHistory] = useState<AutoSyncHistoryItem[]>([])
   // [2026-06-05] 송장 전담 PC 토글 제거 — 송장수집을 확장앱(owner='') 방식으로 복구하면서
   // 데몬 시절 전담(tracking_owner_device) 개념이 무의미해짐. 관련 state/핸들러 일괄 삭제.
+  // [#370] 자동실행 토글 상태 복원 — 30초 주기 동기화(이력 패널과 동일 self-heal).
+  // 마운트 1회성 + .catch silent swallow 였던 탓에 GET 한 번 실패(auth race 401 등)하면
+  // 서버는 ON 인데 토글이 OFF 로 고착됐다. 주기 동기화로 일시 실패가 다음 주기에 회복.
+  const autoSyncSavingRef = useRef(false)
   useEffect(() => {
-    orderApi.getAutoSyncInterval()
-      .then(res => {
-        if (res.interval_minutes > 0) {
-          setAutoSyncIntervalInput(res.interval_minutes)
-          setAutoSyncEnabled(true)
-        }
-      })
-      .catch(() => {})
+    autoSyncSavingRef.current = autoSyncSaving
+  }, [autoSyncSaving])
+  useEffect(() => {
+    let cancelled = false
+    let inputInitialized = false
+    const syncToggle = () => {
+      orderApi.getAutoSyncInterval()
+        .then(res => {
+          // 저장 중에는 폴링값으로 덮지 않음(사용자 토글 조작 보존)
+          if (cancelled || autoSyncSavingRef.current) return
+          const on = res.interval_minutes > 0
+          setAutoSyncEnabled(on)  // 서버값과 양방향 동기화
+          if (on && !inputInitialized) {
+            setAutoSyncIntervalInput(res.interval_minutes)  // 입력칸은 최초 1회만
+            inputInitialized = true
+          }
+        })
+        .catch(() => {})  // 일시 실패는 다음 30초 주기에 자동 재시도
+    }
+    syncToggle()
+    const t = setInterval(syncToggle, 30_000)
+    return () => {
+      cancelled = true
+      clearInterval(t)
+    }
   }, [])
   // 최근 자동실행 이력 2건 — 30초마다 폴링 (러닝 상태도 추적)
   useEffect(() => {
