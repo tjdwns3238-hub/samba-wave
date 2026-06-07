@@ -27,6 +27,7 @@ from backend.api.v1.routers.samba.collector_refresh import (
 )
 from backend.api.v1.routers.samba.contact import router as samba_contact_router
 from backend.api.v1.routers.samba.cs_inquiry import router as samba_cs_inquiry_router
+from backend.api.v1.routers.samba.cs_internal import router as samba_cs_internal_router
 from backend.api.v1.routers.samba.ebay_mapping import (
     router as samba_ebay_mapping_router,
 )
@@ -227,6 +228,9 @@ def create_application() -> FastAPI:
     app.include_router(
         samba_cs_inquiry_router, prefix="/api/v1/samba", dependencies=samba_auth
     )
+    # CS 자동화 내부 API — samba_auth 우회, X-Internal-Token 자체 검증
+    # (Claude 클라우드 스케줄잡 전용)
+    app.include_router(samba_cs_internal_router, prefix="/api/v1")
     app.include_router(
         samba_store_care_router, prefix="/api/v1/samba", dependencies=samba_auth
     )

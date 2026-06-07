@@ -104,6 +104,44 @@ async def _apply_startup_schema_fixes(logger: logging.Logger) -> None:
         # (제거됨) drop_market_account_sort_order — 컬럼 이미 드롭 완료(프로덕션 ABSENT 확인,
         # 2026-06-03 #331). no-op DROP도 매 startup ACCESS EXCLUSIVE 락을 잡아 고부하 시
         # 계정 테이블 읽기 큐를 최대 lock_timeout(5s)만큼 막으므로 statements에서 제거.
+        # CS 자동화(Tier 0) 컬럼 — 소규모 테이블이라 데드락 위험 없음
+        (
+            "alter_cs_intent",
+            "ALTER TABLE samba_cs_inquiry ADD COLUMN IF NOT EXISTS intent TEXT",
+        ),
+        (
+            "alter_cs_draft_reply",
+            "ALTER TABLE samba_cs_inquiry ADD COLUMN IF NOT EXISTS draft_reply TEXT",
+        ),
+        (
+            "alter_cs_draft_status",
+            "ALTER TABLE samba_cs_inquiry ADD COLUMN IF NOT EXISTS draft_status TEXT "
+            "NOT NULL DEFAULT 'none'",
+        ),
+        (
+            "alter_cs_draft_confidence",
+            "ALTER TABLE samba_cs_inquiry ADD COLUMN IF NOT EXISTS draft_confidence "
+            "DOUBLE PRECISION",
+        ),
+        (
+            "alter_cs_draft_source",
+            "ALTER TABLE samba_cs_inquiry ADD COLUMN IF NOT EXISTS draft_source TEXT",
+        ),
+        (
+            "alter_cs_drafted_at",
+            "ALTER TABLE samba_cs_inquiry ADD COLUMN IF NOT EXISTS drafted_at "
+            "TIMESTAMP WITH TIME ZONE",
+        ),
+        (
+            "idx_cs_intent",
+            "CREATE INDEX IF NOT EXISTS ix_samba_cs_inquiry_intent "
+            "ON samba_cs_inquiry (intent)",
+        ),
+        (
+            "idx_cs_draft_status",
+            "CREATE INDEX IF NOT EXISTS ix_samba_cs_inquiry_draft_status "
+            "ON samba_cs_inquiry (draft_status)",
+        ),
         (
             "create_login_history",
             """

@@ -144,6 +144,12 @@ class BackendSettings(BaseSettings):
        Developer Portal에 등록한 값과 동일해야 challenge 응답이 일치.
        시크릿이므로 코드/PR에 노출 금지 — VM의 .env로만 주입."""
 
+    cs_internal_token: str = ""
+    """CS 자동화 내부 API(/api/v1/internal/cs/*) 인증 토큰.
+       Claude 클라우드 스케줄잡이 X-Internal-Token 헤더로 호출.
+       samba_auth(JWT) 우회 경로이므로 이 토큰이 유일 방어선 — 빈 값이면 전체 차단.
+       시크릿이므로 코드/PR 노출 금지 — VM의 .env로만 주입."""
+
     # ===========================================
     # ESMPlus 호스팅 인증정보 (셀링툴업체 고정값)
     # ===========================================
