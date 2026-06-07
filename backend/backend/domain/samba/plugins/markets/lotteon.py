@@ -2778,6 +2778,17 @@ class LotteonPlugin(MarketPlugin):
                 spd_no = api_result.get("spdNo", "") or api_result.get("epdNo", "")
                 logger.info(f"[롯데ON] 등록 완료 — spdNo={spd_no!r}")
 
+                # 중복 유령 방지: 등록 직후 spdNo를 별도 세션으로 즉시 영속.
+                # 롯데ON은 selPrdNo 역조회 API가 없어 SSG식 사전 가드가 불가하므로,
+                # 등록 성공 시점에 매핑을 바로 박아 둔다. 이후 프로모션/홍보문구 등
+                # 후처리나 반환 경로에서 에러가 나 plugin이 success=False를 반환해도,
+                # DB 매핑이 보존돼 다음 사이클이 재등록(중복 spdNo 생성) 대신
+                # 수정 모드로 진입한다. (유령 원인=매핑 유실 후 재등록)
+                if spd_no:
+                    await self._persist_spd_no_immediately(
+                        str(product.get("id") or ""), _account_id_snapshot, spd_no
+                    )
+
                 # ── 등록 후 프로모션 설정: sitmNo 조회 후 전달 ────────────
                 if spd_no:
                     # 롯데ON 상품 처리 대기 — 즉시 호출 시 9000/9999 에러 발생
@@ -2843,6 +2854,51 @@ class LotteonPlugin(MarketPlugin):
             # 발생 라인 추적이 안 되던 문제 — traceback 전체를 로그에 남긴다.
             logger.error(f"[롯데ON] {action} 실패: {e}\n{_tb.format_exc()}")
             return {"success": False, "message": f"롯데ON {action} 실패: {e}"}
+
+    async def _persist_spd_no_immediately(
+        self, product_id: str, account_id: Optional[str], spd_no: str
+    ) -> None:
+        """등록 성공 직후 spdNo를 별도 세션으로 즉시 영속(중복 유령 방지).
+
+        self.session 은 후처리 중 rollback/만료될 수 있으므로 새 세션을 쓴다.
+        market_product_nos[account_id]=spdNo + registered_accounts 갱신만 수행.
+        실패해도 등록 자체를 무효화하지 않도록 예외는 삼킨다.
+        """
+        if not (product_id and account_id and spd_no):
+            return
+        try:
+            from sqlalchemy import update as _imm_upd
+
+            from backend.db.orm import get_write_session as _imm_gws
+            from backend.domain.samba.collector.model import (
+                SambaCollectedProduct as _ImmCP,
+            )
+            from backend.domain.samba.collector.repository import (
+                SambaCollectedProductRepository as _ImmRepo,
+            )
+
+            async with _imm_gws() as _imm_s:
+                _pr = await _ImmRepo(_imm_s).get_async(product_id)
+                if not _pr:
+                    return
+                _reg = list(set((_pr.registered_accounts or []) + [account_id]))
+                _mpn = dict(_pr.market_product_nos or {})
+                _mpn[account_id] = str(spd_no)
+                await _imm_s.execute(
+                    _imm_upd(_ImmCP)
+                    .where(_ImmCP.id == product_id)
+                    .values(
+                        registered_accounts=_reg,
+                        market_product_nos=_mpn,
+                        status="registered",
+                    )
+                )
+                await _imm_s.commit()
+            logger.info(
+                f"[롯데ON] spdNo 즉시영속 완료 — {product_id} → {spd_no} (계정 {account_id})"
+            )
+        except Exception as _e:
+            logger.warning(f"[롯데ON] spdNo 즉시영속 실패 (무시): {_e}")
 
     @staticmethod
     def _parse_lotteon_spd_info(resp: dict | None) -> dict:

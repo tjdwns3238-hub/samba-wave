@@ -472,6 +472,35 @@ class ElevenstPlugin(MarketPlugin):
                     "data": result,
                 }
             else:
+                # 중복등록 방지(유령 차단): 등록 전 sellerPrdCd(=samba product.id)로
+                # 11번가 기존 등록 여부 확인. DB 매핑이 유실돼 existing_no가 비어도
+                # 11번가에 이미 있으면 재등록(중복 생성) 대신 기존 prdNo를 채택한다.
+                _seller_code = str(product.get("id") or "").strip()
+                if _seller_code:
+                    try:
+                        _dup = await client.find_by_seller_code(_seller_code)
+                        # 금지(108) 상태는 재연결 부적합 — 그 외 존재 시 기존 prdNo 채택
+                        if (
+                            _dup.get("found")
+                            and _dup.get("prd_no")
+                            and str(_dup.get("sel_stat_cd") or "") != "108"
+                        ):
+                            _exist_prd = str(_dup["prd_no"])
+                            logger.warning(
+                                f"[11번가] 중복등록 방지 — sellerPrdCd={_seller_code} "
+                                f"이미 존재(prdNo={_exist_prd}, 상태={_dup.get('sel_stat_cd')}) → 기존 연결"
+                            )
+                            return {
+                                "success": True,
+                                "product_no": _exist_prd,
+                                "message": "11번가 기등록 상품 재연결 (중복등록 차단)",
+                                "data": _dup,
+                                "_already_registered": True,
+                            }
+                    except Exception as _dup_e:
+                        logger.warning(
+                            f"[11번가] 중복등록 사전조회 실패 — 등록 진행: {_dup_e}"
+                        )
                 result = await client.register_product(xml_data)
                 prd_no = result.get("prd_no") or result.get("data", {}).get("prdNo", "")
                 if not prd_no:
