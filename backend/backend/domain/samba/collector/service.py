@@ -457,9 +457,11 @@ class SambaCollectorService:
         tenant_ids = {d.get("tenant_id") for d in items}
         registered_names_by_tid: Dict[str, set] = {}
         registered_keys_by_tid: Dict[str, set] = {}
-        for tid in tenant_ids:
-            key = str(tid) if tid is not None else "__null__"
-            names, keys = await self.product_repo.get_registered_name_keys(tid)
+        # N+1 제거: tenant 수만큼 쿼리하던 것을 1쿼리 배치로
+        by_tenant = await self.product_repo.get_registered_name_keys_by_tenants(
+            tenant_ids
+        )
+        for key, (names, keys) in by_tenant.items():
             registered_names_by_tid[key] = names
             registered_keys_by_tid[key] = keys
 

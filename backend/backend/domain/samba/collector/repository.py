@@ -140,6 +140,53 @@ class SambaCollectedProductRepository(BaseRepository[SambaCollectedProduct]):
         key_set = {(r[1], r[2]) for r in rows if r[1] and r[2]}
         return name_set, key_set
 
+    async def get_registered_name_keys_by_tenants(
+        self, tenant_ids
+    ) -> dict[str, tuple[set, set]]:
+        """여러 tenant의 등록상품 (name_set, key_set)을 1쿼리로 묶어 반환.
+
+        기존 get_registered_name_keys 를 tenant 수만큼 루프 호출하던 N+1 제거.
+        반환 키 = tenant_id 문자열, None tenant 는 '__null__'.
+        WHERE 술어는 단일 버전과 동일하게 유지해 결과가 동일하다.
+        """
+        tids = list(tenant_ids)
+        if not tids:
+            return {}
+
+        has_null = any(t is None for t in tids)
+        non_null = [t for t in tids if t is not None]
+        tenant_conds = []
+        if non_null:
+            tenant_conds.append(SambaCollectedProduct.tenant_id.in_(non_null))
+        if has_null:
+            tenant_conds.append(SambaCollectedProduct.tenant_id.is_(None))
+
+        stmt = select(
+            SambaCollectedProduct.tenant_id,
+            SambaCollectedProduct.name,
+            SambaCollectedProduct.source_site,
+            SambaCollectedProduct.site_product_id,
+        ).where(
+            or_(*tenant_conds),
+            SambaCollectedProduct.registered_accounts.isnot(None),
+            func.jsonb_typeof(SambaCollectedProduct.registered_accounts) == "array",
+            SambaCollectedProduct.registered_accounts.op("!=")(cast("[]", JSONB)),
+        )
+        result = await self.session.execute(stmt)
+
+        # 호출 측이 요청한 모든 tenant 키를 빈 set 으로 선초기화(누락 키 없게)
+        out: dict[str, tuple[set, set]] = {
+            (str(t) if t is not None else "__null__"): (set(), set()) for t in tids
+        }
+        for tid, name, site, spid in result.all():
+            key = str(tid) if tid is not None else "__null__"
+            names, keys = out.setdefault(key, (set(), set()))
+            if name:
+                names.add((name or "").strip())
+            if site and spid:
+                keys.add((site, spid))
+        return out
+
     async def find_duplicates(
         self,
         tenant_id,
