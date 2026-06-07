@@ -798,6 +798,36 @@ class CoupangClient:
             f"/v2/providers/seller_api/apis/api/v1/marketplace/seller-products/{seller_product_id}",
         )
 
+    async def find_by_external_sku(self, external_sku: str) -> dict[str, Any]:
+        """업체상품코드(externalVendorSku)로 등록상품 역조회 (중복등록 방지 가드용).
+
+        공식 API: GET .../seller-products/external-vendor-sku-codes/{code}
+        응답: {"code":"SUCCESS","message":"...[N]건...","data":[{sellerProductId,...}, ...]}
+        프로덕션 실측(2026-06-08): 미등록 코드는 data=[] 정상 반환.
+
+        Returns:
+            {"found": bool, "seller_product_id": str, "status_name": str}
+        """
+        code = (external_sku or "").strip()
+        if not code:
+            return {"found": False, "seller_product_id": "", "status_name": ""}
+        res = await self._call_api(
+            "GET",
+            f"/v2/providers/seller_api/apis/api/v1/marketplace/seller-products/external-vendor-sku-codes/{code}",
+        )
+        data = res.get("data") if isinstance(res, dict) else None
+        if not isinstance(data, list) or not data:
+            return {"found": False, "seller_product_id": "", "status_name": ""}
+        first = data[0] if isinstance(data[0], dict) else {}
+        spid = str(
+            first.get("sellerProductId") or first.get("sellerProductItemId") or ""
+        ).strip()
+        return {
+            "found": bool(spid),
+            "seller_product_id": spid,
+            "status_name": str(first.get("statusName") or ""),
+        }
+
     async def list_seller_products(
         self,
         status: Optional[str] = None,
@@ -1094,6 +1124,13 @@ class CoupangClient:
                 _item["barcode"] = ""
                 _item["emptyBarcode"] = True
                 _item["emptyBarcodeReason"] = "바코드 없음"
+
+            # 중복등록(유령) 방지용 멱등키 — 업체상품코드(externalVendorSku)=samba product.id.
+            # 등록 전 find_by_external_sku 역조회 가드가 이 값으로 기존 등록을 찾아
+            # 재등록(중복 생성) 대신 기존 sellerProductId를 채택한다.
+            _ext_sku = str(product.get("id") or "").strip()
+            if _ext_sku:
+                _item["externalVendorSku"] = _ext_sku[:100]
 
             return _item
 

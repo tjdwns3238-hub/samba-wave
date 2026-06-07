@@ -381,6 +381,32 @@ class CoupangPlugin(MarketPlugin):
         # update_product PUT(/seller-products/{id})은 쿠팡 spec 미정의(404)라 폴백이
         # 일시 504를 영구 404로 둔갑시키던 버그가 있었어 제거함.
         if not existing_no:
+            # 중복등록 방지(유령 차단): 등록 전 externalVendorSku(=samba product.id)로
+            # 쿠팡 기존 등록 확인. DB 매핑이 유실돼 existing_no가 비어도 쿠팡에 이미
+            # 있으면 재등록(중복 생성) 대신 기존 sellerProductId를 채택한다.
+            # (externalVendorSku는 이번 패치 이후 등록분부터 채워지므로 점진 적용)
+            _ext_sku = str(product.get("id") or "").strip()
+            if _ext_sku:
+                try:
+                    _dup = await client.find_by_external_sku(_ext_sku)
+                    if _dup.get("found") and _dup.get("seller_product_id"):
+                        _exist_spid = str(_dup["seller_product_id"])
+                        logger.warning(
+                            f"[쿠팡] 중복등록 방지 — externalVendorSku={_ext_sku} "
+                            f"이미 존재(sellerProductId={_exist_spid}, 상태={_dup.get('status_name')}) → 기존 연결"
+                        )
+                        return {
+                            "success": True,
+                            "product_no": _exist_spid,
+                            "message": "쿠팡 기등록 상품 재연결 (중복등록 차단)",
+                            "data": {"sellerProductId": _exist_spid},
+                            "_already_registered": True,
+                        }
+                except Exception as _dup_e:
+                    logger.warning(
+                        f"[쿠팡] 중복등록 사전조회 실패 — 등록 진행: {_dup_e}"
+                    )
+
             result = await client.register_product(data)
 
             # 쿠팡 응답에서 sellerProductId 추출 (data 필드에 숫자로 반환)
