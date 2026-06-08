@@ -1374,6 +1374,57 @@ class SambaTetrisService:
         )
         excluded_account_ids: set[str] = {row[0] for row in excluded_acct_rows}
 
+        # 계정별 maxCount 한도 로드 (additional_fields.maxCount) — 0/없음이면 무제한
+        # issue #375 — sync 잡 생성 시 한도초과 계정 스킵하지 않아 잡 무한 생성되던 버그
+        max_count_rows = await self._session.execute(
+            text("""
+                SELECT id, additional_fields->>'maxCount' AS max_count
+                FROM samba_market_account
+                WHERE (tenant_id IS NULL AND :tid_is_null OR tenant_id = :tid)
+            """),
+            {"tid": tenant_id, "tid_is_null": tenant_id is None},
+        )
+        account_max_count: dict[str, int] = {}
+        for row in max_count_rows:
+            try:
+                account_max_count[row[0]] = int(row[1] or 0)
+            except (ValueError, TypeError):
+                account_max_count[row[0]] = 0
+
+        # 계정별 현재 등록 총합 — registered_accounts JSONB 배열 펼쳐 계정별 카운트
+        # LATERAL + CASE WHEN 으로 스칼라 registered_accounts 도 빈 배열 처리(스칼라 에러 회피)
+        reg_total_rows = await self._session.execute(
+            text("""
+                SELECT acc.val AS account_id, COUNT(*) AS cnt
+                FROM samba_collected_product scp
+                CROSS JOIN LATERAL jsonb_array_elements_text(
+                    CASE WHEN jsonb_typeof(scp.registered_accounts) = 'array'
+                         THEN scp.registered_accounts
+                         ELSE '[]'::jsonb
+                    END
+                ) AS acc(val)
+                WHERE (scp.tenant_id IS NULL AND :tid_is_null OR scp.tenant_id = :tid)
+                  AND scp.registered_accounts IS NOT NULL
+                GROUP BY acc.val
+            """),
+            {"tid": tenant_id, "tid_is_null": tenant_id is None},
+        )
+        account_registered_total: dict[str, int] = {
+            row[0]: int(row[1] or 0) for row in reg_total_rows
+        }
+        # 이번 sync 에서 큐잉한 상품 수 누적 — 한 sync 안에서 한도 초과 과다생성도 차단
+        account_inflight: dict[str, int] = {}
+
+        def _over_max(acc_id: str) -> bool:
+            """계정 등록합산(+이번 sync 큐잉분)이 maxCount 도달이면 True. 0이면 무제한."""
+            cap = account_max_count.get(acc_id, 0)
+            if cap <= 0:
+                return False
+            projected = account_registered_total.get(acc_id, 0) + account_inflight.get(
+                acc_id, 0
+            )
+            return projected >= cap
+
         job_repo = SambaJobRepository(self._session)
         job_count = 0
         total_products = 0
@@ -1457,6 +1508,17 @@ class SambaTetrisService:
             if a.market_account_id in excluded_account_ids:
                 processed_keys.add((a.source_site, a.brand_name, a.market_account_id))
                 continue
+            # maxCount 한도 가드 (issue #375) — 등록합산 한도 도달 계정은 신규 잡 스킵
+            if _over_max(a.market_account_id):
+                logger.info(
+                    f"[테트리스 sync] maxCount 한도 도달 — 잡 생성 스킵: "
+                    f"{a.source_site}/{a.brand_name} → {a.market_account_id} "
+                    f"(등록 {account_registered_total.get(a.market_account_id, 0)}"
+                    f"+큐 {account_inflight.get(a.market_account_id, 0)}"
+                    f" / max {account_max_count.get(a.market_account_id, 0)})"
+                )
+                processed_keys.add((a.source_site, a.brand_name, a.market_account_id))
+                continue
             # brand_name 양쪽 공백 정규화 — 가드 매칭 실패로 중복 누적 방지
             a_brand_norm = (a.brand_name or "").strip()
             a_site_norm = (a.source_site or "").strip()
@@ -1504,6 +1566,9 @@ class SambaTetrisService:
             )
             job_count += 1
             total_products += len(pids)
+            account_inflight[a.market_account_id] = account_inflight.get(
+                a.market_account_id, 0
+            ) + len(pids)
 
         # 테트리스 배치가 있는 (source_site, brand) 조합 — legacy 루프 개입 금지
         # 배치된 브랜드는 고경 등 지정 계정에서만 처리해야 하므로 다른 계정으로 번지면 안 됨
@@ -1545,6 +1610,17 @@ class SambaTetrisService:
                 continue
             # 계정 단위 배제
             if row.account_id in excluded_account_ids:
+                processed_keys.add(key)
+                continue
+            # maxCount 한도 가드 (issue #375) — 레거시 보충등록도 한도 도달 계정 스킵
+            if _over_max(row.account_id):
+                logger.info(
+                    f"[테트리스 sync 레거시] maxCount 한도 도달 — 잡 생성 스킵: "
+                    f"{row.source_site}/{row.brand_name} → {row.account_id} "
+                    f"(등록 {account_registered_total.get(row.account_id, 0)}"
+                    f"+큐 {account_inflight.get(row.account_id, 0)}"
+                    f" / max {account_max_count.get(row.account_id, 0)})"
+                )
                 processed_keys.add(key)
                 continue
             # 삭제(delete_market) 잡 진행 중인 조합은 레거시 복원 금지
@@ -1612,6 +1688,9 @@ class SambaTetrisService:
             )
             job_count += 1
             total_products += len(pids)
+            account_inflight[row.account_id] = account_inflight.get(
+                row.account_id, 0
+            ) + len(pids)
 
         logger.info(
             f"[테트리스 sync] {len(assignments)}개 배치 + 레거시 → "
