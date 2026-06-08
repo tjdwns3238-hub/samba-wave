@@ -153,7 +153,7 @@ class SambaReturnService:
         )
 
     async def complete_return(self, return_id: str) -> Optional[SambaReturn]:
-        """반품 완료 처리."""
+        """반품 완료 처리 + 연결된 주문 상태 동기화."""
         ret = await self.repo.get_async(return_id)
         if not ret:
             return None
@@ -162,12 +162,41 @@ class SambaReturnService:
         timeline = list(ret.timeline or [])
         timeline.append(_make_timeline_entry("completed", "처리가 완료되었습니다."))
 
-        return await self.repo.update_async(
+        updated = await self.repo.update_async(
             return_id,
             status="completed",
             completion_date=now,
             timeline=timeline,
         )
+
+        # 연결된 주문의 status도 '반품완료(returned)'로 동기화
+        await self._sync_order_status_returned(ret.order_id)
+
+        return updated
+
+    async def _sync_order_status_returned(self, order_id: Optional[str]) -> None:
+        """반품 완료 시 연결된 주문 status를 'returned'로 갱신."""
+        if not order_id:
+            return
+
+        from backend.db.orm import get_write_session
+        from backend.domain.samba.order.model import SambaOrder
+
+        try:
+            async with get_write_session() as session:
+                order = await session.get(SambaOrder, order_id)
+                if not order:
+                    logger.warning(f"[반품완료동기화] 주문 없음 order_id={order_id}")
+                    return
+                if order.status == "returned":
+                    return
+                order.status = "returned"
+                order.return_status = "returned"
+                session.add(order)
+                await session.commit()
+                logger.info(f"[반품완료동기화] 주문 {order_id} status=returned 반영 완료")
+        except Exception as exc:
+            logger.warning(f"[반품완료동기화] 실패 order_id={order_id}: {exc}")
 
     async def cancel_return(self, return_id: str) -> Optional[SambaReturn]:
         """반품 요청 취소."""
