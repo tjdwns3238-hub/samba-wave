@@ -290,6 +290,10 @@ async def _create_cs_sync_job(session, tenant_id: str | None) -> None:
     )
     session.add(job)
     await session.flush()
+    # get_write_session 은 정상 종료 시 auto-commit 하지 않음(orm.py:212) — flush만 하면
+    # 블록 종료 때 INSERT가 롤백돼 cs_sync 잡이 영영 생성되지 않는다(CS 자동수집 전면 정지).
+    # 반드시 명시적으로 commit.
+    await session.commit()
     logger.info("[주문폴러] cs_sync 잡 생성 (tenant=%s, job=%s)", tenant_id, job.id)
 
 
