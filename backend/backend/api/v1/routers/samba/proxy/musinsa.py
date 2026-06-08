@@ -371,6 +371,84 @@ async def musinsa_save_opt_nos(
     }
 
 
+class MusinsaReturnTracking(BaseModel):
+    orderNo: str
+    courier: Optional[str] = None
+    trackingNo: str
+
+
+class MusinsaSaveReturnTrackingRequest(BaseModel):
+    items: list[MusinsaReturnTracking]
+
+
+@extension_router.post("/musinsa/save-return-tracking")
+async def musinsa_save_return_tracking(
+    body: MusinsaSaveReturnTrackingRequest = Body(...),
+    write_session: AsyncSession = Depends(get_write_session_dependency),
+) -> dict[str, Any]:
+    """확장앱이 무신사 get_claim_list API 에서 추출한 회수송장 일괄 저장.
+
+    인증: X-Api-Key (확장앱 공통). extension_router 등록 — JWT 면제.
+
+    동작:
+      - sourcing_order_number == orderNo AND source_site = 'MUSINSA' 인 주문에
+        return_collect_courier/tracking/at 저장 (CS 답변용, 마켓 전송 안 함)
+      - trackingNo 비어있는 항목은 스킵 (아직 회수 미발송)
+      - 이미 같은 송장이 저장된 경우는 갱신 카운트에서 제외(불필요 write 방지)
+    """
+    from datetime import datetime, timezone
+
+    from sqlalchemy import update
+
+    from backend.domain.samba.order.model import SambaOrder
+    from backend.domain.samba.tracking_sync.service import normalize_courier_name
+
+    updated = 0
+    not_matched = 0
+    skipped = 0
+    now = datetime.now(timezone.utc)
+    for it in body.items:
+        ord_no = (it.orderNo or "").strip()
+        tracking = (it.trackingNo or "").strip()
+        if not ord_no or not tracking:
+            skipped += 1
+            continue
+        courier = normalize_courier_name((it.courier or "").strip())
+        stmt = (
+            update(SambaOrder)
+            .where(
+                SambaOrder.sourcing_order_number == ord_no,
+                SambaOrder.source_site == "MUSINSA",
+                # 같은 송장이 이미 박혀 있으면 갱신 안 함(불필요 write/at 갱신 방지)
+                (SambaOrder.return_collect_tracking.is_(None))
+                | (SambaOrder.return_collect_tracking != tracking),
+            )
+            .values(
+                return_collect_courier=courier,
+                return_collect_tracking=tracking,
+                return_collect_at=now,
+            )
+        )
+        res = await write_session.execute(stmt)
+        n = res.rowcount or 0
+        if n > 0:
+            updated += n
+        else:
+            not_matched += 1
+    await write_session.commit()
+    logger.info(
+        f"[무신사 회수송장] 저장: updated={updated} not_matched={not_matched} "
+        f"skipped={skipped} total_in={len(body.items)}"
+    )
+    return {
+        "ok": True,
+        "received": len(body.items),
+        "updated": updated,
+        "notMatched": not_matched,
+        "skipped": skipped,
+    }
+
+
 class MusinsaCookiesRequest(BaseModel):
     cookies: list[str]
 

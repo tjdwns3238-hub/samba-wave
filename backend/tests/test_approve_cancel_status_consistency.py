@@ -103,9 +103,7 @@ class TestApproveCancelStatusConsistency:
         """
         # 본문 안의 update_order(...) 호출 dict 모두 추출
         # 정규식: update_order\(\s*order_id\s*,\s*\{ ... \} \s*\)
-        pattern = re.compile(
-            r"update_order\(\s*order_id\s*,\s*(\{[^}]*\})", re.DOTALL
-        )
+        pattern = re.compile(r"update_order\(\s*order_id\s*,\s*(\{[^}]*\})", re.DOTALL)
         matches = pattern.findall(self.body)
         assert matches, "approve_cancel 본문에서 update_order 호출 미발견"
 

@@ -275,6 +275,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     })()
     return true // 비동기 응답
   }
+  if (msg.type === 'MUSINSA_SAVE_RETURN_TRACKING') {
+    // content-musinsa-claimlist.js에서 추출한 회수송장(orderNo+택배사+송장) 일괄 저장
+    ;(async () => {
+      try {
+        const stored = await chrome.storage.local.get('proxyUrl')
+        const proxyUrl = stored.proxyUrl || ''
+        if (!proxyUrl) { sendResponse({ ok: false, error: 'no proxyUrl' }); return }
+        const url = `${proxyUrl}/api/v1/samba/musinsa/save-return-tracking`
+        const apiFetch = globalThis.SambaBackgroundCore?.apiFetch
+        const init = {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items: msg.items || [] }),
+        }
+        const res = apiFetch ? await apiFetch(url, init) : await fetch(url, init)
+        if (!res.ok) { sendResponse({ ok: false, status: res.status }); return }
+        const data = await res.json()
+        sendResponse({ ok: true, ...data })
+      } catch (e) {
+        sendResponse({ ok: false, error: e?.message || String(e) })
+      }
+    })()
+    return true // 비동기 응답
+  }
   if (msg.type === 'SCRAPE_SSG_SCORES') {
     scrapeSSGScores().then(data => sendResponse(data)).catch(e => sendResponse({ error: e.message }))
     return true // 비동기 응답

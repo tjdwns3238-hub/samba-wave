@@ -194,7 +194,9 @@ class SambaReturnService:
                 order.return_status = "returned"
                 session.add(order)
                 await session.commit()
-                logger.info(f"[반품완료동기화] 주문 {order_id} status=returned 반영 완료")
+                logger.info(
+                    f"[반품완료동기화] 주문 {order_id} status=returned 반영 완료"
+                )
         except Exception as exc:
             logger.warning(f"[반품완료동기화] 실패 order_id={order_id}: {exc}")
 

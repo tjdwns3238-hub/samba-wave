@@ -85,8 +85,9 @@ def build_return_tracking_url(site: str, sourcing_order_number: str) -> str:
     """반품 회수송장 조회 URL — 소싱처 회수조회 페이지.
 
     확장앱이 '회수조회' 버튼을 눌러 회수 택배사/송장번호를 추출한다.
-    현재 LOTTEON 만 지원(claim/orderDetail?odNo=). 무신사는 ord_opt_no/returnId
-    키 부재로 보류(2026-06-08 라이브 검증).
+    현재 LOTTEON 만 지원(claim/orderDetail?odNo=).
+    무신사는 별도 경로 — 확장앱이 get_claim_list API 로 회수송장을 직접 수집해
+    POST /musinsa/save-return-tracking 으로 저장(content-musinsa-claimlist.js).
     """
     s = (site or "").upper()
     ord_no = sourcing_order_number
@@ -455,9 +456,8 @@ async def enqueue_for_order(
         return {"success": True, "jobId": job.id, "requestId": request_id}
 
 
-# 반품 회수송장 지원 소싱처 (라이브 검증 완료 사이트만)
-# 무신사는 회수조회 URL 키(ord_opt_no/returnId) 부재로 미지원 — build_return_tracking_url 도 거부
-# (2026-06-08 라이브 검증). MUSINSA 를 포함하면 회수 잡이 매번 ValueError 로 헛돌이.
+# 반품 회수송장 잡 큐 지원 소싱처 (build_return_tracking_url 기반 확장앱 회수조회)
+# 무신사는 잡 큐가 아닌 get_claim_list API 직접 수집 경로라 여기 미포함.
 RETURN_TRACKING_SITES = {"LOTTEON"}
 
 
