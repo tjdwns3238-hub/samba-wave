@@ -1238,24 +1238,12 @@ class JobWorker:
         blocked_account_reasons: dict[str, str] = {}
 
         def _is_account_blocking_error(err: str) -> bool:
-            if not err:
-                return False
-            # 11번가: "판매 중인 상품은 최대 5,000개까지 등록할 수 있습니다"
-            # 쿠팡: "오늘 등록할 수 있는 구매옵션 개수(5000)를 초과하였습니다"
-            #        — 일일 한도 초과, 다음날 reset (false-positive 방지 위해 "오늘 등록할 수 있는" + "초과" AND)
-            # 기타 마켓에서도 등록 한도/판매자 상태 차단 메시지 추가 시 여기에 보강
-            patterns = (
-                "판매 중인 상품은 최대",
-                "최대 5,000개",
-                "최대 5000개",
-                "상품을 판매중지",
-            )
-            if any(p in err for p in patterns):
-                return True
-            # 쿠팡 일일 한도 — 단어 AND 매칭으로 false-positive 차단
-            if ("오늘 등록할 수 있는" in err) and ("초과" in err):
-                return True
-            return False
+            # 한도초과(계정 슬롯 만석) 판정은 shipment.service.is_account_full_error
+            # 단일 출처를 재사용 — 두 곳 패턴이 갈라지지 않도록 통일.
+            # (스마트스토어/롯데ON/11번가/쿠팡 한도초과 패턴 포함)
+            from backend.domain.samba.shipment.service import is_account_full_error
+
+            return is_account_full_error(err)
 
         async def _process_one(i: int, pid: str) -> tuple[int, int, int, str | None]:
             """상품 1건 처리 → (success_delta, skip_delta, fail_delta, failed_pid)"""

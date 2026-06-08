@@ -37,6 +37,35 @@ MARKET_TYPE_TO_POLICY_KEY: dict[str, str] = {
 }
 
 
+def is_account_full_error(err: str | None) -> bool:
+    """마켓 등록 '한도 초과'(계정 슬롯 만석) 거부인지 판정.
+
+    상품 데이터 문제가 아니라 마켓 계정에 등록 가능한 상품 수가 꽉 찬 경우다.
+    이 경우 failure_count를 올려 동결하면 안 된다(상품 잘못이 아니므로). 슬롯이
+    비면 다음 사이클에 정상 등록돼야 한다. 잡 워커(_is_account_blocking_error)와
+    동일한 패턴을 쓰는 단일 출처 — 두 곳 매처가 갈라지지 않도록 여기서만 정의한다.
+    """
+    if not err:
+        return False
+    # 11번가: "판매 중인 상품은 최대 5,000개까지 등록할 수 있습니다"
+    # 스마트스토어: "상품 등록 한도를 초과했습니다. 판매중/판매대기/품절 상품수를 ..."
+    # 롯데ON: "판매중 상태의 상품수가 N개를 초과하였습니다"
+    patterns = (
+        "판매 중인 상품은 최대",
+        "최대 5,000개",
+        "최대 5000개",
+        "상품을 판매중지",
+        "상품 등록 한도를 초과",
+        "판매중 상태의 상품수",
+    )
+    if any(p in err for p in patterns):
+        return True
+    # 쿠팡 일일 한도 — 단어 AND 매칭으로 false-positive 차단
+    if ("오늘 등록할 수 있는" in err) and ("초과" in err):
+        return True
+    return False
+
+
 def _resolve_margin_rate(cost: float, pricing: dict) -> float:
     """원가 기반 범위 마진율 반환. useRangeMargin이면 해당 구간 rate 사용."""
     if pricing.get("useRangeMargin") and pricing.get("rangeMargins"):
@@ -2294,14 +2323,19 @@ class SambaShipmentService:
                 # 전송 성공 — sent_snapshot(sent_at 포함, failed_at 없음)으로 교체
                 lsd_updates[aid] = ar["sent_snapshot"]
             elif ar.get("status") == "failed":
-                # 전송 실패 — 기존 last_sent 보존 + failed_at 마킹
-                _existing = dict(_prev_lsd.get(aid, {}) or {})
-                _existing["failed_at"] = datetime.now(UTC).isoformat()
-                # 안전망: 동일 (cp, account) 전송 실패 누적 — 3회 도달 시 테트리스 sync에서 제외
-                _existing["failure_count"] = (
-                    int(_existing.get("failure_count") or 0) + 1
-                )
-                lsd_updates[aid] = _existing
+                # 계정 등록 한도 초과(마켓 슬롯 만석)는 상품 잘못이 아님 — fc 증가/동결 금지.
+                # 잡 워커가 계정 차단으로 헛 재시도는 막고, 슬롯이 비면 다음 사이클에 정상 등록된다.
+                if is_account_full_error(ar.get("error") or ""):
+                    pass  # last_sent_data 미변경 — failed_at/failure_count 마킹 안 함
+                else:
+                    # 전송 실패 — 기존 last_sent 보존 + failed_at 마킹
+                    _existing = dict(_prev_lsd.get(aid, {}) or {})
+                    _existing["failed_at"] = datetime.now(UTC).isoformat()
+                    # 안전망: 동일 (cp, account) 전송 실패 누적 — 3회 도달 시 테트리스 sync에서 제외
+                    _existing["failure_count"] = (
+                        int(_existing.get("failure_count") or 0) + 1
+                    )
+                    lsd_updates[aid] = _existing
             elif ar.get("_clear_failed_at") and aid in _prev_lsd:
                 # _skip_retry 케이스 (플레이오토 미등록 상품코드): failed_at 제거
                 _existing = dict(_prev_lsd[aid] or {})
