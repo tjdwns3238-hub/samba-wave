@@ -142,7 +142,10 @@ class PlayAutoPlugin(MarketPlugin):
                     f"[플레이오토] 경량 PATCH(가격/재고): MasterCode={existing_no} "
                     f"Price={sale_price} Count={stock_qty} Opts={len(minimal.get('Opts', []))}건"
                 )
-                results = await client.update_product([minimal], use_no_edit_slave=True)
+                # UseNoEditSlave=False → 마스터 Price/Count/Opts를 슬레이브(마켓별 상품)에도 일괄 동기화
+                results = await client.update_product(
+                    [minimal], use_no_edit_slave=False
+                )
             else:
                 # 상품 데이터 변환 (전체 payload)
                 emp_data = self.transform(product, category_id)
