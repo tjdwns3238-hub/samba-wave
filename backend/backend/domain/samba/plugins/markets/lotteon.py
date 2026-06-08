@@ -2122,7 +2122,69 @@ class LotteonPlugin(MarketPlugin):
                 try:
                     api_result = await client.update_product(data)
                 except Exception as _ue:
-                    if "수입구분코드" in str(_ue):
+                    if (
+                        "전시카테고리" in str(_ue) or "표준카테고리" in str(_ue)
+                    ) and existing_no:
+                        # 상세 수정인데 transform이 새 카테고리 조회 → 표준-전시 불일치(9999).
+                        # 기존 등록 상품의 카테고리를 그대로 사용 (get_product 인증된 client).
+                        try:
+                            _ex = await client.get_product(existing_no)
+                        except Exception as _ge:
+                            logger.warning(f"[롯데ON] 기존상품 조회 실패: {_ge}")
+                            _ex = {}
+                        # 기존 표준(scatNo)/전시(dcatLst.lfDcatNo) 카테고리 추출
+                        _ex_data = _ex.get("data") if isinstance(_ex, dict) else {}
+                        _ex_data = _ex_data or {}
+                        _ex_scat = _ex_data.get("scatNo")
+                        _ex_dcat = (_ex_data.get("dcatLst") or [{}])[0].get("lfDcatNo")
+                        logger.info(
+                            f"[롯데ON] 기존 카테고리 scatNo={_ex_scat} lfDcatNo={_ex_dcat}"
+                        )
+
+                        # data 안의 표준(BC...)/전시(FC...) 코드를 기존값으로 일괄 치환
+                        def _fix_cat(o):
+                            if isinstance(o, dict):
+                                for k, v in list(o.items()):
+                                    if (
+                                        isinstance(v, str)
+                                        and v.startswith("FC")
+                                        and _ex_dcat
+                                    ):
+                                        o[k] = _ex_dcat
+                                    elif (
+                                        isinstance(v, str)
+                                        and v.startswith("BC")
+                                        and _ex_scat
+                                    ):
+                                        o[k] = _ex_scat
+                                    elif isinstance(v, (dict, list)):
+                                        _fix_cat(v)
+                            elif isinstance(o, list):
+                                for it in o:
+                                    _fix_cat(it)
+
+                        _fix_cat(data)
+                        # 옵션순서 불일치 방지 — 헤더만 수정(옵션 정의 필드 제거, 기존 유지)
+                        for _sp in data.get("spdLst") or []:
+                            for _k in list(_sp.keys()):
+                                if (
+                                    "opt" in _k.lower() or "itm" in _k.lower()
+                                ) and _k != "pdItmsInfo":
+                                    _sp.pop(_k, None)
+                        try:
+                            api_result = await client.update_product(data)
+                        except Exception as _ue_opt:
+                            # 옵션순서 여전히 불일치면 pdItmsInfo도 제거 후 최종 재시도
+                            if "옵션순서" in str(_ue_opt) or "상품옵션" in str(_ue_opt):
+                                logger.info(
+                                    "[롯데ON] 옵션순서 불일치 → pdItmsInfo 제거 후 재시도"
+                                )
+                                for _sp in data.get("spdLst") or []:
+                                    _sp.pop("pdItmsInfo", None)
+                                api_result = await client.update_product(data)
+                            else:
+                                raise
+                    elif "수입구분코드" in str(_ue):
                         _upd_exception = _ue
                         import copy as _copy_upd
 
