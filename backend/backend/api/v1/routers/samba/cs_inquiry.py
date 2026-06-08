@@ -456,15 +456,39 @@ async def reply_cs_inquiry(
                         or af.get("loginId", "")
                         or ""
                     )
+                    raw_inq_no = inquiry.market_inquiry_no or ""
+                    is_call_center = raw_inq_no.startswith("cc_")
                     if access_key and secret_key and vendor_id and reply_by:
                         cp_client = CoupangClient(access_key, secret_key, vendor_id)
-                        await cp_client.reply_inquiry(
-                            inquiry_id=int(inquiry.market_inquiry_no),
-                            content=body.reply,
-                            reply_by=reply_by,
-                        )
-                        market_sent = True
-                        market_msg = "쿠팡 CS 답변 전송 완료"
+                        if is_call_center:
+                            # 고객센터(콜센터) 문의 — cc_ prefix 제거 후 reply API.
+                            # parentAnswerId(csAgent 이관글 answerId)는 수집 시
+                            # market_answer_no 에 저장됨.
+                            cc_inq_id = raw_inq_no[3:]
+                            parent_answer_id = inquiry.market_answer_no or ""
+                            if not parent_answer_id:
+                                market_msg = (
+                                    "쿠팡 고객센터 답변 불가 — parentAnswerId 미수집 "
+                                    "(CS 동기화 재실행 후 재시도)"
+                                )
+                            else:
+                                await cp_client.reply_call_center_inquiry(
+                                    inquiry_id=cc_inq_id,
+                                    content=body.reply,
+                                    reply_by=reply_by,
+                                    parent_answer_id=parent_answer_id,
+                                )
+                                market_sent = True
+                                market_msg = "쿠팡 고객센터 답변 전송 완료"
+                        else:
+                            # 온라인(상품) 문의 — 순수 숫자 inquiryId
+                            await cp_client.reply_inquiry(
+                                inquiry_id=int(raw_inq_no),
+                                content=body.reply,
+                                reply_by=reply_by,
+                            )
+                            market_sent = True
+                            market_msg = "쿠팡 CS 답변 전송 완료"
                     elif not reply_by:
                         market_msg = (
                             "쿠팡 Wing 로그인 ID 미설정 (계정 스토어 ID 입력 필요)"
@@ -2649,6 +2673,24 @@ async def _do_sync_cs_from_markets(
                         if not cc_body:
                             cc_body = cc_content  # fallback: "상담이력"
 
+                        # 답변 시 필요한 parentAnswerId(csAgent 이관글 answerId) 추출.
+                        # 답변요청(requestAnswer/needAnswer) 건 우선, 없으면 첫 csAgent.
+                        # market_answer_no 에 저장해 답변 라우터가 reply API 에 전달.
+                        cc_parent_answer_id = None
+                        _need = [
+                            r
+                            for r in csagent_replies
+                            if r.get("needAnswer") is True
+                            or r.get("partnerTransferStatus") == "requestAnswer"
+                        ]
+                        _pick = (
+                            _need[0]
+                            if _need
+                            else (csagent_replies[0] if csagent_replies else None)
+                        )
+                        if _pick and _pick.get("answerId") is not None:
+                            cc_parent_answer_id = str(_pick.get("answerId"))
+
                         raw_cc_dt = str(cc_item.get("inquiryAt", "") or "")
                         cc_parsed_date = None
                         for fmt in (
@@ -2673,7 +2715,8 @@ async def _do_sync_cs_from_markets(
                         cc_data = {
                             "market": "쿠팡",
                             "market_inquiry_no": cc_market_inquiry_no,
-                            "market_answer_no": None,
+                            # 답변(reply) API의 parentAnswerId 로 사용
+                            "market_answer_no": cc_parent_answer_id,
                             "market_order_id": cc_order_id,
                             "market_product_no": cc_product_no or None,
                             "account_id": cp_acc.id,

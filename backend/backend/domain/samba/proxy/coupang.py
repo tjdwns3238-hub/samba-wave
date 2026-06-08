@@ -1948,6 +1948,57 @@ class CoupangClient:
         logger.info(f"[쿠팡] CS 문의 답변 완료: inquiryId={inquiry_id}")
         return result
 
+    async def reply_call_center_inquiry(
+        self,
+        inquiry_id: str,
+        content: str,
+        reply_by: str,
+        parent_answer_id: str,
+    ) -> dict[str, Any]:
+        """쿠팡 고객센터(콜센터) 문의 답변 등록.
+
+        쿠팡 Wing API v4:
+          POST /v2/.../api/v4/vendors/{vendorId}/callCenterInquiries/{inquiryId}/replies
+        body 필수: vendorId, inquiryId, content, replyBy, parentAnswerId
+          - parentAnswerId = 고객센터 문의조회 응답 replies[]의 csAgent 이관글 answerId
+        답변 가능 조건: inquiryStatus=progress, partnerTransferStatus=requestAnswer 일 때만.
+        이미 답변/종료/24시간 경과 문의는 HTTP 400.
+        """
+        path = (
+            f"/v2/providers/openapi/apis/api/v4/vendors/{self.vendor_id}"
+            f"/callCenterInquiries/{inquiry_id}/replies"
+        )
+        body = {
+            "vendorId": self.vendor_id,
+            "inquiryId": str(inquiry_id),
+            "content": content,
+            "replyBy": reply_by,
+            "parentAnswerId": str(parent_answer_id),
+        }
+        result = await self._call_api("POST", path, body=body)
+        logger.info(f"[쿠팡] 고객센터 문의 답변 완료: inquiryId={inquiry_id}")
+        return result
+
+    async def confirm_call_center_inquiry(
+        self,
+        inquiry_id: str,
+        confirm_by: str,
+    ) -> dict[str, Any]:
+        """쿠팡 고객센터 문의 확인 처리(미확인 TRANSFER 건 — 답변 불필요, 확인만).
+
+        쿠팡 Wing API v4:
+          POST /v2/.../api/v4/vendors/{vendorId}/callCenterInquiries/{inquiryId}/confirms
+        body 필수: confirmBy(Wing 로그인 ID). 종료/24시간 경과 건은 HTTP 400.
+        """
+        path = (
+            f"/v2/providers/openapi/apis/api/v4/vendors/{self.vendor_id}"
+            f"/callCenterInquiries/{inquiry_id}/confirms"
+        )
+        body = {"confirmBy": confirm_by}
+        result = await self._call_api("POST", path, body=body)
+        logger.info(f"[쿠팡] 고객센터 문의 확인 완료: inquiryId={inquiry_id}")
+        return result
+
 
 class CoupangApiError(Exception):
     """쿠팡 API 에러."""
