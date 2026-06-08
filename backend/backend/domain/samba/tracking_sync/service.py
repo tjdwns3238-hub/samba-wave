@@ -456,7 +456,9 @@ async def enqueue_for_order(
 
 
 # 반품 회수송장 지원 소싱처 (라이브 검증 완료 사이트만)
-RETURN_TRACKING_SITES = {"LOTTEON", "MUSINSA"}
+# 무신사는 회수조회 URL 키(ord_opt_no/returnId) 부재로 미지원 — build_return_tracking_url 도 거부
+# (2026-06-08 라이브 검증). MUSINSA 를 포함하면 회수 잡이 매번 ValueError 로 헛돌이.
+RETURN_TRACKING_SITES = {"LOTTEON"}
 
 
 async def enqueue_return_for_order(
@@ -559,10 +561,8 @@ async def enqueue_return_pending(
                 await session.execute(
                     select(SambaOrder.id)
                     .where(
-                        col(SambaOrder.source_site).in_(["LOTTEON", "MUSINSA"])
-                        | col(SambaOrder.source).in_(
-                            ["lotteon", "LOTTEON", "musinsa", "MUSINSA"]
-                        ),
+                        col(SambaOrder.source_site).in_(["LOTTEON"])
+                        | col(SambaOrder.source).in_(["lotteon", "LOTTEON"]),
                         SambaOrder.sourcing_order_number.is_not(None),
                         (SambaOrder.return_collect_tracking.is_(None))
                         | (SambaOrder.return_collect_tracking == ""),
