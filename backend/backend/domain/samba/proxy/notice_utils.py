@@ -31,6 +31,12 @@ _CATEGORY_GROUP: dict[str, str] = {
     "속옷": "wear",
     "잠옷": "wear",
     "정장": "wear",
+    # 양말/레그웨어 — 섬유제품(의류) 고시. 미등록 시 '소품'→etc(기타재화) 오분류로 거부.
+    "양말": "wear",
+    "레그웨어": "wear",
+    "양말/레그웨어": "wear",
+    "스타킹": "wear",
+    "타이츠": "wear",
     # 아웃도어/스포츠 의류 — sports 그룹이 아닌 wear로 분류 (쿠팡 "기타 재화" fallback 방지)
     "남성등산의류": "wear",
     "여성등산의류": "wear",
@@ -79,6 +85,9 @@ _CATEGORY_GROUP: dict[str, str] = {
     "등산화": "shoes",
     "트레킹화": "shoes",
     "등산화/트레킹화": "shoes",
+    # '트래킹'(트래) 철자 변형 — 소싱처에 따라 트레/트래 혼용. 미등록 시 sports→기타재화 오분류.
+    "트래킹화": "shoes",
+    "등산화/트래킹화": "shoes",
     # 스포츠 신발 복합 카테고리 (SSG 등 소싱처)
     "스포츠 슈즈": "shoes",
     "슈즈": "shoes",
@@ -94,6 +103,7 @@ _CATEGORY_GROUP: dict[str, str] = {
     "캐리어": "bag",
     "등산가방": "bag",
     "등산배낭": "bag",
+    "등산배낭/잡화": "bag",
     # 잡화/액세서리
     "모자": "accessories",
     "벨트": "accessories",
@@ -1321,9 +1331,11 @@ def build_ssg_notice(
             {"itemMngPropId": "0000000012", "itemMngCntt": as_info},
         ]
     else:
+        # 기타재화(cls_id=0000000035) — SSG 고시분류에 '색상'(0000000002) 항목이 없어
+        # 포함 시 "해당 고시항목은 고시분류에 해당하는 값이 아닙니다 [itemMngPropId:2]"로
+        # 거부됨(프로덕션 2,000건 중 1,996건이 0000000002 거부). 색상 제외. (#SSG고시)
         attrs = [
             {"itemMngPropId": "0000000001", "itemMngCntt": material},
-            {"itemMngPropId": "0000000002", "itemMngCntt": color},
             {"itemMngPropId": "0000000003", "itemMngCntt": fallback},
             {
                 "itemMngPropId": "0000000006",
