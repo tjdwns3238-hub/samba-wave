@@ -396,15 +396,13 @@ class ElevenstPlugin(MarketPlugin):
                 f"[11번가] 이미지 미러링 단계 오류 — 차단 URL 없어 원본 유지: {e}"
             )
 
-        # 카테고리 키속성 메타 조회 (TTL 캐시 — 재호출 시 즉시 반환)
-        # 선글라스/시계 등은 치수 키속성이 필수이며, 누락 시 11번가가 500 반환
-        try:
-            ctgr_attributes = await client.get_category_attributes(cat_code)
-        except Exception as e:
-            logger.warning(
-                f"[11번가] 키속성 메타 조회 실패 cat={cat_code} — 키속성 없이 진행: {e}"
-            )
-            ctgr_attributes = []
+        # 키속성(ProductCtgrAttribute) 조회 API는 11번가 OpenAPI에 존재하지 않는다
+        # (공식 문서 전수 확인 2026-06: 카테고리 서비스는 전체/하위 카테고리조회 2개뿐,
+        # 상품관리 메뉴에도 속성 API 없음). 기존 /rest/cateservice/categoryAttributes/{id}
+        # 호출은 매 등록마다 -997("등록된 API 정보 없음")만 반환하던 死코드 → 제거.
+        # 키속성 XML은 항상 빈 값이며, 치수 등 키속성이 필수인 카테고리(선글라스 등)는
+        # 11번가 OpenAPI로 자동등록이 불가하다(수동 등록 대상).
+        ctgr_attributes: list[dict[str, str]] = []
 
         xml_data = ElevenstClient.transform_product(
             product,
