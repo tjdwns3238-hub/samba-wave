@@ -461,25 +461,50 @@ async def reply_cs_inquiry(
                     if access_key and secret_key and vendor_id and reply_by:
                         cp_client = CoupangClient(access_key, secret_key, vendor_id)
                         if is_call_center:
-                            # 고객센터(콜센터) 문의 — cc_ prefix 제거 후 reply API.
-                            # parentAnswerId(csAgent 이관글 answerId)는 수집 시
-                            # market_answer_no 에 저장됨.
+                            # 고객센터(콜센터) 문의 — cc_ prefix 제거.
+                            # parentAnswerId(csAgent 이관글 answerId) 있으면 답변(reply),
+                            # 그 뒤 '확인(confirm)'도 함께 시도해 최종완료 처리.
+                            # 답변필요(parentAnswerId) 없는 건 = 확인전용(TRANSFER)으로 confirm만.
                             cc_inq_id = raw_inq_no[3:]
                             parent_answer_id = inquiry.market_answer_no or ""
-                            if not parent_answer_id:
-                                market_msg = (
-                                    "쿠팡 고객센터 답변 불가 — parentAnswerId 미수집 "
-                                    "(CS 동기화 재실행 후 재시도)"
-                                )
-                            else:
+                            cc_replied = False
+                            cc_confirmed = False
+                            if parent_answer_id:
                                 await cp_client.reply_call_center_inquiry(
                                     inquiry_id=cc_inq_id,
                                     content=body.reply,
                                     reply_by=reply_by,
                                     parent_answer_id=parent_answer_id,
                                 )
-                                market_sent = True
-                                market_msg = "쿠팡 고객센터 답변 전송 완료"
+                                cc_replied = True
+                            # 확인도 같이 — 답변 후/확인전용 모두. 상태 안 맞으면 400 →
+                            # 무시하되 로그로 남김(silent fail 방지).
+                            try:
+                                await cp_client.confirm_call_center_inquiry(
+                                    inquiry_id=cc_inq_id,
+                                    confirm_by=reply_by,
+                                )
+                                cc_confirmed = True
+                            except Exception as _cc_conf_e:
+                                logger.info(
+                                    "[쿠팡] 고객센터 확인 skip(%s): %s",
+                                    cc_inq_id,
+                                    _cc_conf_e,
+                                )
+                            market_sent = cc_replied or cc_confirmed
+                            if cc_replied and cc_confirmed:
+                                market_msg = "쿠팡 고객센터 답변+확인 완료"
+                            elif cc_replied:
+                                market_msg = (
+                                    "쿠팡 고객센터 답변 완료(확인 불필요/이미됨)"
+                                )
+                            elif cc_confirmed:
+                                market_msg = "쿠팡 고객센터 확인 완료"
+                            else:
+                                market_msg = (
+                                    "쿠팡 고객센터 처리 실패 — 답변/확인 모두 불가 "
+                                    "(상태 종료/24시간 경과 가능)"
+                                )
                         else:
                             # 온라인(상품) 문의 — 순수 숫자 inquiryId
                             await cp_client.reply_inquiry(
@@ -2674,7 +2699,8 @@ async def _do_sync_cs_from_markets(
                             cc_body = cc_content  # fallback: "상담이력"
 
                         # 답변 시 필요한 parentAnswerId(csAgent 이관글 answerId) 추출.
-                        # 답변요청(requestAnswer/needAnswer) 건 우선, 없으면 첫 csAgent.
+                        # 진짜 '답변필요(needAnswer/requestAnswer)' csAgent 건만 저장.
+                        # 없으면 None = 답변불필요(확인전용 TRANSFER) 건으로 간주.
                         # market_answer_no 에 저장해 답변 라우터가 reply API 에 전달.
                         cc_parent_answer_id = None
                         _need = [
@@ -2683,13 +2709,8 @@ async def _do_sync_cs_from_markets(
                             if r.get("needAnswer") is True
                             or r.get("partnerTransferStatus") == "requestAnswer"
                         ]
-                        _pick = (
-                            _need[0]
-                            if _need
-                            else (csagent_replies[0] if csagent_replies else None)
-                        )
-                        if _pick and _pick.get("answerId") is not None:
-                            cc_parent_answer_id = str(_pick.get("answerId"))
+                        if _need and _need[0].get("answerId") is not None:
+                            cc_parent_answer_id = str(_need[0].get("answerId"))
 
                         raw_cc_dt = str(cc_item.get("inquiryAt", "") or "")
                         cc_parsed_date = None

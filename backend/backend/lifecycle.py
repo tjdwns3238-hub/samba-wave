@@ -955,6 +955,16 @@ async def _order_auto_sync_loop() -> None:
                     job_id = new_job.id
                     _log.info(f"[주문 auto sync] order_sync 잡 생성 {job_id}")
 
+            # 1-b) CS 문의 동기화도 주문 자동수집에 연동 — 별도 30분 폴러가 아닌
+            #      주문 자동수집 인터벌마다 cs_sync 잡을 함께 큐잉(중복 실행 방지 내장).
+            try:
+                from backend.domain.samba.order.poller import _create_cs_sync_job
+
+                async with get_write_session() as cs_ws:
+                    await _create_cs_sync_job(cs_ws, tenant_id=None)
+            except Exception as _cs_e:
+                _log.warning(f"[주문 auto sync] cs_sync 잡 생성 실패: {_cs_e}")
+
             # 2) 잡 완료 대기 (최대 30분)
             deadline = time.time() + 30 * 60
             while time.time() < deadline:

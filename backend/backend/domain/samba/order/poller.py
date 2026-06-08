@@ -314,9 +314,8 @@ async def start_order_poller() -> None:
             async with get_write_session() as session:
                 new_by_market, tenant_ids = await _fetch_new_order_numbers(session)
 
-                if not is_night:
-                    # CS는 주문 감지 여부와 무관하게 30분마다 전체 동기화
-                    await _create_cs_sync_job(session, tenant_id=None)
+                # CS 문의 동기화는 주문 자동수집 루프(lifecycle._order_auto_sync_loop)로
+                # 이관됨 — 여기 30분 폴러에서는 더 이상 cs_sync 잡을 만들지 않는다.
 
             if new_by_market and not is_night:
                 # 잡 큐 대신 직접 동기화 — 전송 잡에 밀리지 않도록
