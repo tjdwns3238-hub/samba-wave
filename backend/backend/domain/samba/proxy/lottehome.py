@@ -939,15 +939,18 @@ class LotteHomeClient:
             03 = 발송약정
         """
         cert_key = await self._ensure_auth()
+        params: dict[str, Any] = {
+            "subscriptionId": cert_key,
+            "start_date": start_date,
+            "end_date": end_date,
+            "SelOption": sel_option,
+        }
+        if self.agnc_no:
+            params["agnc_no"] = self.agnc_no
         result = await self._call_api_auto_retry(
             "searchNewOrdLstOpenApi.lotte",
             "GET",
-            {
-                "subscriptionId": cert_key,
-                "start_date": start_date,
-                "end_date": end_date,
-                "SelOption": sel_option,
-            },
+            params,
         )
         data = result.get("data", {})
         result_data = data.get("Result", data)
@@ -966,16 +969,19 @@ class LotteHomeClient:
     ) -> list[dict[str, Any]]:
         """배송조회 (searchDeliverList.lotte) — 출고확정/배송완료 등 상태 주문 조회."""
         cert_key = await self._ensure_auth()
+        params: dict[str, Any] = {
+            "subscriptionId": cert_key,
+            "date_gubun": date_gubun,
+            "start_date": start_date,
+            "end_date": end_date,
+            "ord_dtl_stat_cd": ord_dtl_stat_cd,
+        }
+        if self.agnc_no:
+            params["agnc_no"] = self.agnc_no
         result = await self._call_api_auto_retry(
             "searchDeliverList.lotte",
             "GET",
-            {
-                "subscriptionId": cert_key,
-                "date_gubun": date_gubun,
-                "start_date": start_date,
-                "end_date": end_date,
-                "ord_dtl_stat_cd": ord_dtl_stat_cd,
-            },
+            params,
         )
         data = result.get("data", {})
         result_data = data.get("Result", data)
@@ -989,14 +995,17 @@ class LotteHomeClient:
     ) -> list[dict[str, Any]]:
         """주문취소조회 (searchCnclList.lotte)."""
         cert_key = await self._ensure_auth()
+        params: dict[str, Any] = {
+            "subscriptionId": cert_key,
+            "start_date": start_date,
+            "end_date": end_date,
+        }
+        if self.agnc_no:
+            params["agnc_no"] = self.agnc_no
         result = await self._call_api_auto_retry(
             "searchCnclList.lotte",
             "GET",
-            {
-                "subscriptionId": cert_key,
-                "start_date": start_date,
-                "end_date": end_date,
-            },
+            params,
         )
         data = result.get("data", {})
         result_data = data.get("Result", data)
@@ -1015,15 +1024,18 @@ class LotteHomeClient:
             21 = 회수확정
         """
         cert_key = await self._ensure_auth()
+        params: dict[str, Any] = {
+            "subscriptionId": cert_key,
+            "start_date": start_date,
+            "end_date": end_date,
+            "ord_dtl_stat_cd": ord_dtl_stat_cd,
+        }
+        if self.agnc_no:
+            params["agnc_no"] = self.agnc_no
         result = await self._call_api_auto_retry(
             "searchReturnList.lotte",
             "GET",
-            {
-                "subscriptionId": cert_key,
-                "start_date": start_date,
-                "end_date": end_date,
-                "ord_dtl_stat_cd": ord_dtl_stat_cd,
-            },
+            params,
         )
         data = result.get("data", {})
         result_data = data.get("Result", data)
