@@ -3020,6 +3020,50 @@ async def approve_cancel(
         )
         return {"ok": True, "message": "롯데홈쇼핑 발송불가 처리 완료"}
 
+    elif account.market_type == "ssg":
+        # SSG 셀러 API — POST /api/claim/v2/cancel/request/approve
+        # 파라미터: ordNo (=order.order_number), ordItemSeq (=order.ord_prd_seq).
+        # ord_prd_seq 는 주문동기화 시 SSG 응답의 ordItemSeq 를 그대로 저장 (ssg.py:2400 참고).
+        # SSGClient.approve_cancel 은 resultCode 00·91 모두 성공으로 처리.
+        from backend.domain.samba.proxy.ssg import SSGApiError, SSGClient
+
+        extras = account.additional_fields or {}
+        api_key = (
+            extras.get("apiKey", "")
+            or extras.get("api_key", "")
+            or account.api_key
+            or ""
+        )
+        if not api_key:
+            raise HTTPException(status_code=400, detail="SSG API 키 없음")
+
+        if not order.ord_prd_seq:
+            raise HTTPException(
+                status_code=400,
+                detail="SSG ordItemSeq 미수집 — 주문 동기화 후 다시 시도해주세요",
+            )
+
+        site_no = (
+            extras.get("siteNo", "") or extras.get("site_no", "") or "6004"
+        )
+        client = SSGClient(api_key, site_no=site_no)
+        try:
+            await client.approve_cancel(order.order_number, str(order.ord_prd_seq))
+        except SSGApiError as e:
+            raise HTTPException(status_code=500, detail=f"SSG 취소승인 실패: {e}")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"SSG 취소승인 실패: {e}")
+
+        # status='cancelled' 도 같이 update — PR #376 일관성.
+        # 누락 시 OrdersTable.isCancelRequested 가 true 로 남아 빨간 '취소요청'
+        # 배지·승인/거부 버튼이 안 사라지는 UX 사고가 발생함.
+        await svc.update_order(
+            order_id,
+            {"shipping_status": "취소완료", "status": "cancelled"},
+        )
+        logger.info(f"[취소승인][SSG] {order.order_number} 취소승인 완료")
+        return {"ok": True, "message": "SSG 취소승인 완료"}
+
     else:
         raise HTTPException(
             status_code=400, detail=f"{account.market_type} 취소승인 미지원"
