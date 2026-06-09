@@ -1280,6 +1280,23 @@ async def _start_filters_warmup() -> None:
     _filters_warmup_task = asyncio.create_task(_warmup_filters_cache())
 
 
+_tracking_dispatch_sweep_task: asyncio.Task | None = None
+
+
+async def _start_tracking_dispatch_sweep() -> None:
+    """비-playauto 정체 송장(SCRAPED/DISPATCH_FAILED) 자동 재전송 sweep — 5분 주기.
+
+    auto_dispatch가 수집 시점 1회 놓쳐 정체된 잡을 주기적으로 재전송 → 수동 전송 제거.
+    """
+    global _tracking_dispatch_sweep_task
+    from backend.domain.samba.tracking_sync.service import dispatch_pending_sweep_loop
+
+    _tracking_dispatch_sweep_task = asyncio.create_task(
+        dispatch_pending_sweep_loop(300)
+    )
+    logging.getLogger("backend.lifecycle").info("[lifecycle] 송장 dispatch sweep 시작")
+
+
 async def _start_lotteon_ghost_reconciler() -> None:
     """롯데ON 유령상품 일일 자동 감지 잡 — 24시간 주기."""
     global _lotteon_ghost_reconciler_task
@@ -1523,6 +1540,7 @@ async def lifespan(app: FastAPI):
         await _start_ssg_status_reconciler()
         await _start_smartstore_ghost_reconciler()
         await _start_coupang_ghost_reconciler()
+        await _start_tracking_dispatch_sweep()
     _validate_startup_settings()
 
     try:
@@ -1547,6 +1565,7 @@ async def lifespan(app: FastAPI):
         await _cancel_task(_elevenst_ghost_reconciler_task)
         await _cancel_task(_smartstore_ghost_reconciler_task)
         await _cancel_task(_coupang_ghost_reconciler_task)
+        await _cancel_task(_tracking_dispatch_sweep_task)
         await _shutdown_worker_runtime(worker_runtime)
         await _cancel_task(getattr(app.state, "_pool_monitor_task", None))
         await _disconnect_cache()

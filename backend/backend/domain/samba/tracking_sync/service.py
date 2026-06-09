@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -1044,17 +1045,43 @@ async def apply_tracking_result(
 # ---------------------------------------------------------------------------
 
 
-async def dispatch_pending_to_market(*, dry_run: bool = False) -> dict[str, Any]:
-    """SCRAPED + DISPATCH_FAILED 상태 잡 전체 일괄 마켓 전송 (재시도 포함)."""
-    from sqlalchemy import select as _select
+async def dispatch_pending_to_market(
+    *, dry_run: bool = False, exclude_playauto: bool = False
+) -> dict[str, Any]:
+    """SCRAPED + DISPATCH_FAILED 상태 잡 전체 일괄 마켓 전송 (재시도 포함).
+
+    exclude_playauto=True: 플레이오토(GS샵) 주문은 제외 — 자동 sweep 루프 전용.
+    플레이오토는 send_invoice_to_market에서 '전송 생략'(저장만)이라 sweep 대상 아님.
+    JOIN으로 order.source != 'playauto' 인 잡만 추린다.
+    """
+    from sqlalchemy import func, select as _select
 
     sent = 0
     failed = 0
     errors: list[str] = []
     async with get_write_session() as session:
-        stmt = _select(SambaTrackingSyncJob.id).where(
-            SambaTrackingSyncJob.status.in_([STATUS_SCRAPED, STATUS_DISPATCH_FAILED])
-        )
+        if exclude_playauto:
+            # samba_order.source 가 playauto 인 주문 제외 (NULL/미매칭 주문은 포함)
+            stmt = (
+                _select(SambaTrackingSyncJob.id)
+                .join(
+                    SambaOrder,
+                    SambaOrder.id == SambaTrackingSyncJob.order_id,
+                    isouter=True,
+                )
+                .where(
+                    SambaTrackingSyncJob.status.in_(
+                        [STATUS_SCRAPED, STATUS_DISPATCH_FAILED]
+                    ),
+                    func.lower(func.coalesce(SambaOrder.source, "")) != "playauto",
+                )
+            )
+        else:
+            stmt = _select(SambaTrackingSyncJob.id).where(
+                SambaTrackingSyncJob.status.in_(
+                    [STATUS_SCRAPED, STATUS_DISPATCH_FAILED]
+                )
+            )
         job_ids = [row[0] for row in (await session.execute(stmt)).all()]
 
     for job_id in job_ids:
@@ -1077,6 +1104,35 @@ async def dispatch_pending_to_market(*, dry_run: bool = False) -> dict[str, Any]
         "failed": failed,
         "errors": errors[:20],
     }
+
+
+async def dispatch_pending_sweep_loop(interval_seconds: int = 300) -> None:
+    """비-playauto SCRAPED/DISPATCH_FAILED 잡 자동 재전송 sweep 루프.
+
+    배경: auto_dispatch는 수집결과 수신 시점에 1회만 호출된다. 그 순간 서버 재시작/
+    예외/일시적 마켓 오류로 dispatch가 누락되면 잡이 SCRAPED·DISPATCH_FAILED에 영구
+    정체된다(SCRAPED 재시도 배경루프 부재). 운영자가 수동 전송으로 메우던 작업을 제거.
+
+    interval_seconds(기본 300s)마다 비-playauto 정체 잡을 일괄 재전송한다.
+    플레이오토(GS샵)는 '전송 생략' 설계라 제외(exclude_playauto=True).
+    취소 주문은 dispatch_to_market 내 취소 가드가 CANCELLED 로 닫아 안전.
+    """
+    # 첫 실행 전 짧은 지연 — startup 부하(스키마 부트스트랩/잡 복원)와 겹치지 않게.
+    await asyncio.sleep(60)
+    while True:
+        try:
+            res = await dispatch_pending_to_market(dry_run=False, exclude_playauto=True)
+            total = res.get("total", 0)
+            if total:
+                logger.info(
+                    "[송장sweep] 정체 잡 재전송: total=%s sent=%s failed=%s",
+                    total,
+                    res.get("sent"),
+                    res.get("failed"),
+                )
+        except Exception as exc:
+            logger.warning("[송장sweep] 실패(무시): %s", exc)
+        await asyncio.sleep(interval_seconds)
 
 
 async def dispatch_to_market(
