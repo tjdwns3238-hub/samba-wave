@@ -541,7 +541,16 @@ async def patch_return(
         update_fields["sourcing_order_no"] = body.sourcing_order_no
     if not update_fields:
         return ret
-    return await svc.repo.update_async(return_id, **update_fields)
+
+    updated = await svc.repo.update_async(return_id, **update_fields)
+
+    # 완료내역(반품/취소/교환) 확정 시 연결 주문 status 동기화
+    if body.completion_detail is not None:
+        await svc._sync_order_status_by_completion(
+            ret.order_id, body.completion_detail
+        )
+
+    return updated
 
 
 # ══════════════════════════════════════════════
