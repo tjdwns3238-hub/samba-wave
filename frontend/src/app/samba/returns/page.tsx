@@ -543,21 +543,27 @@ export default function ReturnsPage() {
                           />
                         </td>
                         <td rowSpan={2} style={{ padding: '0.625rem 0.5rem', textAlign: 'center', verticalAlign: 'middle' }}>
-                        {r.product_image ? (
-                          <img
-                            src={r.product_image}
-                            alt=""
-                            onClick={() => r.return_link && window.open(r.return_link, '_blank')}
-                            style={{ width: '60px', height: '60px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #2D2D2D', cursor: r.return_link ? 'pointer' : 'default', display: 'block', margin: '0 auto' }}
-                          />
-                        ) : (
-                          <div
-                            onClick={() => r.return_link && window.open(r.return_link, '_blank')}
-                            style={{ width: '60px', height: '60px', background: '#1A1A1A', borderRadius: '6px', border: '1px solid #2D2D2D', display: 'flex', alignItems: 'center', justifyContent: 'center', color: r.return_link ? '#4C9AFF' : '#444', fontSize: '0.625rem', cursor: r.return_link ? 'pointer' : 'default', textDecoration: r.return_link ? 'underline' : 'none', margin: '0 auto' }}
-                          >
-                            {r.return_link ? '링크' : 'No IMG'}
-                          </div>
-                        )}
+                        {(() => {
+                          const ordNo = r.order_number || r.order_id
+                          const goOrder = () => { if (ordNo) window.open(`/samba/orders?search=${encodeURIComponent(ordNo)}&search_type=order_number`, '_blank') }
+                          return r.product_image ? (
+                            <img
+                              src={r.product_image}
+                              alt=""
+                              onClick={goOrder}
+                              title="주문관리에서 이 주문 보기 (새 탭)"
+                              style={{ width: '60px', height: '60px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #2D2D2D', cursor: ordNo ? 'pointer' : 'default', display: 'block', margin: '0 auto' }}
+                            />
+                          ) : (
+                            <div
+                              onClick={goOrder}
+                              title="주문관리에서 이 주문 보기 (새 탭)"
+                              style={{ width: '60px', height: '60px', background: '#1A1A1A', borderRadius: '6px', border: '1px solid #2D2D2D', display: 'flex', alignItems: 'center', justifyContent: 'center', color: ordNo ? '#4C9AFF' : '#444', fontSize: '0.625rem', cursor: ordNo ? 'pointer' : 'default', margin: '0 auto' }}
+                            >
+                              No IMG
+                            </div>
+                          )
+                        })()}
                       </td>
                       <td style={{ ...tdCenter, maxWidth: '64px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.customer_name || ''}>{r.customer_name || '-'}</td>
                       <td style={tdCenter}>{r.business_name || '-'}</td>
