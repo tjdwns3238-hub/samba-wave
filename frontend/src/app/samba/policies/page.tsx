@@ -563,6 +563,7 @@ export default function PoliciesPage() {
               replacements: rule.replacements, replace_mode: rule.replace_mode,
               option_rules: rule.option_rules, name_composition: rule.name_composition,
               market_name_compositions: rule.market_name_compositions,
+              market_prefixes: rule.market_prefixes, market_suffixes: rule.market_suffixes,
               brand_display: rule.brand_display, dedup_enabled: rule.dedup_enabled,
             }).then(saved => { if (saved) setNameRules(prev => prev.map(x => x.id === saved.id ? saved : x)) }).catch(() => {})
           )
@@ -1972,6 +1973,7 @@ export default function PoliciesPage() {
                   replacements: latest.replacements, replace_mode: latest.replace_mode,
                   option_rules: latest.option_rules, name_composition: latest.name_composition,
                   market_name_compositions: latest.market_name_compositions,
+                  market_prefixes: latest.market_prefixes, market_suffixes: latest.market_suffixes,
                   brand_display: latest.brand_display, dedup_enabled: latest.dedup_enabled,
                 })
                 if (saved) {
@@ -1994,6 +1996,8 @@ export default function PoliciesPage() {
                   option_rules: src.option_rules,
                   name_composition: src.name_composition,
                   market_name_compositions: src.market_name_compositions,
+                  market_prefixes: src.market_prefixes,
+                  market_suffixes: src.market_suffixes,
                   brand_display: src.brand_display,
                   dedup_enabled: src.dedup_enabled,
                 })
@@ -2179,6 +2183,31 @@ export default function PoliciesPage() {
                             updateRule({ market_name_compositions: next })
                           }} style={{ fontSize: '0.65rem', color: '#FF6B6B', background: 'none', border: '1px solid rgba(255,107,107,0.3)', borderRadius: '4px', padding: '1px 6px', cursor: 'pointer' }}>초기화</button>
                         )}
+                      </div>
+                      {/* 마켓별 접두어/접미어 */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', marginTop: '0.375rem' }}>
+                        <span style={{ color: '#888', fontSize: '0.72rem', minWidth: '36px' }}>접두어</span>
+                        <input
+                          value={(r.market_prefixes || {})[mkt] || ''}
+                          onChange={(e) => {
+                            const next = { ...(r.market_prefixes || {}) }
+                            if (e.target.value) next[mkt] = e.target.value; else delete next[mkt]
+                            updateRule({ market_prefixes: Object.keys(next).length > 0 ? next : undefined })
+                          }}
+                          placeholder="예: 매장정품 (비우면 전역 접두어 사용)"
+                          style={{ ...inputStyle, flex: 1, fontSize: '0.72rem' }}
+                        />
+                        <span style={{ color: '#888', fontSize: '0.72rem', minWidth: '36px' }}>접미어</span>
+                        <input
+                          value={(r.market_suffixes || {})[mkt] || ''}
+                          onChange={(e) => {
+                            const next = { ...(r.market_suffixes || {}) }
+                            if (e.target.value) next[mkt] = e.target.value; else delete next[mkt]
+                            updateRule({ market_suffixes: Object.keys(next).length > 0 ? next : undefined })
+                          }}
+                          placeholder="비우면 전역 접미어 사용"
+                          style={{ ...inputStyle, flex: 1, fontSize: '0.72rem' }}
+                        />
                       </div>
                     </div>
                   )

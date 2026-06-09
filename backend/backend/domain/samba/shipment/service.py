@@ -2633,11 +2633,20 @@ class SambaShipmentService:
             # 연속 공백 정리
             composed = re.sub(r"\s+", " ", composed).strip()
 
-        # prefix/suffix 적용
-        if name_rule.prefix:
-            composed = f"{name_rule.prefix} {composed}"
-        if name_rule.suffix:
-            composed = f"{composed} {name_rule.suffix}"
+        # prefix/suffix 적용 — 마켓별 값이 있으면 전역 대신 사용(없으면 전역 폴백)
+        prefix = name_rule.prefix
+        suffix = name_rule.suffix
+        if market_type:
+            mp = getattr(name_rule, "market_prefixes", None)
+            if isinstance(mp, dict) and market_type in mp:
+                prefix = mp[market_type]
+            ms = getattr(name_rule, "market_suffixes", None)
+            if isinstance(ms, dict) and market_type in ms:
+                suffix = ms[market_type]
+        if prefix:
+            composed = f"{prefix} {composed}"
+        if suffix:
+            composed = f"{composed} {suffix}"
 
         return composed.strip()
 

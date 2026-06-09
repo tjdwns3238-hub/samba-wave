@@ -180,6 +180,14 @@ class SambaNameRule(SQLModel, table=True):
     market_name_compositions: Optional[Any] = Field(
         default=None, sa_column=Column(JSON, nullable=True)
     )
+    # 마켓별 접두어/접미어 (JSON): { "coupang": "매장정품", ... }
+    # 마켓별 값이 있으면 전역 prefix/suffix 대신 사용(없으면 전역값 폴백)
+    market_prefixes: Optional[Any] = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
+    market_suffixes: Optional[Any] = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
     # 중복단어 필터링 활성화
     dedup_enabled: bool = Field(
         default=True, sa_column=Column(Boolean, nullable=False, server_default="true")
