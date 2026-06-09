@@ -2179,6 +2179,9 @@ async def _do_sync_cs_from_markets(
 
                     site_name = qna.get("SiteName", "")
                     prod_code = qna.get("ProdCode") or qna.get("MasterCode") or ""
+                    # MasterCode(AM...)는 우리 market_product_nos에 저장된 값 → 수집상품 매칭 키.
+                    # (ProdCode=마켓 판매코드는 우리 DB에 없어 매칭 불가)
+                    master_code = qna.get("MasterCode") or ""
 
                     # SiteName → 판매 구매페이지 URL 매핑
                     _pa_site_url_map = {
@@ -2201,10 +2204,33 @@ async def _do_sync_cs_from_markets(
                         else ""
                     )
 
-                    # 기존 데이터가 있지만 product_link가 비어 있으면 URL만 업데이트
+                    # 기존 데이터 백필: product_link(판매링크) + MasterCode 매칭(원문링크/상품정보/상품명)
                     if existing_row:
+                        changed = False
                         if pa_product_link and not existing_row.product_link:
                             existing_row.product_link = pa_product_link
+                            changed = True
+                        if master_code and not existing_row.collected_product_id:
+                            try:
+                                m = await _find_collected_product_by_market_product_no(
+                                    session, master_code
+                                )
+                            except Exception:
+                                m = None
+                            if m:
+                                existing_row.collected_product_id = m["id"]
+                                if not existing_row.original_link:
+                                    existing_row.original_link = (
+                                        m.get("original_link") or ""
+                                    )
+                                if not existing_row.product_image:
+                                    existing_row.product_image = (
+                                        m.get("product_image") or ""
+                                    )
+                                if not existing_row.product_name:
+                                    existing_row.product_name = m.get("name") or ""
+                                changed = True
+                        if changed:
                             session.add(existing_row)
                         continue
 
@@ -2218,6 +2244,18 @@ async def _do_sync_cs_from_markets(
                         except Exception:
                             pass
 
+                    # MasterCode로 수집상품 매칭 → 원문링크/상품정보/상품명 채우기
+                    pa_matched = None
+                    if master_code:
+                        try:
+                            pa_matched = (
+                                await _find_collected_product_by_market_product_no(
+                                    session, master_code
+                                )
+                            )
+                        except Exception:
+                            pa_matched = None
+
                     inquiry_data = {
                         "market": "플레이오토",
                         "market_inquiry_no": qna_no,
@@ -2229,11 +2267,17 @@ async def _do_sync_cs_from_markets(
                         else pa_label,
                         "inquiry_type": qna.get("QType", "문의"),
                         "questioner": qna.get("QName", ""),
-                        "product_name": "",
-                        "product_image": "",
+                        "product_name": pa_matched["name"] if pa_matched else "",
+                        "product_image": pa_matched.get("product_image", "")
+                        if pa_matched
+                        else "",
                         "product_link": pa_product_link,
-                        "original_link": "",
-                        "collected_product_id": None,
+                        "original_link": pa_matched.get("original_link", "")
+                        if pa_matched
+                        else "",
+                        "collected_product_id": pa_matched["id"]
+                        if pa_matched
+                        else None,
                         "content": qna.get("QContent", "") or qna.get("QSubject", ""),
                         "reply": qna.get("AContent", "") if is_answered else None,
                         "reply_status": "replied" if is_answered else "pending",
