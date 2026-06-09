@@ -120,6 +120,20 @@ _EXCHANGE_KW = (
 _REFUND_KW = ("환불", "결제취소", "입금", "돈", "페이백")
 _ORDER_CHANGE_KW = ("취소", "변경", "주소 변경", "주소변경", "옵션 변경", "수정")
 _PRODUCT_AUTH_KW = ("정품", "가품", "짝퉁", "진품", "정품인가", "정품 맞", "진정품")
+# 내부 담당자 메시지 — 플레이오토 상담원이 셀러(우리)에게 전달하는 업무 요청
+# 고객 문의가 아니므로 auto_send_eligible=False, 사람 검토 필요
+_INTERNAL_KW = (
+    "담당자님",
+    "강성으로",
+    "강성 고객",
+    "출고 부탁",
+    "출고부탁",
+    "보상요구",
+    "보상 요구",
+    "빠른 진행",
+    "협조 부탁",
+    "처리 부탁",
+)
 
 
 def _has(text: str, kws: tuple[str, ...]) -> str | None:
@@ -162,7 +176,16 @@ def classify(
                 matched=f"platform_notice:{intro or inquiry_type}",
             )
 
-    # 2) 고객 문의 — 의도별 키워드 (구체적 → 일반 순)
+    # 2) 내부 담당자 메시지 — 고객 문의 아님, 자동전송 불가
+    if _has(text, _INTERNAL_KW):
+        return Classification(
+            intent="internal_request",
+            auto_send_eligible=False,
+            confidence=0.9,
+            matched=f"internal:{_has(text, _INTERNAL_KW)}",
+        )
+
+    # 3) 고객 문의 — 의도별 키워드 (구체적 → 일반 순)
     for intent, kws, conf in (
         ("product_auth", _PRODUCT_AUTH_KW, 0.95),  # 정품 문의: 단순·답 확정 → 최우선
         ("exchange_return", _EXCHANGE_KW, 0.8),
@@ -182,7 +205,7 @@ def classify(
                 matched=f"kw:{hit}",
             )
 
-    # 3) 미매칭 — general (낮은 신뢰도, 무조건 사람 검토)
+    # 4) 미매칭 — general (낮은 신뢰도, 무조건 사람 검토)
     return Classification(
         intent="general",
         auto_send_eligible=False,
