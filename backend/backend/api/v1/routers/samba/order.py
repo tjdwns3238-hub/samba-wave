@@ -3043,9 +3043,7 @@ async def approve_cancel(
                 detail="SSG ordItemSeq 미수집 — 주문 동기화 후 다시 시도해주세요",
             )
 
-        site_no = (
-            extras.get("siteNo", "") or extras.get("site_no", "") or "6004"
-        )
+        site_no = extras.get("siteNo", "") or extras.get("site_no", "") or "6004"
         client = SSGClient(api_key, site_no=site_no)
         try:
             await client.approve_cancel(order.order_number, str(order.ord_prd_seq))

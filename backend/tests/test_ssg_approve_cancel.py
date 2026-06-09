@@ -49,7 +49,7 @@ def _ssg_branch_body() -> str:
     marker = 'elif account.market_type == "ssg":'
     idx = body.find(marker)
     assert idx != -1, "SSG 분기 누락 — '미지원' 회귀"
-    rest = body[idx + 1:]
+    rest = body[idx + 1 :]
     next_elif = rest.find("\n    elif ")
     next_else = rest.find("\n    else:")
     candidates = [c for c in (next_elif, next_else) if c != -1]
@@ -70,7 +70,7 @@ class TestSsgBranchRegistered:
         """SSG 분기는 마지막 else (미지원) 직전에 위치해야 함."""
         body = _approve_cancel_body()
         ssg_idx = body.find('elif account.market_type == "ssg":')
-        else_idx = body.rfind('else:')
+        else_idx = body.rfind("else:")
         assert ssg_idx != -1 and else_idx != -1
         assert ssg_idx < else_idx, "SSG 분기가 else 보다 뒤에 있음 — 도달 불가"
 
@@ -83,7 +83,9 @@ class TestSsgClientWiring:
 
     def test_imports_ssg_client(self) -> None:
         assert "SSGClient" in self.branch, "SSGClient import 누락"
-        assert "SSGApiError" in self.branch, "SSGApiError import 누락 — 에러 잡기 어려움"
+        assert "SSGApiError" in self.branch, (
+            "SSGApiError import 누락 — 에러 잡기 어려움"
+        )
 
     def test_calls_approve_cancel(self) -> None:
         assert "client.approve_cancel(" in self.branch, "approve_cancel 호출 누락"
@@ -108,15 +110,15 @@ class TestSsgBranchGuards:
         self.branch = _ssg_branch_body()
 
     def test_api_key_guard(self) -> None:
-        assert 'SSG API 키 없음' in self.branch or 'api_key 없음' in self.branch.lower(), (
-            "API 키 누락 시 400 가드 필수"
-        )
+        assert (
+            "SSG API 키 없음" in self.branch or "api_key 없음" in self.branch.lower()
+        ), "API 키 누락 시 400 가드 필수"
 
     def test_ord_prd_seq_guard(self) -> None:
         # ord_prd_seq 미수집 시 400 — 동기화 안내. 누락 시 None 으로 호출돼 SSG API 가 실패.
-        assert "ord_prd_seq" in self.branch and ("미수집" in self.branch or "없음" in self.branch), (
-            "ord_prd_seq 미수집 가드 누락"
-        )
+        assert "ord_prd_seq" in self.branch and (
+            "미수집" in self.branch or "없음" in self.branch
+        ), "ord_prd_seq 미수집 가드 누락"
 
 
 class TestStatusCancelledConsistency:
