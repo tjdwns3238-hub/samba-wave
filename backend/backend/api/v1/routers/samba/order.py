@@ -7254,7 +7254,10 @@ async def sync_orders_from_markets(
                                 ):
                                     _ret_flat["_lh_prod_idx"] = _ret_dlvsn_list[_ri]
                                 parsed = _parse_lottehome_order(
-                                    _ret_flat, account["id"], label
+                                    _ret_flat,
+                                    account["id"],
+                                    label,
+                                    prefer_org_dtl_sn=True,
                                 )
                                 parsed["status"] = ret_status
                                 parsed["shipping_status"] = (
@@ -8286,6 +8289,24 @@ async def sync_orders_from_markets(
                         "구매확정",
                     ) and existing.status in ("ship_failed", "wait_ship", "shipping"):
                         update_fields["status"] = "delivered"
+                    # issue #393 — 반품 케이스 부재로 배송상태만 '반품요청'되고 주문상태는
+                    # '배송완료'에 잔존하던 버그. 터미널 상태(반품완료/취소)는 회귀 금지.
+                    elif _new_ss_final == "반품요청" and existing.status not in (
+                        "return_requested",
+                        "returned",
+                        "return_completed",
+                        "cancelled",
+                    ):
+                        update_fields["status"] = "return_requested"
+                    elif _new_ss_final in (
+                        "회수확정",
+                        "반품완료",
+                    ) and existing.status not in (
+                        "returned",
+                        "return_completed",
+                        "cancelled",
+                    ):
+                        update_fields["status"] = "return_completed"
                     elif _new_ss_final == "취소완료" and existing.status != "cancelled":
                         update_fields["status"] = "cancelled"
                     elif (
@@ -9336,6 +9357,11 @@ def _normalize_synced_order_status(order_data: dict[str, Any]) -> None:
         and cur_status in preserved
     ):
         return
+    # issue #393 — 롯데홈쇼핑 반품/취소 클레임 상태는 신규 insert(원주문 미매칭) 시에도
+    # 보존. 안 그러면 반품 주문이 pending 으로 리셋됨. 정상 배송 상태는 status_map/
+    # update 경로가 관리하므로 여기서 pending 으로 떨어뜨려도 무방.
+    if order_data.get("source") == "lottehome" and cur_status in preserved:
+        return
     order_data["status"] = "pending"
 
 
@@ -10023,8 +10049,15 @@ def _parse_lottehome_order(
     label: str,
     force_status: str = "",
     force_shipping_status: str = "",
+    prefer_org_dtl_sn: bool = False,
 ) -> dict:
-    """롯데홈쇼핑 주문 데이터 → SambaOrder dict 변환."""
+    """롯데홈쇼핑 주문 데이터 → SambaOrder dict 변환.
+
+    prefer_org_dtl_sn: 반품 조회(searchReturnList) 응답은 OrdDtlSn 에 새 클레임
+        라인번호를 발급하므로 order_number/shipment_id 가 원주문과 어긋난다.
+        True 면 OrgOrdDtlSn(원주문 라인번호)을 우선 사용해 원주문과 매칭되도록 통일.
+        취소 경로는 OrgOrdDtlSn 검증이 안 됐으므로 현행(OrdDtlSn 우선) 유지.
+    """
     from datetime import datetime, timezone
 
     def _lh_str(*vals) -> str:
@@ -10048,15 +10081,29 @@ def _parse_lottehome_order(
     # ext_order_number 에 "ord_no:ord_dtl_sn" 형식으로 합쳐 저장한다.
     # issue #216 — 신규주문 API(searchNewOrdLstOpenApi.lotte)는 OrdDtlSn/DlvUnitSn 키 없음.
     # OrgOrdDtlSn(=같은 값) 또는 ProdSeq/ProdCode 폴백 — ProdInfo 리스트 내 상품 구분에도 사용.
-    ord_dtl_sn = str(
-        prod_info.get("OrdDtlSn")
-        or prod_info.get("DlvUnitSn")
-        or prod_info.get("OrgOrdDtlSn")
-        or prod_info.get("ProdSeq")
-        or prod_info.get("ProdCode")
-        or item.get("_lh_prod_idx", "")
-        or ""
-    )
+    # issue #393 — 반품 응답은 OrdDtlSn 에 새 클레임 라인번호를 줘서 원주문과 어긋남.
+    # prefer_org_dtl_sn=True 면 OrgOrdDtlSn(원주문 라인번호)을 맨 앞으로 옮겨 통일.
+    # OrgOrdDtlSn 누락 시 OrdDtlSn 으로 폴백되어 기존 동작과 동일(안전).
+    if prefer_org_dtl_sn:
+        ord_dtl_sn = str(
+            prod_info.get("OrgOrdDtlSn")
+            or prod_info.get("OrdDtlSn")
+            or prod_info.get("DlvUnitSn")
+            or prod_info.get("ProdSeq")
+            or prod_info.get("ProdCode")
+            or item.get("_lh_prod_idx", "")
+            or ""
+        )
+    else:
+        ord_dtl_sn = str(
+            prod_info.get("OrdDtlSn")
+            or prod_info.get("DlvUnitSn")
+            or prod_info.get("OrgOrdDtlSn")
+            or prod_info.get("ProdSeq")
+            or prod_info.get("ProdCode")
+            or item.get("_lh_prod_idx", "")
+            or ""
+        )
     ext_order_number = (
         f"{order_no}:{ord_dtl_sn}" if (order_no and ord_dtl_sn) else order_no
     )

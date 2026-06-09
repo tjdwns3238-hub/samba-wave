@@ -260,8 +260,10 @@ class SambaOrder(SQLModel, table=True):
 
     # 출처
     source: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))
+    # issue #393 — 미매칭 주문 중복체크 filter_by_async(shipment_id=...) 가
+    # Seq Scan 으로 per-account 300초 타임아웃 유발. 인덱스로 Index Scan 화.
     shipment_id: Optional[str] = Field(
-        default=None, sa_column=Column(Text, nullable=True)
+        default=None, sa_column=Column(Text, nullable=True, index=True)
     )
 
     # 고객 결제시간 (대시보드/날짜 범위 조회의 핵심 필터 — 인덱스 필수)
