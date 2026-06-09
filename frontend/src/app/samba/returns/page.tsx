@@ -486,15 +486,17 @@ export default function ReturnsPage() {
                     />
                   </th>
                   <th rowSpan={2} style={{ textAlign: 'center', padding: '0.5rem 0.625rem', color: '#888', fontWeight: 500, fontSize: '0.75rem', whiteSpace: 'nowrap', verticalAlign: 'middle' }}>사진</th>
-                  {['고객', '사업자', '주문번호', '마켓', '주문일', '고객', '회사', '완료내역', '메모', '고객주문', '반품링크'].map((h, i) => (
+                  {['고객', '사업자', '주문번호', '마켓', '주문일', '고객비용', '회사비용', '완료내역', '메모'].map((h, i) => (
                     <th key={i} style={{ textAlign: 'center', padding: '0.5rem 0.625rem', color: '#888', fontWeight: 500, fontSize: '0.75rem', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
+                  <th colSpan={2} style={{ textAlign: 'center', padding: '0.5rem 0.625rem', color: '#888', fontWeight: 500, fontSize: '0.75rem', whiteSpace: 'nowrap' }}>고객주문</th>
                 </tr>
                 <tr style={{ background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid #2D2D2D' }}>
                   {['지역', '상품명', '고객전화번호', 'CS접수일', '상품위치', '반품신청한곳', '상태', '체크날짜'].map((h, i) => (
                     <th key={i} style={{ textAlign: 'center', padding: '0.5rem 0.625rem', color: '#888', fontWeight: 500, fontSize: '0.75rem', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
-                  <th colSpan={3} style={{ textAlign: 'center', padding: '0.5rem 0.625rem', color: '#888', fontWeight: 500, fontSize: '0.75rem', whiteSpace: 'nowrap' }}>원주문</th>
+                  <th style={{ textAlign: 'center', padding: '0.5rem 0.625rem', color: '#888', fontWeight: 500, fontSize: '0.75rem', whiteSpace: 'nowrap' }}>반품링크</th>
+                  <th colSpan={2} style={{ textAlign: 'center', padding: '0.5rem 0.625rem', color: '#888', fontWeight: 500, fontSize: '0.75rem', whiteSpace: 'nowrap' }}>원주문</th>
                 </tr>
               </thead>
               <tbody>
@@ -671,7 +673,7 @@ export default function ReturnsPage() {
                           style={{ width: '100px', padding: '0.3rem 0.5rem', background: '#1A1A1A', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#E5E5E5', fontSize: '0.8rem', textAlign: 'center' }}
                         />
                       </td>
-                      <td style={{ ...tdCenter, padding: '0.375rem' }}>
+                      <td colSpan={2} style={{ ...tdCenter, padding: '0.375rem' }}>
                         <select
                           value={r.customer_order_no || 'return_incomplete'}
                           onChange={async (e) => {
@@ -686,28 +688,6 @@ export default function ReturnsPage() {
                           <option value="return_incomplete">미완료</option>
                           <option value="return_complete">완료</option>
                         </select>
-                      </td>
-                      <td style={{ ...tdCenter, padding: '0.375rem' }}>
-                        <input
-                          type="text"
-                          value={r.return_link_manual || ''}
-                          placeholder={r.return_link || ''}
-                          title={r.return_link_manual || r.return_link || ''}
-                          onFocus={(e) => { cellEditRef.current[`return_link_manual:${r.id}`] = e.target.value }}
-                          onChange={(e) => {
-                            const val = e.target.value
-                            setReturns(prev => prev.map(x => x.id === r.id ? { ...x, return_link_manual: val } : x))
-                          }}
-                          onBlur={(e) => {
-                            const val = e.target.value
-                            const prevVal = cellEditRef.current[`return_link_manual:${r.id}`] ?? ''
-                            if (val === prevVal) return
-                            saveCell(r.id, { return_link_manual: val }, () => {
-                              setReturns(prev => prev.map(x => x.id === r.id ? { ...x, return_link_manual: prevVal } : x))
-                            }, '반품링크')
-                          }}
-                          style={{ width: '110px', padding: '0.3rem 0.5rem', background: '#1A1A1A', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#E5E5E5', fontSize: '0.8rem', textAlign: 'center' }}
-                        />
                       </td>
                       </tr>
                       <tr style={{ borderBottom: '1px solid rgba(45,45,45,0.5)' }}>
@@ -814,7 +794,29 @@ export default function ReturnsPage() {
                           style={{ width: 0, height: 0, opacity: 0, position: 'absolute', pointerEvents: 'none' }}
                         />
                       </td>
-                      <td colSpan={3} style={{ ...tdCenter, padding: '0.375rem' }}>
+                      <td style={{ ...tdCenter, padding: '0.375rem' }}>
+                        <input
+                          type="text"
+                          value={r.return_link_manual || ''}
+                          placeholder={r.return_link || ''}
+                          title={r.return_link_manual || r.return_link || ''}
+                          onFocus={(e) => { cellEditRef.current[`return_link_manual:${r.id}`] = e.target.value }}
+                          onChange={(e) => {
+                            const val = e.target.value
+                            setReturns(prev => prev.map(x => x.id === r.id ? { ...x, return_link_manual: val } : x))
+                          }}
+                          onBlur={(e) => {
+                            const val = e.target.value
+                            const prevVal = cellEditRef.current[`return_link_manual:${r.id}`] ?? ''
+                            if (val === prevVal) return
+                            saveCell(r.id, { return_link_manual: val }, () => {
+                              setReturns(prev => prev.map(x => x.id === r.id ? { ...x, return_link_manual: prevVal } : x))
+                            }, '반품링크')
+                          }}
+                          style={{ width: '110px', padding: '0.3rem 0.5rem', background: '#1A1A1A', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#E5E5E5', fontSize: '0.8rem', textAlign: 'center' }}
+                        />
+                      </td>
+                      <td colSpan={2} style={{ ...tdCenter, padding: '0.375rem' }}>
                         <select
                           value={r.original_order_no || 'return_incomplete'}
                           onChange={async (e) => {
