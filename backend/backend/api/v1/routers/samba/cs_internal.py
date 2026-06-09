@@ -306,6 +306,20 @@ async def send_all_drafts(
     }
 
 
+@router.post("/trigger-sync-playauto", dependencies=[Depends(_require_internal_token)])
+async def trigger_sync_playauto(
+    session: AsyncSession = Depends(get_write_session_dependency),
+) -> Dict[str, Any]:
+    """플레이오토 CS 동기화를 내부 토큰으로 직접 트리거.
+
+    samba_auth 없이 호출 가능 — 상품평 포함 최근 30일치 수집.
+    """
+    from backend.api.v1.routers.samba.cs_inquiry import _do_sync_cs_from_markets
+
+    result = await _do_sync_cs_from_markets(session, market_name="플레이오토")
+    return result
+
+
 async def _fallback_draft(
     repo: SambaCSInquiryRepository,
     body: "AutoSend",
