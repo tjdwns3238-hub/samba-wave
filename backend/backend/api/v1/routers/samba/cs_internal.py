@@ -257,6 +257,55 @@ async def auto_send(
     }
 
 
+@router.post("/send-all-drafts", dependencies=[Depends(_require_internal_token)])
+async def send_all_drafts(
+    session: AsyncSession = Depends(get_write_session_dependency),
+) -> Dict[str, Any]:
+    """draft_status='suggested' 인 모든 대기 초안을 즉시 전송.
+
+    킬스위치·confidence 게이트 없음 — 운영자가 명시 호출하는 일괄전송 전용.
+    이미 answered 건, is_hidden 건은 자동 제외.
+    """
+    from backend.api.v1.routers.samba.cs_inquiry import reply_cs_inquiry
+    from backend.dtos.samba.cs_inquiry import CSInquiryReply
+
+    rows = (
+        await session.execute(
+            sa_text(
+                "SELECT id, draft_reply FROM samba_cs_inquiry "
+                "WHERE draft_status = 'suggested' AND reply_status = 'pending' "
+                "AND is_hidden = false ORDER BY drafted_at ASC"
+            )
+        )
+    ).all()
+
+    ok_ids: List[str] = []
+    fail_ids: List[str] = []
+
+    for iid, draft_reply in rows:
+        if not draft_reply:
+            fail_ids.append(iid)
+            continue
+        try:
+            result = await reply_cs_inquiry(
+                iid, CSInquiryReply(reply=draft_reply), session
+            )
+            ok_ids.append(iid)
+            logger.info(
+                f"[CS일괄전송] OK {iid} market_sent={result.get('market_sent') if isinstance(result, dict) else '?'}"
+            )
+        except Exception as e:
+            fail_ids.append(iid)
+            logger.error(f"[CS일괄전송] FAIL {iid}: {e}")
+
+    return {
+        "ok": len(ok_ids),
+        "fail": len(fail_ids),
+        "ok_ids": ok_ids,
+        "fail_ids": fail_ids,
+    }
+
+
 async def _fallback_draft(
     repo: SambaCSInquiryRepository,
     body: "AutoSend",

@@ -23,10 +23,11 @@ from dataclasses import dataclass
 # order_change    주문 취소/변경/주소변경 요청 (draft)
 # sizing          사이즈/치수/착용감 (draft)
 # notice_ack      마켓 플랫폼 공지/안내 (auto-send: "확인했습니다")
+# product_auth    정품 여부 문의 (auto-send: "정품 맞습니다, 안심하세요")
 # general         기타 (draft)
 
-# 사람 판단 불필요 = 즉시 자동전송 가능한 의도 (보수적으로 notice_ack만)
-AUTO_SEND_INTENTS = frozenset({"notice_ack"})
+# 사람 판단 불필요 = 즉시 자동전송 가능한 의도
+AUTO_SEND_INTENTS = frozenset({"notice_ack", "product_auth"})
 
 
 @dataclass
@@ -118,6 +119,7 @@ _EXCHANGE_KW = (
 )
 _REFUND_KW = ("환불", "결제취소", "입금", "돈", "페이백")
 _ORDER_CHANGE_KW = ("취소", "변경", "주소 변경", "주소변경", "옵션 변경", "수정")
+_PRODUCT_AUTH_KW = ("정품", "가품", "짝퉁", "진품", "정품인가", "정품 맞", "진정품")
 
 
 def _has(text: str, kws: tuple[str, ...]) -> str | None:
@@ -162,6 +164,7 @@ def classify(
 
     # 2) 고객 문의 — 의도별 키워드 (구체적 → 일반 순)
     for intent, kws, conf in (
+        ("product_auth", _PRODUCT_AUTH_KW, 0.95),  # 정품 문의: 단순·답 확정 → 최우선
         ("exchange_return", _EXCHANGE_KW, 0.8),
         ("refund_status", _REFUND_KW, 0.75),
         ("sizing", _SIZING_KW, 0.8),
