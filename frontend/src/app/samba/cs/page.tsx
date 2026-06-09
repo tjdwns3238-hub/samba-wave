@@ -262,10 +262,10 @@ export default function CSPage() {
           reply_status: filterStatus || undefined,
           search: search || undefined,
           sort_desc: sortDesc,
-          // 미답변 필터는 날짜창에 안 걸리게 — 안 답한 문의는 오래돼도 전부 보여야 함
-          // (backlog가 1주일보다 오래되면 기간필터에 잘려 0건으로 보이던 버그)
-          start_date: filterStatus === 'pending' ? undefined : (csCustomStart || undefined),
-          end_date: filterStatus === 'pending' ? undefined : (csCustomEnd || undefined),
+          // 문의일시(inquiry_date) 기준 선택 기간 필터 — 미답변 포함 항상 적용
+          // (기간 밖 문의가 목록에 노출되던 버그 수정. 오래된 backlog는 "한달/올해"로 조회)
+          start_date: csCustomStart || undefined,
+          end_date: csCustomEnd || undefined,
         }).catch(() => ({ items: [], total: 0 })),
         csInquiryApi.getStats().catch(() => ({})),
         csInquiryApi.getTemplates().catch(() => ({})),
@@ -328,7 +328,7 @@ export default function CSPage() {
       setSearch('')
       setSearchInput('')
       const [data, st, tpl] = await Promise.all([
-        csInquiryApi.list({ skip: 0, limit: pageSize, sort_desc: sortDesc, reply_status: filterStatus || undefined, market: (() => { if (!filterMarket) return undefined; if (filterMarket.startsWith('type:')) return accounts.find(a => a.market_type === filterMarket.slice(5))?.market_name; if (filterMarket.startsWith('acc:')) return accounts.find(a => a.id === filterMarket.slice(4))?.market_name; return filterMarket })(), start_date: filterStatus === 'pending' ? undefined : (csCustomStart || undefined), end_date: filterStatus === 'pending' ? undefined : (csCustomEnd || undefined) }).catch(() => ({ items: [], total: 0 })),
+        csInquiryApi.list({ skip: 0, limit: pageSize, sort_desc: sortDesc, reply_status: filterStatus || undefined, market: (() => { if (!filterMarket) return undefined; if (filterMarket.startsWith('type:')) return accounts.find(a => a.market_type === filterMarket.slice(5))?.market_name; if (filterMarket.startsWith('acc:')) return accounts.find(a => a.id === filterMarket.slice(4))?.market_name; return filterMarket })(), start_date: csCustomStart || undefined, end_date: csCustomEnd || undefined }).catch(() => ({ items: [], total: 0 })),
         csInquiryApi.getStats().catch(() => ({})),
         csInquiryApi.getTemplates().catch(() => ({})),
       ])
