@@ -5908,19 +5908,34 @@ async def sync_orders_from_markets(
                                 vids = [
                                     None
                                 ]  # vendorItemId 없는 receipt → orderId만 fallback
+
+                            def _register(_key: tuple[int, int | None]) -> None:
+                                """CANCEL 우선 정책으로 cancel_map 등록.
+
+                                같은 키에 이미 entry 있으면 CANCEL(배송 전 취소) 을
+                                RETURN(반품) 보다 우선 매핑한다.
+                                """
+                                _prev = cancel_map.get(_key)
+                                if _prev is None:
+                                    cancel_map[_key] = cr
+                                elif (
+                                    cr.get("receiptType") or ""
+                                ).upper() == "CANCEL" and (
+                                    _prev.get("receiptType") or ""
+                                ).upper() != "CANCEL":
+                                    cancel_map[_key] = cr
+
                             for vid in vids:
-                                key = (oid, vid)
-                                prev = cancel_map.get(key)
-                                if prev is None:
-                                    cancel_map[key] = cr
-                                else:
-                                    # CANCEL 우선 (배송 전 취소 > 반품)
-                                    if (
-                                        cr.get("receiptType") or ""
-                                    ).upper() == "CANCEL" and (
-                                        prev.get("receiptType") or ""
-                                    ).upper() != "CANCEL":
-                                        cancel_map[key] = cr
+                                _register((oid, vid))
+                            # ── (oid, None) fallback 항상 등록 ────────────────────
+                            # 2026-06-09 사용자 보고: 휠라 1010099522 쿠팡 출고중지요청이
+                            # 마켓엔 들어왔지만 우리 DB 에 cancel_requested 로 매핑 안 됨.
+                            # 진앞: cancelItems[].vendorItemId 와 raw_orders[].orderItems[0]
+                            # .vendorItemId 가 옵션 차이로 어긋나면 (oid, vid) 정확매칭 실패.
+                            # 매칭측(아래 line ~5963)은 (oid, None) fallback 을 시도하는데
+                            # 등록측에서 items 가 비어있을 때만 (oid, None) 키를 만들어 fallback
+                            # 자체가 비어있었음. 항상 등록하도록 보강. CANCEL 우선 정책 동일.
+                            _register((oid, None))
                         logger.info(
                             f"[주문동기화] 쿠팡({label}): "
                             f"취소·반품 요청 {len(cr_list or [])}건 머지 "
@@ -5963,6 +5978,20 @@ async def sync_orders_from_markets(
                             ci = cancel_map.get((oid, vid_tmp)) or cancel_map.get(
                                 (oid, None)
                             )
+                            # 운영 추적용 — cancel_map 에 그 oid 의 다른 키 entry 가 있는데
+                            # 정확매칭+fallback 모두 실패한 케이스 로깅. 정상 흐름에서는 발생
+                            # 안 해야 하지만, 쿠팡 응답 스키마 변경 등 회귀 빠른 감지용.
+                            if ci is None and cancel_map:
+                                _other_keys = [
+                                    k for k in cancel_map.keys() if k[0] == oid
+                                ]
+                                if _other_keys:
+                                    logger.warning(
+                                        f"[주문동기화] 쿠팡({label}): "
+                                        f"orderId={oid} cancel/return receipt 있는데 "
+                                        f"vendorItemId({vid_tmp}) 매칭 실패. "
+                                        f"cancel_map 키들 for this oid={_other_keys}"
+                                    )
                         try:
                             orders_data.append(
                                 _parse_coupang_order(

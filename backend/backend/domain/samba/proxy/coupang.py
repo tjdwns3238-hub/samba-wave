@@ -1536,7 +1536,20 @@ class CoupangClient:
         since = now - timedelta(days=days)
 
         # 쿠팡 API 변경: status 또는 orderId 중 하나 필수 — 미전달 시 400 (#228)
-        # 호출자가 status 미지정 시 4개 상태 전부 합산 조회
+        # 호출자가 status 미지정 시 4개 상태 전부 합산 조회.
+        #
+        # 쿠팡 returnRequests 의 receiptStatus 코드 (호환성 유지용 정리):
+        #   UC = 반품접수미확인 — 고객 취소요청 직후 (RELEASE_STOP_UNCHECKED 포함)
+        #        ← 출고전 중지요청 케이스가 여기로 들어옴
+        #   RU = 입고완료/회수완료
+        #   CC = 환불완료
+        #   PR = 결제완료(반품처리완료)
+        #
+        # 2026-06-09 사용자 보고: 쿠팡 Wing 에 출고중지요청 3건 있는데 삼바에
+        # cancel_requested 매핑 안 됨. 위 4개 status 가 모든 receipt 를 합집합으로
+        # 다 받아오므로 sync 자체 누락은 아니고, 매칭측 cancel_map fallback 키
+        # 누락이 진앞이었음 (order.py 측 fix). status 리스트는 의도 명확화 위해
+        # 주석만 보강 — 코드 변경 없음.
         statuses = [status] if status else ["RU", "CC", "PR", "UC"]
         all_returns: list[dict[str, Any]] = []
 
@@ -1633,9 +1646,16 @@ class CoupangClient:
         return_cnt = sum(
             1 for r in items if (r.get("receiptType") or "").upper() == "RETURN"
         )
+        # receiptStatus 빈도 — 운영에서 어떤 status 코드가 들어오는지 추적용
+        # (회귀: 쿠팡이 새 status 코드 도입 시 우리 4개 리스트에서 누락 감지).
+        status_freq: dict[str, int] = {}
+        for r in items:
+            _s = (r.get("receiptStatus") or "").upper() or "(none)"
+            status_freq[_s] = status_freq.get(_s, 0) + 1
         logger.info(
             f"[쿠팡] 취소·반품 통합 조회: {len(items)}건 "
-            f"(CANCEL={cancel_cnt}, RETURN={return_cnt}, 최근 {days}일)"
+            f"(CANCEL={cancel_cnt}, RETURN={return_cnt}, 최근 {days}일) "
+            f"receiptStatus={status_freq}"
         )
         return items
 
