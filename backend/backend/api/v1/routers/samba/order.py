@@ -7172,9 +7172,28 @@ async def sync_orders_from_markets(
                     _oid = parsed.get("order_number", "")
                     if not _oid:
                         return
-                    orders_data[:] = [
-                        o for o in orders_data if o.get("order_number") != _oid
+                    # 1) exact match → 기존 레코드 교체
+                    if any(o.get("order_number") == _oid for o in orders_data):
+                        orders_data[:] = [o for o in orders_data if o.get("order_number") != _oid]
+                        orders_data.append(parsed)
+                        _lh_seen.add(_oid)
+                        return
+                    # 2) exact match 없음 → OrdNo prefix로 탐색 후 배송완료 건 하나를 교체
+                    _ord_no = _oid.split(":")[0]
+                    _prefix_matches = [
+                        o for o in orders_data
+                        if o.get("order_number", "").split(":")[0] == _ord_no
                     ]
+                    if _prefix_matches:
+                        # 반품/취소 아닌 건(배송완료 등) 우선 제거, 없으면 첫 번째 제거
+                        _to_remove = next(
+                            (
+                                o for o in _prefix_matches
+                                if o.get("status") not in ("cancelled", "return_requested", "return_completed")
+                            ),
+                            _prefix_matches[0],
+                        )
+                        orders_data.remove(_to_remove)
                     orders_data.append(parsed)
                     _lh_seen.add(_oid)
 
@@ -7201,9 +7220,29 @@ async def sync_orders_from_markets(
                             else "return_completed"
                         )
                         for ro in _lh_ret:
-                            for parsed in _parse_lottehome_order_multi(
-                                ro, account["id"], label, ret_status
-                            ):
+                            _ret_ord_no = str(ro.get("OrdNo", "") or "")
+                            _ret_prod_raw = ro.get("ProdInfo", [])
+                            if isinstance(_ret_prod_raw, dict):
+                                _ret_prod_raw = [_ret_prod_raw]
+                            if not _ret_prod_raw:
+                                _ret_prod_raw = [{}]
+                            _ret_dlvsn_list = _lh_dlvsn_map.get(_ret_ord_no, [])
+                            for _ri, _ret_prod in enumerate(_ret_prod_raw):
+                                _ret_flat = dict(ro)
+                                _ret_flat["ProdInfo"] = _ret_prod if isinstance(_ret_prod, dict) else {}
+                                # DlvUnitSn 없으면 deliver_list에서 수집한 값으로 보완
+                                _has_dlvsn = bool(
+                                    _ret_flat["ProdInfo"].get("OrdDtlSn")
+                                    or _ret_flat["ProdInfo"].get("DlvUnitSn")
+                                    or _ret_flat["ProdInfo"].get("OrgOrdDtlSn")
+                                )
+                                if not _has_dlvsn and _ret_dlvsn_list and _ri < len(_ret_dlvsn_list):
+                                    _ret_flat["_lh_prod_idx"] = _ret_dlvsn_list[_ri]
+                                parsed = _parse_lottehome_order(_ret_flat, account["id"], label)
+                                parsed["status"] = ret_status
+                                parsed["shipping_status"] = (
+                                    "반품요청" if ret_status == "return_requested" else "회수확정"
+                                )
                                 _lh_override(parsed)
                     except Exception as _e:
                         logger.warning(
