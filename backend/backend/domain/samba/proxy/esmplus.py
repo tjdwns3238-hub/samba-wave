@@ -439,6 +439,24 @@ class ESMPlusClient:
         except Exception:
             return []
 
+    async def resolve_return_addr_no(self, return_place_no: int) -> int:
+        """반품지 placeNo → addrNo 해석 (#389).
+
+        계정 config 의 returnPlaceNo 는 placeNo 값이지만 ESM 상품등록 API 의
+        returnAndExchange.addrNo 는 주소번호(addrNo)를 요구한다. get_places 의
+        place 객체에서 placeNo 가 일치하는 항목의 addrNo 를 반환.
+        못 찾으면 0 (호출측에서 미주입 처리).
+        """
+        if not return_place_no:
+            return 0
+        try:
+            for p in await self.get_places():
+                if int(p.get("placeNo", 0) or 0) == return_place_no:
+                    return int(p.get("addrNo", 0) or 0)
+        except Exception:
+            return 0
+        return 0
+
     async def get_dispatch_policies(self) -> list[dict[str, Any]]:
         """발송정책 목록 — GET /item/v1/shipping/dispatch-policies"""
         try:
@@ -1257,7 +1275,10 @@ class ESMPlusClient:
         company_no = int(product.get("_shipping_company_no", 0) or 0)
         dispatch_policy_no = int(product.get("_dispatch_policy_no", 0) or 0)
         place_no = int(product.get("_shipping_place_no", 0) or 0)
-        return_place_no = int(product.get("_return_place_no", 0) or 0)
+        # 반품/교환지 — ESM은 placeNo 가 아니라 addrNo 를 요구. 플러그인 execute 가
+        # get_places 로 placeNo→addrNo 해석 후 _return_addr_no 주입 (#389)
+        return_addr_no = int(product.get("_return_addr_no", 0) or 0)
+        return_fee = int(product.get("_return_fee", 0) or 0)
 
         # 배송비 분류 (ESM API 가이드 etapi.gmarket.com/140 + 실 호출 검증):
         # - shipping.policy.feeType: 1=묶음(bundle 필수), 2=개별(each 필수)
@@ -1279,13 +1300,19 @@ class ESMPlusClient:
         policy_obj: dict[str, Any] = {"feeType": 2}
         if place_no:
             policy_obj["placeNo"] = place_no
-        if return_place_no:
-            policy_obj["returnPlaceNo"] = return_place_no
         each_obj: dict[str, Any] = {"feeType": each_fee_type}
         if each_fee_type == 2 and delivery_base_fee > 0:
             each_obj["fee"] = delivery_base_fee
         policy_obj["each"] = each_obj
         shipping["policy"] = policy_obj
+
+        # 반품/교환지 — ESM 공식 스펙: shipping.returnAndExchange.addrNo (#389).
+        # policy.returnPlaceNo 는 ESM 미인식 필드라 무시됨 → addrNo 별도 객체로 전달.
+        if return_addr_no:
+            return_obj: dict[str, Any] = {"addrNo": return_addr_no}
+            if return_fee > 0:
+                return_obj["fee"] = return_fee
+            shipping["returnAndExchange"] = return_obj
 
         # 판매기간 (-1=무제한)
         selling_period = int(product.get("_selling_period", -1) or -1)

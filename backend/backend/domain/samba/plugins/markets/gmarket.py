@@ -202,6 +202,18 @@ class GMarketMarketPlugin(MarketPlugin):
             detail_html = re.sub(r'(src=["\'])\/\/', r"\1https://", detail_html)
             product_copy["detail_html"] = add_lazy_loading(detail_html)
 
+        # 반품/교환지 placeNo → addrNo 해석 (ESM returnAndExchange.addrNo, #389).
+        # 가격/재고 동기화 모드는 반품지 미변경 → get_places 호출 스킵(오토튠 부하 회피).
+        if not (
+            product.get("_price_stock_only")
+            or (product.get("_skip_image_upload") and existing_no)
+        ):
+            _rpn = int(product_copy.get("_return_place_no", 0) or 0)
+            if _rpn:
+                _addr = await client.resolve_return_addr_no(_rpn)
+                if _addr:
+                    product_copy["_return_addr_no"] = _addr
+
         # transform
         data = ESMPlusClient.transform_product(
             product_copy, category_id, site="gmarket"
@@ -571,6 +583,8 @@ class GMarketMarketPlugin(MarketPlugin):
                 product["_shipping_place_no"] = int(extras["shippingPlaceNo"])
             if extras.get("returnPlaceNo"):
                 product["_return_place_no"] = int(extras["returnPlaceNo"])
+            if extras.get("returnFee"):
+                product["_return_fee"] = int(extras["returnFee"])
             if extras.get("shippingFeeType"):
                 product["_delivery_fee_type"] = extras["shippingFeeType"]
             if extras.get("shippingFee"):
