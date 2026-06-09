@@ -683,7 +683,7 @@ export default function ReturnsPage() {
                               setReturns(prev => prev.map(x => x.id === r.id ? { ...x, customer_order_no: val } : x))
                             } catch (_e) { /* 무시 */ }
                           }}
-                          style={{ padding: '0.2rem 0.3rem', background: '#1A1A1A', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#E5E5E5', fontSize: '0.75rem', cursor: 'pointer', outline: 'none' }}
+                          style={{ display: 'block', margin: '0 auto', width: '90px', padding: '0.2rem 0.3rem', background: '#1A1A1A', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#E5E5E5', fontSize: '0.75rem', textAlign: 'center', textAlignLast: 'center', cursor: 'pointer', outline: 'none' }}
                         >
                           <option value="return_incomplete">미완료</option>
                           <option value="return_complete">완료</option>
@@ -826,7 +826,7 @@ export default function ReturnsPage() {
                               setReturns(prev => prev.map(x => x.id === r.id ? { ...x, original_order_no: val } : x))
                             } catch (_e) { /* 무시 */ }
                           }}
-                          style={{ padding: '0.2rem 0.3rem', background: '#1A1A1A', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#E5E5E5', fontSize: '0.75rem', cursor: 'pointer', outline: 'none' }}
+                          style={{ display: 'block', margin: '0 auto', width: '90px', padding: '0.2rem 0.3rem', background: '#1A1A1A', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#E5E5E5', fontSize: '0.75rem', textAlign: 'center', textAlignLast: 'center', cursor: 'pointer', outline: 'none' }}
                         >
                           <option value="return_incomplete">미완료</option>
                           <option value="return_complete">완료</option>
