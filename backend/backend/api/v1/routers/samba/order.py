@@ -7101,11 +7101,28 @@ async def sync_orders_from_markets(
                     _oid = parsed.get("order_number", "")
                     if not _oid:
                         return
+                    # 1) exact match → 기존 레코드 교체
+                    if any(o.get("order_number") == _oid for o in orders_data):
+                        orders_data[:] = [o for o in orders_data if o.get("order_number") != _oid]
+                        orders_data.append(parsed)
+                        _lh_seen.add(_oid)
+                        return
+                    # 2) exact match 없음 → OrdNo prefix로 탐색 후 배송완료 건 하나를 교체
                     _ord_no = _oid.split(":")[0]
-                    orders_data[:] = [
+                    _prefix_matches = [
                         o for o in orders_data
-                        if o.get("order_number", "").split(":")[0] != _ord_no
+                        if o.get("order_number", "").split(":")[0] == _ord_no
                     ]
+                    if _prefix_matches:
+                        # 반품/취소 아닌 건(배송완료 등) 우선 제거, 없으면 첫 번째 제거
+                        _to_remove = next(
+                            (
+                                o for o in _prefix_matches
+                                if o.get("status") not in ("cancelled", "return_requested", "return_completed")
+                            ),
+                            _prefix_matches[0],
+                        )
+                        orders_data.remove(_to_remove)
                     orders_data.append(parsed)
                     _lh_seen.add(_oid)
 
