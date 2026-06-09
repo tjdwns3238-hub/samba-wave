@@ -1,6 +1,7 @@
 """SambaWave Returns API router."""
 
 import logging
+import time
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -20,6 +21,11 @@ from backend.dtos.samba.returns import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/returns", tags=["samba-returns"])
+
+# claim 주문 → 반품 자동백필 throttle — 매 호출마다 5,000건 스캔하던 부하 제거.
+# 목록 조회는 read 세션으로 가볍게 끝내고, 백필은 5분에 한 번만 별도 write 세션에서 수행.
+_CLAIM_BACKFILL_INTERVAL = 300.0  # 초
+_last_claim_backfill_ts = 0.0
 
 
 def _read_service(session: AsyncSession):
@@ -241,10 +247,23 @@ async def list_returns(
     type: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    session: AsyncSession = Depends(get_write_session_dependency),
+    session: AsyncSession = Depends(get_read_session_dependency),
     tenant_id: Optional[str] = Depends(get_optional_tenant_id),
 ):
-    await _backfill_returns_from_claim_orders(session, tenant_id=tenant_id)
+    # claim 주문 자동백필 — 매 호출이 아니라 5분에 한 번만, 별도 write 세션에서 수행.
+    # (목록 조회 자체는 가벼운 read 세션으로 처리해 오토튠 write 부하와 분리)
+    global _last_claim_backfill_ts
+    now_ts = time.monotonic()
+    if now_ts - _last_claim_backfill_ts >= _CLAIM_BACKFILL_INTERVAL:
+        _last_claim_backfill_ts = now_ts  # 동시요청 중복 실행 방지: 실행 전 선점
+        try:
+            from backend.db.orm import get_write_session
+
+            async with get_write_session() as wsession:
+                await _backfill_returns_from_claim_orders(wsession, tenant_id=tenant_id)
+        except Exception as e:
+            logger.warning(f"[returns] claim 자동백필 실패(무시): {e}")
+
     svc = _read_service(session)
     returns = await svc.list_returns(
         skip=skip,
@@ -263,6 +282,7 @@ async def list_returns(
     link_map: dict[str, str] = {}
     channel_id_map: dict[str, str] = {}  # order_id → channel_id
     order_date_map: dict[str, Any] = {}  # order_id → paid_at or created_at
+    order_addr_map: dict[str, str] = {}  # order_id → customer_address
     if order_ids:
         from backend.domain.samba.order.model import SambaOrder
         from sqlmodel import select, col
@@ -275,6 +295,7 @@ async def list_returns(
             SambaOrder.channel_id,
             SambaOrder.paid_at,
             SambaOrder.created_at,
+            SambaOrder.customer_address,
         ).where(col(SambaOrder.id).in_(order_ids))
         rows = (await session.execute(stmt)).all()
         # 소싱처별 주문상세 URL 템플릿 (주문탭 orderUrlMap과 동일)
@@ -300,6 +321,9 @@ async def list_returns(
                 channel_id_map[row.id] = row.channel_id
             # 주문일 수집 (paid_at 우선)
             order_date_map[row.id] = row.paid_at or row.created_at
+            # 고객주소 수집 (region 동적 폴백용)
+            if row.customer_address:
+                order_addr_map[row.id] = row.customer_address
 
     # business_name 보정용 계정 조회
     account_map: dict[str, str] = {}  # channel_id → business_name
@@ -332,6 +356,12 @@ async def list_returns(
         # order_date가 없으면 주문의 paid_at으로 동적 보정
         if not data.get("order_date"):
             data["order_date"] = order_date_map.get(r.order_id)
+        # region(지역)이 없으면 주문 고객주소에서 즉석 계산해 보정
+        # — 생성 시 region을 안 박은 수집경로(스마트스토어/플레이오토 등) 대응
+        if not data.get("region"):
+            addr = order_addr_map.get(r.order_id) or data.get("customer_address")
+            if addr:
+                data["region"] = _extract_city_district(addr)
         results.append(data)
     return results
 

@@ -89,6 +89,7 @@ export function getPeriodStart(key: string): Date | null {
     case '5days': { const d = new Date(now); d.setDate(d.getDate() - 4); return d }
     case '1week': { const d = new Date(now); d.setDate(d.getDate() - 6); return d }
     case '1month': { const d = new Date(now); d.setDate(d.getDate() - 29); return d }
+    case '2month': { const d = new Date(now); d.setMonth(d.getMonth() - 2); return d }
     case 'thismonth': return new Date(now.getFullYear(), now.getMonth(), 1)
     case 'lastmonth': return new Date(now.getFullYear(), now.getMonth() - 1, 1)
     case 'thisyear': return new Date(now.getFullYear(), 0, 1)

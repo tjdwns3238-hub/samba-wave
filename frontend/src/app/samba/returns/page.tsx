@@ -52,10 +52,10 @@ export default function ReturnsPage() {
     const next = typeof v === 'function' ? v(prev) : v
     return next.slice(-30)
   })
-  const [period, setPeriod] = useState('today')
+  const [period, setPeriod] = useState('2month')
   const [syncAccountId, setSyncAccountId] = useState('')
-  const [customStart, setCustomStart] = useState((getPeriodStart('today') ?? new Date()).toLocaleDateString('sv-SE'))
-  const [customEnd, setCustomEnd] = useState(getPeriodEnd('today').toLocaleDateString('sv-SE'))
+  const [customStart, setCustomStart] = useState((getPeriodStart('2month') ?? new Date()).toLocaleDateString('sv-SE'))
+  const [customEnd, setCustomEnd] = useState(getPeriodEnd('2month').toLocaleDateString('sv-SE'))
   const [startLocked, setStartLocked] = useState(false)
   const [dateLocked, setDateLocked] = useState(false)
   const [accounts, setAccounts] = useState<SambaMarketAccount[]>([])
@@ -486,12 +486,12 @@ export default function ReturnsPage() {
                     />
                   </th>
                   <th rowSpan={2} style={{ textAlign: 'center', padding: '0.5rem 0.625rem', color: '#888', fontWeight: 500, fontSize: '0.75rem', whiteSpace: 'nowrap', verticalAlign: 'middle' }}>사진</th>
-                  {['고객', '사업자', '주문번호', '마켓', '주문일', '고객', '회사', '완료내역', '상품명', '체크날짜', '고객전화번호'].map((h, i) => (
+                  {['고객', '사업자', '주문번호', '마켓', '주문일', '고객', '회사', '완료내역', '메모', '고객주문', '반품링크'].map((h, i) => (
                     <th key={i} style={{ textAlign: 'center', padding: '0.5rem 0.625rem', color: '#888', fontWeight: 500, fontSize: '0.75rem', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
                 <tr style={{ background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid #2D2D2D' }}>
-                  {['지역', '메모', '반품링크', 'CS접수일', '상품위치', '반품신청한곳', '상태', '고객주문'].map((h, i) => (
+                  {['지역', '상품명', '고객전화번호', 'CS접수일', '상품위치', '반품신청한곳', '상태', '체크날짜'].map((h, i) => (
                     <th key={i} style={{ textAlign: 'center', padding: '0.5rem 0.625rem', color: '#888', fontWeight: 500, fontSize: '0.75rem', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                   <th colSpan={3} style={{ textAlign: 'center', padding: '0.5rem 0.625rem', color: '#888', fontWeight: 500, fontSize: '0.75rem', whiteSpace: 'nowrap' }}>원주문</th>
@@ -557,7 +557,7 @@ export default function ReturnsPage() {
                           </div>
                         )}
                       </td>
-                      <td style={tdCenter}>{r.customer_name || '-'}</td>
+                      <td style={{ ...tdCenter, maxWidth: '64px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.customer_name || ''}>{r.customer_name || '-'}</td>
                       <td style={tdCenter}>{r.business_name || '-'}</td>
                       <td style={{ ...tdCenter, padding: '0.375rem' }}>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.25rem' }}>
@@ -654,63 +654,6 @@ export default function ReturnsPage() {
                           )
                         })()}
                       </td>
-                      <td style={{ ...tdCenter, maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.product_name || '-'}</td>
-                      <td style={{ ...tdCenter, padding: '0.375rem' }}>
-                        <div
-                          onClick={() => {
-                            const inp = document.getElementById(`ck-${r.id}`) as HTMLInputElement
-                            inp?.showPicker?.()
-                          }}
-                          style={{ cursor: 'pointer', fontSize: '0.8rem', color: r.check_date ? '#E5E5E5' : '#555', minWidth: '40px' }}
-                        >
-                          {fmtMD(r.check_date)}
-                        </div>
-                        <input
-                          id={`ck-${r.id}`}
-                          type="date"
-                          value={r.check_date?.slice(0, 10) || ''}
-                          onChange={async (e) => {
-                            const val = e.target.value
-                            setReturns(prev => prev.map(x => x.id === r.id ? { ...x, check_date: val } : x))
-                            try {
-                              await returnApi.patch(r.id, { check_date: val || '' })
-                            } catch (_e) { /* 무시 */ }
-                          }}
-                          style={{ width: 0, height: 0, opacity: 0, position: 'absolute', pointerEvents: 'none' }}
-                        />
-                      </td>
-                      <td style={{ ...tdCenter, padding: '0.375rem' }}>
-                        <input
-                          type="text"
-                          value={r.customer_phone_manual ?? r.customer_phone ?? ''}
-                          placeholder=""
-                          onFocus={(e) => { cellEditRef.current[`customer_phone_manual:${r.id}`] = e.target.value }}
-                          onChange={(e) => {
-                            const val = e.target.value
-                            setReturns(prev => prev.map(x => x.id === r.id ? { ...x, customer_phone_manual: val } : x))
-                          }}
-                          onBlur={(e) => {
-                            const val = e.target.value
-                            const prevVal = cellEditRef.current[`customer_phone_manual:${r.id}`] ?? ''
-                            if (val === prevVal) return
-                            saveCell(r.id, { customer_phone_manual: val }, () => {
-                              setReturns(prev => prev.map(x => x.id === r.id ? { ...x, customer_phone_manual: prevVal } : x))
-                            }, '고객전화번호')
-                          }}
-                          style={{ width: '110px', padding: '0.3rem 0.5rem', background: '#1A1A1A', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#E5E5E5', fontSize: '0.8rem', textAlign: 'center' }}
-                        />
-                      </td>
-                      </tr>
-                      <tr style={{ borderBottom: '1px solid rgba(45,45,45,0.5)' }}>
-                      <td style={tdCenter}>
-                        {r.region ? (
-                          <span
-                            onClick={() => setAddressModal({ region: r.region || '', address: r.customer_address || '', phone: r.customer_phone || '', customer: r.customer_name || '' })}
-                            style={{ color: '#E5E5E5', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: '#3D3D3D', textUnderlineOffset: '3px' }}
-                            title={r.customer_address || '주소 정보 없음'}
-                          >{r.region}</span>
-                        ) : '-'}
-                      </td>
                       <td style={{ ...tdCenter, padding: '0.375rem' }}>
                         <input
                           type="text"
@@ -727,6 +670,22 @@ export default function ReturnsPage() {
                           }}
                           style={{ width: '100px', padding: '0.3rem 0.5rem', background: '#1A1A1A', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#E5E5E5', fontSize: '0.8rem', textAlign: 'center' }}
                         />
+                      </td>
+                      <td style={{ ...tdCenter, padding: '0.375rem' }}>
+                        <select
+                          value={r.customer_order_no || 'return_incomplete'}
+                          onChange={async (e) => {
+                            const val = e.target.value
+                            try {
+                              await returnApi.patch(r.id, { customer_order_no: val })
+                              setReturns(prev => prev.map(x => x.id === r.id ? { ...x, customer_order_no: val } : x))
+                            } catch (_e) { /* 무시 */ }
+                          }}
+                          style={{ padding: '0.2rem 0.3rem', background: '#1A1A1A', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#E5E5E5', fontSize: '0.75rem', cursor: 'pointer', outline: 'none' }}
+                        >
+                          <option value="return_incomplete">미완료</option>
+                          <option value="return_complete">완료</option>
+                        </select>
                       </td>
                       <td style={{ ...tdCenter, padding: '0.375rem' }}>
                         <input
@@ -746,6 +705,39 @@ export default function ReturnsPage() {
                             saveCell(r.id, { return_link_manual: val }, () => {
                               setReturns(prev => prev.map(x => x.id === r.id ? { ...x, return_link_manual: prevVal } : x))
                             }, '반품링크')
+                          }}
+                          style={{ width: '110px', padding: '0.3rem 0.5rem', background: '#1A1A1A', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#E5E5E5', fontSize: '0.8rem', textAlign: 'center' }}
+                        />
+                      </td>
+                      </tr>
+                      <tr style={{ borderBottom: '1px solid rgba(45,45,45,0.5)' }}>
+                      <td style={{ ...tdCenter, maxWidth: '64px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {r.region ? (
+                          <span
+                            onClick={() => setAddressModal({ region: r.region || '', address: r.customer_address || '', phone: r.customer_phone || '', customer: r.customer_name || '' })}
+                            style={{ color: '#E5E5E5', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: '#3D3D3D', textUnderlineOffset: '3px' }}
+                            title={r.customer_address || '주소 정보 없음'}
+                          >{r.region}</span>
+                        ) : '-'}
+                      </td>
+                      <td style={{ ...tdCenter, maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.product_name || '-'}</td>
+                      <td style={{ ...tdCenter, padding: '0.375rem' }}>
+                        <input
+                          type="text"
+                          value={r.customer_phone_manual ?? r.customer_phone ?? ''}
+                          placeholder=""
+                          onFocus={(e) => { cellEditRef.current[`customer_phone_manual:${r.id}`] = e.target.value }}
+                          onChange={(e) => {
+                            const val = e.target.value
+                            setReturns(prev => prev.map(x => x.id === r.id ? { ...x, customer_phone_manual: val } : x))
+                          }}
+                          onBlur={(e) => {
+                            const val = e.target.value
+                            const prevVal = cellEditRef.current[`customer_phone_manual:${r.id}`] ?? ''
+                            if (val === prevVal) return
+                            saveCell(r.id, { customer_phone_manual: val }, () => {
+                              setReturns(prev => prev.map(x => x.id === r.id ? { ...x, customer_phone_manual: prevVal } : x))
+                            }, '고객전화번호')
                           }}
                           style={{ width: '110px', padding: '0.3rem 0.5rem', background: '#1A1A1A', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#E5E5E5', fontSize: '0.8rem', textAlign: 'center' }}
                         />
@@ -799,20 +791,28 @@ export default function ReturnsPage() {
                         </select>
                       </td>
                       <td style={{ ...tdCenter, padding: '0.375rem' }}>
-                        <select
-                          value={r.customer_order_no || 'return_incomplete'}
+                        <div
+                          onClick={() => {
+                            const inp = document.getElementById(`ck-${r.id}`) as HTMLInputElement
+                            inp?.showPicker?.()
+                          }}
+                          style={{ cursor: 'pointer', fontSize: '0.8rem', color: r.check_date ? '#E5E5E5' : '#555', minWidth: '40px' }}
+                        >
+                          {fmtMD(r.check_date)}
+                        </div>
+                        <input
+                          id={`ck-${r.id}`}
+                          type="date"
+                          value={r.check_date?.slice(0, 10) || ''}
                           onChange={async (e) => {
                             const val = e.target.value
+                            setReturns(prev => prev.map(x => x.id === r.id ? { ...x, check_date: val } : x))
                             try {
-                              await returnApi.patch(r.id, { customer_order_no: val })
-                              setReturns(prev => prev.map(x => x.id === r.id ? { ...x, customer_order_no: val } : x))
+                              await returnApi.patch(r.id, { check_date: val || '' })
                             } catch (_e) { /* 무시 */ }
                           }}
-                          style={{ padding: '0.2rem 0.3rem', background: '#1A1A1A', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#E5E5E5', fontSize: '0.75rem', cursor: 'pointer', outline: 'none' }}
-                        >
-                          <option value="return_incomplete">미완료</option>
-                          <option value="return_complete">완료</option>
-                        </select>
+                          style={{ width: 0, height: 0, opacity: 0, position: 'absolute', pointerEvents: 'none' }}
+                        />
                       </td>
                       <td colSpan={3} style={{ ...tdCenter, padding: '0.375rem' }}>
                         <select
