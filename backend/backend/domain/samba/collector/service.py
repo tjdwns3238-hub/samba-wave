@@ -147,6 +147,28 @@ class SambaCollectorService:
     async def create_filter(self, data: Dict[str, Any]) -> SambaSearchFilter:
         if not data.get("is_folder") and "requested_count" not in data:
             data["requested_count"] = FIXED_REQUESTED_COUNT
+        # #402 — 재수집 시 동일 (tenant, source_site, name) 비-폴더 필터가 중복 생성되는 문제 방지.
+        # 이미 같은 그룹이 있으면 새로 만들지 않고 기존을 재사용(keyword/요청수만 최신화)한다.
+        # tenant 스코프는 ORM 자동필터(tenant_filter)가 처리 — SambaSearchFilter 에 tenant_id 컬럼 존재.
+        if not data.get("is_folder"):
+            name = data.get("name")
+            source_site = data.get("source_site")
+            if name and source_site:
+                existing = await self.filter_repo.find_by_async(
+                    is_folder=False, source_site=source_site, name=name
+                )
+                if existing:
+                    updates: Dict[str, Any] = {}
+                    for key in ("keyword", "requested_count"):
+                        if key in data and getattr(existing, key, None) != data[key]:
+                            updates[key] = data[key]
+                    if updates:
+                        refreshed = await self.filter_repo.update_async(
+                            existing.id, **updates
+                        )
+                        if refreshed is not None:
+                            return refreshed
+                    return existing
         return await self.filter_repo.create_async(**data)
 
     async def update_filter(
