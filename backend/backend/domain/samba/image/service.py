@@ -1156,7 +1156,7 @@ class ImageTransformService:
         quality: int = 85,
         min_dim: int = 0,
         enforce_max_dim: bool = False,
-    ) -> tuple[list[str], dict[str, str]]:
+    ) -> tuple[list[str], dict[str, str], set[str]]:
         """용량/픽셀 초과·미달 이미지를 다운로드/리사이즈하여 R2로 업로드.
 
         롯데홈쇼핑 [1038] 등 마켓 측 이미지 용량 한도 대응 — 호스트 무관하게
@@ -1173,15 +1173,16 @@ class ImageTransformService:
         from urllib.parse import urlparse
 
         if not urls:
-            return [], {}
+            return [], {}, set()
         r2 = await self._get_r2_client()
         if not r2:
-            return list(urls), {}
+            return list(urls), {}, set()
         client_r2, bucket_name, public_url = r2
         public_host = urlparse(public_url).netloc if public_url else ""
 
         result: list[str] = []
         url_map: dict[str, str] = {}
+        failed: set[str] = set()
 
         # 빠른 사전 체크용 HTTP 클라이언트 (HEAD)
         async with httpx.AsyncClient(
@@ -1228,6 +1229,7 @@ class ImageTransformService:
                         url, max_size=20 * 1024 * 1024
                     )
                     if not image_bytes:
+                        failed.add(url)
                         result.append(url)
                         continue
 
@@ -1310,8 +1312,9 @@ class ImageTransformService:
                     )
                 except Exception as e:
                     logger.warning(f"[이미지리사이즈] 실패로 원본 유지: {url} — {e}")
+                    failed.add(url)
                     result.append(url)
-        return result, url_map
+        return result, url_map, failed
 
     async def mirror_oversized_in_html(
         self,
@@ -1340,7 +1343,7 @@ class ImageTransformService:
             orig_to_norm[url] = ("https:" + url) if url.startswith("//") else url
         if not orig_to_norm:
             return html
-        _, url_map = await self.mirror_oversized_to_r2(
+        _, url_map, _ = await self.mirror_oversized_to_r2(
             list(orig_to_norm.values()),
             max_bytes=max_bytes,
             max_dim=max_dim,

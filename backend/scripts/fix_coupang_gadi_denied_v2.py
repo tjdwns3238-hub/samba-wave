@@ -14,8 +14,13 @@ from backend.domain.samba.proxy.coupang import CoupangClient
 ACCOUNT_ID = "ma_01KNZV0ZWXW52W0G4TYG3AJH9Q"
 LOTTE_CODE = "HYUNDAI"
 _SERVER_KEYS = {
-    "sellerProductId", "productId", "approvalStatus", "statusName",
-    "exposedStatusName", "createdAt", "updatedAt",
+    "sellerProductId",
+    "productId",
+    "approvalStatus",
+    "statusName",
+    "exposedStatusName",
+    "createdAt",
+    "updatedAt",
 }
 _ITEM_SERVER_KEYS = {"vendorItemId", "itemId"}
 
@@ -39,8 +44,10 @@ def _make_engine():
 
 async def get_pg_conn():
     return await asyncpg.connect(
-        host=settings.write_db_host, port=settings.write_db_port,
-        user=settings.write_db_user, password=settings.write_db_password,
+        host=settings.write_db_host,
+        port=settings.write_db_port,
+        user=settings.write_db_user,
+        password=settings.write_db_password,
         database=settings.write_db_name,
         ssl="require" if settings.use_db_ssl else None,
     )
@@ -52,7 +59,8 @@ def strip_server_ids(data: dict) -> dict:
     if isinstance(items, list):
         data["items"] = [
             {k: v for k, v in it.items() if k not in _ITEM_SERVER_KEYS}
-            if isinstance(it, dict) else it
+            if isinstance(it, dict)
+            else it
             for it in items
         ]
     return data
@@ -74,7 +82,9 @@ def inject_model_no(data: dict, style_code: str) -> dict:
         item["barcode"] = barcode
         item["emptyBarcode"] = not barcode
         if item["emptyBarcode"]:
-            item["emptyBarcodeReason"] = "품번(MPN)으로 대체" if style_code else "바코드 없음"
+            item["emptyBarcodeReason"] = (
+                "품번(MPN)으로 대체" if style_code else "바코드 없음"
+            )
         new_items.append(item)
     data["items"] = new_items
     return data
@@ -88,6 +98,7 @@ def clean_url(url: str) -> str:
 async def normalize_images(svc, post_data: dict) -> dict:
     """items[*].images 이미지 정규화 (R2 미러링)."""
     from backend.domain.samba.image.service import ImageTransformService
+
     if not isinstance(svc, ImageTransformService):
         return post_data
 
@@ -101,16 +112,22 @@ async def normalize_images(svc, post_data: dict) -> dict:
         imgs = item.get("images") or []
         if imgs:
             # URL 정리
-            urls = [clean_url(i.get("vendorPath", "")) for i in imgs if isinstance(i, dict)]
+            urls = [
+                clean_url(i.get("vendorPath", "")) for i in imgs if isinstance(i, dict)
+            ]
             urls = [u for u in urls if u]
             try:
-                fixed, _ = await svc.mirror_oversized_to_r2(urls, **_IMG_KW)
+                fixed, _, _ = await svc.mirror_oversized_to_r2(urls, **_IMG_KW)
                 for idx, img in enumerate(imgs):
                     if isinstance(img, dict) and idx < len(fixed):
                         img = dict(img)
                         img["vendorPath"] = fixed[idx]
-                imgs = [dict(i, vendorPath=f) if isinstance(i, dict) and idx < len(fixed) else i
-                        for idx, (i, f) in enumerate(zip(imgs, fixed))]
+                imgs = [
+                    dict(i, vendorPath=f)
+                    if isinstance(i, dict) and idx < len(fixed)
+                    else i
+                    for idx, (i, f) in enumerate(zip(imgs, fixed))
+                ]
                 item["images"] = imgs
             except Exception as e:
                 print(f"    이미지 정규화 실패(원본유지): {e}")
@@ -130,7 +147,9 @@ async def update_db(conn, old_spid: str, new_spid: str) -> int:
         )
         WHERE market_product_nos ->> $1 = $3
         """,
-        ACCOUNT_ID, new_spid, old_spid,
+        ACCOUNT_ID,
+        new_spid,
+        old_spid,
     )
     return int(result.split()[-1]) if result else 0
 
@@ -160,11 +179,12 @@ async def main() -> None:
     spid_list = [d["seller_product_id"] for d in denied]
     samba_map: dict[str, tuple[str, str]] = {}
     for i in range(0, len(spid_list), 100):
-        batch = spid_list[i:i+100]
+        batch = spid_list[i : i + 100]
         rows = await pg.fetch(
             "SELECT market_product_nos ->> $1 AS spid, style_code, brand "
             "FROM samba_collected_product WHERE market_product_nos ->> $1 = ANY($2)",
-            ACCOUNT_ID, batch,
+            ACCOUNT_ID,
+            batch,
         )
         for r in rows:
             samba_map[r["spid"]] = (
@@ -176,13 +196,16 @@ async def main() -> None:
 
     # SQLAlchemy session — ImageTransformService용
     engine = _make_engine()
-    AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    AsyncSessionLocal = sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
 
     ok, fail = 0, 0
     fail_log = []
 
     async with AsyncSessionLocal() as session:
         from backend.domain.samba.image.service import ImageTransformService
+
         img_svc = ImageTransformService(session)
 
         for i, item in enumerate(denied, 1):
@@ -192,7 +215,11 @@ async def main() -> None:
 
             try:
                 resp = await client.get_product(spid)
-                data = resp.get("data", resp) if isinstance(resp, dict) and "data" in resp else resp
+                data = (
+                    resp.get("data", resp)
+                    if isinstance(resp, dict) and "data" in resp
+                    else resp
+                )
                 if not isinstance(data, dict):
                     fail += 1
                     continue
@@ -246,7 +273,9 @@ async def main() -> None:
                 await pg2.close()
 
                 ok += 1
-                print(f"  ✓ [{i:,}/{len(denied):,}] {spid}→{new_spid} [{current_code}→{LOTTE_CODE}] DB:{updated} ({name[:30]})")
+                print(
+                    f"  ✓ [{i:,}/{len(denied):,}] {spid}→{new_spid} [{current_code}→{LOTTE_CODE}] DB:{updated} ({name[:30]})"
+                )
                 await asyncio.sleep(0.5)
 
             except Exception as e:
@@ -259,7 +288,7 @@ async def main() -> None:
 
     await engine.dispose()
 
-    print(f"\n  ═══════════════════════════════════════")
+    print("\n  ═══════════════════════════════════════")
     print(f"  완료: 성공 {ok:,} / 실패 {fail:,}")
     if fail_log:
         print(f"\n  실패 ({len(fail_log)}개):")

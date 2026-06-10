@@ -187,9 +187,20 @@ class GMarketMarketPlugin(MarketPlugin):
             if _imgs:
                 # min_dim=600 — ESM 최소 600x600 미달 이미지 LANCZOS 업스케일 + R2 미러
                 # (msscdn 등 차단 도메인도 strict 모드로 다운로드/재호스팅됨)
-                product_copy["images"], _ = await _img_svc.mirror_oversized_to_r2(
-                    _imgs, min_dim=600
-                )
+                (
+                    product_copy["images"],
+                    _,
+                    _failed_imgs,
+                ) = await _img_svc.mirror_oversized_to_r2(_imgs, min_dim=600)
+                # 다운로드 실패 이미지는 크기 불명(600x600 미달 가능) → ESM 거부 방지
+                if _failed_imgs:
+                    product_copy["images"] = [
+                        u for u in product_copy["images"] if u not in _failed_imgs
+                    ]
+                    logger.warning(
+                        f"[지마켓] 이미지 다운로드 실패 {len(_failed_imgs)}개 → 제외: "
+                        + ", ".join(list(_failed_imgs)[:3])
+                    )
             if _detail_imgs:
                 (
                     product_copy["detail_images"],

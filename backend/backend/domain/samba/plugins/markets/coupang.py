@@ -272,16 +272,17 @@ class CoupangPlugin(MarketPlugin):
             _detail_html = product.get("detail_html") or ""
 
             if _images:
-                product["images"], _ = await _img_svc.mirror_oversized_to_r2(
+                product["images"], _, _ = await _img_svc.mirror_oversized_to_r2(
                     _images, **_kw
                 )
             if _detail_images:
                 (
                     product["detail_images"],
                     _,
+                    _,
                 ) = await _img_svc.mirror_oversized_to_r2(_detail_images, **_kw)
             if _main:
-                fixed, _ = await _img_svc.mirror_oversized_to_r2([_main], **_kw)
+                fixed, _, _ = await _img_svc.mirror_oversized_to_r2([_main], **_kw)
                 product["coupang_main_image"] = fixed[0] if fixed else ""
             if _detail_html:
                 product["detail_html"] = await _img_svc.mirror_oversized_in_html(
