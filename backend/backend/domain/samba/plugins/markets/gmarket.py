@@ -70,10 +70,18 @@ def _infer_group_names(options: list[dict]) -> list[str] | None:
         u = [v for v in vals if v]
         if not u:
             return False
-        hit = sum(1 for v in u if _SIZE_RE.match(v.replace(" ", "")))
+        # trailing 숫자 suffix 제거 후 매칭 — "2XS 4" → "2XS" (#399)
+        hit = sum(1 for v in u if _SIZE_RE.match(re.sub(r"\s+\d+$", "", v)))
         return hit >= len(u) * 0.6
 
+    def _is_all_numeric(vals: list[str]) -> bool:
+        u = [v for v in vals if v]
+        return bool(u) and all(re.match(r"^\d+$", v) for v in u)
+
     a0, a1 = _is_size_axis(axis0), _is_size_axis(axis1)
+    # 양 축 모두 순수 숫자 → 허리/인심 팬츠 사이즈 조합 (#399)
+    if not a0 and not a1 and _is_all_numeric(axis0) and _is_all_numeric(axis1):
+        return ["허리", "인심"]
     if a1 and not a0:
         return ["색상", "사이즈"]
     if a0 and not a1:
