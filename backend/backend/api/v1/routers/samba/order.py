@@ -7611,6 +7611,12 @@ async def sync_orders_from_markets(
             synced = 0
             _processed = 0
             _total = len(orders_data)
+            # 청크 commit (issue #401): 건당 commit → 100건마다 + 루프 끝 일괄 commit.
+            # 롯데홈쇼핑처럼 cancel 대량(대부분 update) 계정의 per-account 300초 timeout 방지.
+            # _pending 은 create/update 양쪽에서 증가 — synced(create만 증가)에 묶으면
+            # update 대량 계정이 중간 commit을 못 타 전체가 한 번에 몰림.
+            _pending = 0
+            _PERSIST_CHUNK = 100
             # 롯데홈쇼핑 style_code 보강 캐시 (issue #365) — account 단위.
             # (ch, 토큰셋) → _matched entry. 같은 토큰 조합 DB 재조회 차단.
             _lh_style_cache: dict = {}
@@ -8443,10 +8449,23 @@ async def sync_orders_from_markets(
                         if _cv is not None and _cv != getattr(existing, _cf, None):
                             update_fields[_cf] = _cv
                     if update_fields:
-                        await svc.update_order(existing.id, update_fields)
+                        await svc.update_order(existing.id, update_fields, commit=False)
+                        _pending += 1
+                        if _pending >= _PERSIST_CHUNK:
+                            await session.commit()
+                            _pending = 0
                     continue
-                await svc.create_order(order_data)
+                await svc.create_order(order_data, commit=False)
                 synced += 1
+                _pending += 1
+                if _pending >= _PERSIST_CHUNK:
+                    await session.commit()
+                    _pending = 0
+
+            # 루프 끝 잔여 청크 일괄 commit (issue #401) — continue 분기와 무관하게 항상 실행
+            if _pending:
+                await session.commit()
+                _pending = 0
 
             # 롯데홈쇼핑: deliver_list가 교체한 index-format 레코드(K72118:0 등) DB에서 삭제
             if _lh_replaced_old_keys:
