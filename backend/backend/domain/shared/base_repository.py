@@ -98,11 +98,14 @@ class BaseRepository(Generic[ModelType]):
             logger.exception(f"Error listing {self.model.__name__}: {e}")
             raise
 
-    async def create_async(self, **kwargs: Any) -> ModelType:
+    async def create_async(self, commit: bool = True, **kwargs: Any) -> ModelType:
         """
         Create new entity.
 
         Args:
+            commit: True(기본)면 즉시 commit+refresh. False면 flush만 하고 refresh
+                생략 — 대량 persist 루프에서 청크 commit으로 묶을 때 사용해 commit
+                왕복 비용을 줄인다 (issue #401). 호출부가 일괄 commit 책임.
             **kwargs: Entity attributes
 
         Returns:
@@ -115,8 +118,12 @@ class BaseRepository(Generic[ModelType]):
         try:
             entity = self.model(**kwargs)
             self.session.add(entity)
-            await self.session.commit()
-            await self.session.refresh(entity)
+            if commit:
+                await self.session.commit()
+                await self.session.refresh(entity)
+            else:
+                # 청크 commit 모드: INSERT만 flush해 PK 확보, commit은 호출부가 일괄 수행
+                await self.session.flush()
 
             entity_id = getattr(entity, "id", None) or getattr(entity, "key", "?")
             logger.debug(f"Created {self.model.__name__} with id {entity_id}")
@@ -132,12 +139,16 @@ class BaseRepository(Generic[ModelType]):
             logger.exception(f"Error creating {self.model.__name__}: {e}")
             raise
 
-    async def update_async(self, id: str | int, **kwargs: Any) -> Optional[ModelType]:
+    async def update_async(
+        self, id: str | int, commit: bool = True, **kwargs: Any
+    ) -> Optional[ModelType]:
         """
         Update entity by ID.
 
         Args:
             id: Entity ID
+            commit: True(기본)면 즉시 commit+refresh. False면 flush만 하고 refresh
+                생략 — 대량 persist 루프에서 청크 commit으로 묶을 때 사용 (issue #401).
             **kwargs: Fields to update
 
         Returns:
@@ -160,8 +171,12 @@ class BaseRepository(Generic[ModelType]):
                 entity.updated_at = now_kst()
 
             self.session.add(entity)
-            await self.session.commit()
-            await self.session.refresh(entity)
+            if commit:
+                await self.session.commit()
+                await self.session.refresh(entity)
+            else:
+                # 청크 commit 모드: UPDATE만 flush, commit은 호출부가 일괄 수행
+                await self.session.flush()
 
             logger.debug(f"Updated {self.model.__name__} with id {id}")
             return entity

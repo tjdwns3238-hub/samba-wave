@@ -170,12 +170,141 @@ async function _clearSsgCookies() {
   return n
 }
 
+// ── SSG 계정별 세션 재사용 (2026-06-10, 데몬 account_sessions.json 패턴 이식) ──
+// SSG는 잦은 자동 로그인 자체를 "비정상 자동접근"으로 감지해 계정을 잠근다(비번 정확해도 잠김).
+// → fresh 로그인 횟수 최소화가 본질: 성공 세션 쿠키를 계정별로 저장하고, 계정 스왑 시
+//   저장 세션을 복원해 로그인 상태면 로그인 POST 자체를 생략한다.
+let _ssgAccountSessions = null // accountId → cookies[] (storage lazy load)
+let _ssgLastLoginAccount = '' // 현재 ssg.com 세션의 계정 (storage 동기화)
+
+async function _loadSsgSessionState() {
+  if (_ssgAccountSessions !== null) return
+  try {
+    const st = await chrome.storage.local.get(['_ssgAccountSessions', '_ssgLastLoginAccount'])
+    _ssgAccountSessions = st._ssgAccountSessions || {}
+    _ssgLastLoginAccount = st._ssgLastLoginAccount || ''
+  } catch {
+    _ssgAccountSessions = {}
+  }
+}
+
+async function _saveSsgSession(accountId) {
+  if (!accountId) return
+  try {
+    await _loadSsgSessionState()
+    const cookies = await chrome.cookies.getAll({ domain: 'ssg.com' })
+    if (!cookies.length) return
+    _ssgAccountSessions[accountId] = cookies
+    _ssgLastLoginAccount = accountId
+    await chrome.storage.local.set({ _ssgAccountSessions, _ssgLastLoginAccount: accountId })
+    console.log(`[자동로그인][SSG] 세션 저장 (acc=${accountId}, 쿠키 ${cookies.length}개) — 재로그인 최소화`)
+  } catch (e) {
+    console.warn(`[자동로그인][SSG] 세션 저장 실패(무시): ${e?.message || e}`)
+  }
+}
+
+// 저장 세션 복원 — 현 쿠키 클리어 후 대상 계정 쿠키 주입. 복원할 세션 있으면 true.
+async function _restoreSsgSession(accountId) {
+  try {
+    await _loadSsgSessionState()
+    const saved = _ssgAccountSessions?.[accountId]
+    await _clearSsgCookies() // 옛/다른 계정 세션 제거
+    if (!saved || !saved.length) return false
+    for (const ck of saved) {
+      const host = ck.domain.replace(/^\./, '')
+      const p = {
+        url: `${ck.secure ? 'https' : 'http'}://${host}${ck.path}`,
+        name: ck.name,
+        value: ck.value,
+        path: ck.path,
+        secure: ck.secure,
+        httpOnly: ck.httpOnly,
+      }
+      if (ck.domain.startsWith('.')) p.domain = ck.domain
+      if (ck.sameSite && ck.sameSite !== 'unspecified') p.sameSite = ck.sameSite
+      if (ck.expirationDate) p.expirationDate = ck.expirationDate
+      try { await chrome.cookies.set(p) } catch {}
+    }
+    return true
+  } catch (e) {
+    console.warn(`[자동로그인][SSG] 세션 복원 실패(무시): ${e?.message || e}`)
+    return false
+  }
+}
+
+// SSG 로그인 상태 확인 — SW fetch(쿠키 자동 포함). 비로그인이면 member.ssg.com 로그인 리다이렉트.
+async function _isSsgLoggedIn() {
+  try {
+    const res = await fetch(AUTO_LOGIN_SITES.ssg.checkUrl, { redirect: 'follow', credentials: 'include' })
+    return !AUTO_LOGIN_SITES.ssg.isLoginPage(res.url || '')
+  } catch {
+    return false
+  }
+}
+
+// ── 계정별 로그인 실패 차단 (데몬 _login_fail_count/_failed_login_accounts 패턴 이식) ──
+// 잠긴/비번 틀린 계정에 잡마다 재로그인하면 SSG 잠금이 영구화 → 30분 쿨다운 + 5회 영구차단.
+// accountId 명시(송장수집) 호출에도 적용 — 기존 사이트 단위 쿨다운은 accountId 시 우회됐음.
+const _ACCOUNT_FAIL_COOLDOWN_MS = 30 * 60 * 1000
+const _ACCOUNT_FAIL_MAX = 5
+let _accountLoginFail = null // `${siteKey}::${accountId}` → { count, at } (storage 영속)
+
+async function _loadAccountLoginFail() {
+  if (_accountLoginFail !== null) return
+  try {
+    const st = await chrome.storage.local.get('_accountLoginFail')
+    _accountLoginFail = st._accountLoginFail || {}
+  } catch {
+    _accountLoginFail = {}
+  }
+}
+
+async function _recordAccountLoginFail(siteKey, accountId) {
+  if (!accountId) return
+  await _loadAccountLoginFail()
+  const k = `${siteKey}::${accountId}`
+  const cur = _accountLoginFail[k] || { count: 0, at: 0 }
+  _accountLoginFail[k] = { count: cur.count + 1, at: Date.now() }
+  try { await chrome.storage.local.set({ _accountLoginFail }) } catch {}
+}
+
+async function _clearAccountLoginFail(siteKey, accountId) {
+  if (!accountId) return
+  await _loadAccountLoginFail()
+  const k = `${siteKey}::${accountId}`
+  if (_accountLoginFail[k]) {
+    delete _accountLoginFail[k]
+    try { await chrome.storage.local.set({ _accountLoginFail }) } catch {}
+  }
+}
+
+// 차단 상태 조회 — null(허용) / 차단 사유 문자열
+async function _accountLoginBlocked(siteKey, accountId) {
+  if (!accountId) return null
+  await _loadAccountLoginFail()
+  const rec = _accountLoginFail[`${siteKey}::${accountId}`]
+  if (!rec) return null
+  if (rec.count >= _ACCOUNT_FAIL_MAX) {
+    return `로그인 ${rec.count}회 누적 실패 — 영구 차단(비번 재설정 + samba 동기화 후 성공 1회로 해제)`
+  }
+  const elapsed = Date.now() - rec.at
+  if (elapsed < _ACCOUNT_FAIL_COOLDOWN_MS) {
+    return `로그인 실패 쿨다운 ${Math.ceil((_ACCOUNT_FAIL_COOLDOWN_MS - elapsed) / 60000)}분 남음 (누적 ${rec.count}/${_ACCOUNT_FAIL_MAX}회)`
+  }
+  return null
+}
+
+// 직전 _spaDirectLogin 의 치명적 실패 정보 — 자격증명 오류/계정 잠금은 재시도 무의미(잠금만 갱신).
+// _ensureLoggedInImpl 재시도 루프가 이 플래그를 보고 즉시 중단한다.
+let _spaLoginFatal = null // { reason: 'locked'|'credential', message }
+
 // SPA 직접 로그인 — Chrome 자동완성 의존 없이 .value 직접 설정 + button.click()
 // LOTTEON / ABCmart / SSG처럼 vanilla input + form submit 구조의 사이트에서 작동
 // (검증 완료: 가짜 자격증명으로도 click()이 서버 응답까지 도달함을 확인)
 async function _spaDirectLogin(siteKey, username, password) {
   const site = AUTO_LOGIN_SITES[siteKey]
   if (!site) return false
+  _spaLoginFatal = null
 
   // [계정 전환] 정식 로그아웃 URL 호출 → 서버가 세션 expire + Set-Cookie 로 클라 쿠키 정리.
   // 쿠키 직접 삭제는 서버 세션 잔존 + localStorage 잔여 + 무신사 보안 비정상 패턴 감지 위험.
@@ -423,7 +552,21 @@ async function _spaDirectLogin(siteKey, username, password) {
           chrome.debugger.onEvent.removeListener(dialogHandler)
           return false
         }
-        const urlLeftLoginPage = !site.isLoginPage(tabInfo.url || '')
+        const _curUrl = tabInfo.url || ''
+        const urlLeftLoginPage = !site.isLoginPage(_curUrl)
+
+        // [2026-06-10] findIdPw 리다이렉트 = SSG 계정 보안잠금. 기존엔 "로그인 페이지 이탈"로
+        // 성공 오판 → 스크랩 비로그인 timeout → 재시도가 또 로그인 → 잠금 영구 갱신.
+        // 잠긴 계정은 재시도해도 계속 튕기며 잠금만 유지 → 즉시 fatal 중단.
+        if (/findIdPw/i.test(_curUrl)) {
+          console.warn(`[자동로그인][SPA] ${site.name} findIdPw 리다이렉트 — 계정 보안잠금 감지, 재시도 중단`)
+          _spaLoginFatal = {
+            reason: 'locked',
+            message: `로그인 실패(${site.name} 계정 잠금 — findIdPw 리다이렉트). 사이트에서 비밀번호 변경 + samba 소싱처계정 동기화 필요`,
+          }
+          chrome.debugger.onEvent.removeListener(dialogHandler)
+          return false
+        }
 
         // 자격증명 오류 alert만 실패로 간주 (URL이 로그인 페이지에 남아있을 때만)
         if (dialogMessage && dialogMessage.length > 0 && !urlLeftLoginPage) {
@@ -431,6 +574,11 @@ async function _spaDirectLogin(siteKey, username, password) {
           const looksLikeCredentialError = CREDENTIAL_ERROR_PHRASES.some(p => msgLower.includes(p.toLowerCase()))
           if (looksLikeCredentialError) {
             console.log(`[자동로그인][SPA] ${site.name} 자격증명 오류 alert: "${dialogMessage.substring(0, 60)}"`)
+            // 자격증명 오류/캡차/잠금 alert = 재시도해도 같은 결과 + SSG 잠금만 갱신 → fatal
+            _spaLoginFatal = {
+              reason: 'credential',
+              message: `로그인 실패(${site.name} 자격증명 오류: ${dialogMessage.substring(0, 60)})`,
+            }
             chrome.debugger.onEvent.removeListener(dialogHandler)
             return false
           }
@@ -599,6 +747,18 @@ async function _ensureLoggedInImpl(siteKey, accountId) {
     }
   }
 
+  // [2026-06-10] 계정별 실패 차단 — accountId 명시(송장수집)에도 적용. 잠긴/비번 틀린 계정에
+  // 잡마다 재로그인하면 SSG가 잠금을 못 풀어 영구화됨 → 30분 쿨다운 + 5회 영구차단.
+  const _blockReason = await _accountLoginBlocked(siteKey, accountId)
+  if (_blockReason) {
+    console.warn(`[자동로그인] ${site.name}(${accountId}) 차단 — ${_blockReason}`)
+    globalThis._lastEnsureLoginError = {
+      fatal: true,
+      message: `로그인 실패(${site.name} ${_blockReason})`,
+    }
+    return false
+  }
+
   // 계정별 최근 성공 캐시 체크 — 같은 계정으로 10분 이내 로그인 확인됐으면 스킵
   // (송장수집 100건 잡 돌릴 때 매 주문마다 ensureLoggedIn 트리거되는 비용 + alert 폭주 차단)
   const ACCOUNT_LOGIN_TTL_MS = 10 * 60 * 1000
@@ -625,10 +785,17 @@ async function _ensureLoggedInImpl(siteKey, accountId) {
 
   try {
     let ok = false
+    _spaLoginFatal = null // 이전 사이트/계정의 fatal 잔존값 제거
     for (let attempt = 1; attempt <= AUTO_LOGIN_MAX_RETRIES; attempt++) {
       console.log(`[자동로그인] ${site.name} 시도 (${attempt}/${AUTO_LOGIN_MAX_RETRIES})`)
       ok = await _ensureLoggedInSingle(siteKey, accountId)
       if (ok) break
+      // [2026-06-10] 자격증명 오류/계정 잠금 = 재시도해도 같은 결과 + 로그인 POST 마다
+      // SSG 실패 카운트/잠금만 갱신 → 즉시 중단 (잔여 재시도 폐기)
+      if (_spaLoginFatal) {
+        console.warn(`[자동로그인] ${site.name} 치명적 실패(${_spaLoginFatal.reason}) — 재시도 중단`)
+        break
+      }
       if (attempt < AUTO_LOGIN_MAX_RETRIES) {
         await wait(3000)
       }
@@ -637,6 +804,11 @@ async function _ensureLoggedInImpl(siteKey, accountId) {
     if (ok) {
       autoLoginState.failedAttempts[siteKey] = 0
       autoLoginState.cooldownUntil[siteKey] = 0
+      globalThis._lastEnsureLoginError = null
+      await _clearAccountLoginFail(siteKey, accountId) // 성공 → 계정별 실패 카운트 리셋
+      if (siteKey === 'ssg') {
+        await _saveSsgSession(accountId || '_default') // 세션 저장 → 다음 잡 fresh 로그인 생략
+      }
       // 자동로그인 성공 시각 기록 — [siteKey][accountId] 2계층 구조.
       // 같은 사이트라도 계정이 다르면 별도 캐시. accountId 없으면 '_default' 키로 저장.
       // storage 동기화로 서비스 워커 재시작 후에도 캐시 복원.
@@ -657,6 +829,13 @@ async function _ensureLoggedInImpl(siteKey, accountId) {
     } else {
       autoLoginState.failedAttempts[siteKey] = (autoLoginState.failedAttempts[siteKey] || 0) + 1
       autoLoginState.cooldownUntil[siteKey] = Date.now() + AUTO_LOGIN_COOLDOWN_MS
+      // 계정별 실패 기록 + 호출자(송장 잡)가 백엔드에 보고할 표준 메시지("로그인 실패" 포함 —
+      // 백엔드 서킷브레이커가 이 문구로 계정 단위 재큐잉을 차단한다)
+      await _recordAccountLoginFail(siteKey, accountId)
+      globalThis._lastEnsureLoginError = {
+        fatal: !!_spaLoginFatal,
+        message: _spaLoginFatal?.message || `로그인 실패(${site.name} 자동로그인 실패 — acc=${accountId || '기본'})`,
+      }
       console.log(`[자동로그인] ❌ ${site.name} ${AUTO_LOGIN_MAX_RETRIES}회 실패 — ${AUTO_LOGIN_COOLDOWN_MS / 60000}분 쿨다운`)
       // 알람은 라디오 기본 계정 모드(!accountId)만 발송 — accountId 명시 트리거(송장수집)는
       // 잡당 시도라 실패 알람 폭주 위험. 호출자가 wrong_account 로 분류해서 모달로 보여줌.
@@ -701,6 +880,25 @@ async function _ensureLoggedInSingle(siteKey, accountId) {
   // 백엔드 자격증명 없으면 즉시 실패. chrome.debugger triple-click 폴백 제거 (드롭다운 노출 방지).
   const SPA_DIRECT_LOGIN_SITES = ['lotteon', 'abcmart', 'ssg', 'musinsa']
   if (SPA_DIRECT_LOGIN_SITES.includes(siteKey)) {
+    // [2026-06-10] SSG 세션 재사용 — fresh 로그인 횟수 자체를 줄여 "비정상 자동접근" 잠금 회피.
+    // ① 현 세션이 이미 잡 계정이면 로그인 생략 ② 저장세션 복원으로 살아나면 로그인 생략.
+    if (siteKey === 'ssg' && accountId) {
+      await _loadSsgSessionState()
+      if (_ssgLastLoginAccount === accountId && (await _isSsgLoggedIn())) {
+        console.log(`[자동로그인] SSG 현 세션 유지 (acc=${accountId}) — 로그인 생략`)
+        return true
+      }
+      if (await _restoreSsgSession(accountId)) {
+        if (await _isSsgLoggedIn()) {
+          _ssgLastLoginAccount = accountId
+          try { await chrome.storage.local.set({ _ssgLastLoginAccount: accountId }) } catch {}
+          console.log(`[자동로그인] SSG 저장세션 복원 성공 (acc=${accountId}) — fresh 로그인 생략`)
+          return true
+        }
+        console.log(`[자동로그인] SSG 저장세션 만료 (acc=${accountId}) — fresh 로그인 진행`)
+      }
+    }
+
     // accountId 지정 시 — 사용자 요구 = 자동 로그아웃 + 새 계정 로그인 (송장수집 풀 자동화).
     // 사전 로그인 체크 스킵하고 _spaDirectLogin 진입 (그 함수가 쿠키 삭제 후 새 로그인 수행).
     // accountId 없을 때만(라디오 기본 모드) 이미 로그인됐는지 체크해서 스킵.

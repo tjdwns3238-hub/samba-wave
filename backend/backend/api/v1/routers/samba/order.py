@@ -3062,6 +3062,54 @@ async def approve_cancel(
         logger.info(f"[취소승인][SSG] {order.order_number} 취소승인 완료")
         return {"ok": True, "message": "SSG 취소승인 완료"}
 
+    elif account.market_type in ("gmarket", "auction"):
+        # ESM(옥션/G마켓) 취소승인 — PUT /claim/v1/sa/Cancel/{OrderNo}
+        # site_type: 옥션=1, G마켓=2 (PUT 엔드포인트 기준, search_cancels 의 1/3 과 다름)
+        from backend.domain.samba.proxy.esmplus import (
+            ESMPlusClient,
+            resolve_esm_credentials,
+        )
+        from backend.domain.samba.returns.repository import SambaReturnRepository
+
+        hosting_id, secret_key = await resolve_esm_credentials(session, account)
+        seller_id = (account.seller_id or "").strip()
+        if not hosting_id or not secret_key:
+            raise HTTPException(status_code=400, detail="ESM 인증정보 없음")
+        if not seller_id:
+            raise HTTPException(status_code=400, detail="ESM seller_id 없음")
+
+        site_type = 2 if account.market_type == "gmarket" else 1
+        client = ESMPlusClient(
+            hosting_id, secret_key, seller_id, site=account.market_type
+        )
+        try:
+            await client.approve_cancel_by_orderno(order.order_number, site_type)
+        except Exception as e:
+            # 옥션 resultCode=8668 (BizRuleCode W8-2) = 이미 취소승인된 건 → 멱등 성공 처리
+            if "8668" in str(e):
+                logger.info(
+                    f"[취소승인][ESM] {order.order_number} 이미 취소승인됨(멱등 처리)"
+                )
+            else:
+                raise HTTPException(status_code=500, detail=f"취소승인 실패: {e}")
+        finally:
+            try:
+                await client.aclose()
+            except Exception:
+                pass
+
+        # status='cancelled' 도 같이 변경 — 다른 마켓 분기와 일관(빨간 '취소요청' 배지 제거)
+        await svc.update_order(
+            order_id, {"shipping_status": "취소완료", "status": "cancelled"}
+        )
+        ret_repo = SambaReturnRepository(session)
+        for ret in await ret_repo.filter_by_async(order_id=order_id):
+            await ret_repo.update_async(
+                ret.id, status="cancelled", market_order_status="취소완료"
+            )
+        logger.info(f"[취소승인][ESM] {order.order_number} 취소승인 완료")
+        return {"ok": True, "message": "ESM 취소승인 완료"}
+
     else:
         raise HTTPException(
             status_code=400, detail=f"{account.market_type} 취소승인 미지원"
@@ -7563,6 +7611,12 @@ async def sync_orders_from_markets(
             synced = 0
             _processed = 0
             _total = len(orders_data)
+            # 청크 commit (issue #401): 건당 commit → 100건마다 + 루프 끝 일괄 commit.
+            # 롯데홈쇼핑처럼 cancel 대량(대부분 update) 계정의 per-account 300초 timeout 방지.
+            # _pending 은 create/update 양쪽에서 증가 — synced(create만 증가)에 묶으면
+            # update 대량 계정이 중간 commit을 못 타 전체가 한 번에 몰림.
+            _pending = 0
+            _PERSIST_CHUNK = 100
             # 롯데홈쇼핑 style_code 보강 캐시 (issue #365) — account 단위.
             # (ch, 토큰셋) → _matched entry. 같은 토큰 조합 DB 재조회 차단.
             _lh_style_cache: dict = {}
@@ -7613,6 +7667,14 @@ async def sync_orders_from_markets(
                         _ch_id,
                         _lh_style_cache,
                     )
+                # 3.6) 쿠팡 vendor_item_id 글로벌 폴백 — _pid(productId) 오저장/노후화 대비 (#398).
+                # 등록 직후 임시 productId가 승인 후 바뀌어도 _vid(옵션ID)는 안정적.
+                if not _matched:
+                    _vid = str(order_data.get("vendor_item_id") or "")
+                    if _vid:
+                        _cand = _mpn_global.get(_vid)
+                        if _cand and not _cand.get("ambiguous"):
+                            _matched = _cand
                 # 플레이오토 별칭(site_id) 단위 매칭 검증 — 1 channel_id에 5개 별칭이
                 # 묶인 구조에서 사용자가 특정 별칭에만 등록한 cp가 다른 별칭 주문에
                 # 잘못 매칭되는 것을 차단. cp.market_product_nos에 `{account_id}_sites`
@@ -8387,10 +8449,23 @@ async def sync_orders_from_markets(
                         if _cv is not None and _cv != getattr(existing, _cf, None):
                             update_fields[_cf] = _cv
                     if update_fields:
-                        await svc.update_order(existing.id, update_fields)
+                        await svc.update_order(existing.id, update_fields, commit=False)
+                        _pending += 1
+                        if _pending >= _PERSIST_CHUNK:
+                            await session.commit()
+                            _pending = 0
                     continue
-                await svc.create_order(order_data)
+                await svc.create_order(order_data, commit=False)
                 synced += 1
+                _pending += 1
+                if _pending >= _PERSIST_CHUNK:
+                    await session.commit()
+                    _pending = 0
+
+            # 루프 끝 잔여 청크 일괄 commit (issue #401) — continue 분기와 무관하게 항상 실행
+            if _pending:
+                await session.commit()
+                _pending = 0
 
             # 롯데홈쇼핑: deliver_list가 교체한 index-format 레코드(K72118:0 등) DB에서 삭제
             if _lh_replaced_old_keys:

@@ -322,11 +322,20 @@ export default function OrderInfoCell(props: Props) {
             Nike: `https://www.nike.com/kr/orders/${srcNo}`,
             SSG: `https://pay.ssg.com/myssg/orderInfoDetail.ssg?orordNo=${encodeURIComponent(srcNo)}&viewType=Ssg`,
             LOTTEON: `https://www.lotteon.com/p/order/claim/giftBoxDetail?odNo=${srcNo}&type=snd`,
+            GSShop: `https://www.gsshop.com/ord/dlvcursta/popup/ordDtl.gs?ordNo=${encodeURIComponent(srcNo)}&ecOrdTypCd=S`,
           }
           const url = orderUrlMap[sourceSiteCode]
           if (!url) { showAlert(`${o.source_site || '알수없는'} 소싱처는 원주문링크를 지원하지 않습니다`, 'info'); return }
           window.open(url, '_blank')
         }} style={{ fontSize: '0.7rem', padding: '0.125rem 0.375rem', background: 'transparent', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#B0B0B0', cursor: 'pointer' }}>원주문링크</button>
+        <button onClick={() => {
+          if (!o.order_number) { showAlert('주문번호가 없습니다', 'info'); return }
+          window.open(`/samba/returns?order_number=${encodeURIComponent(o.order_number)}`, '_blank')
+        }} style={{ fontSize: '0.7rem', padding: '0.125rem 0.375rem', background: 'transparent', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#B0B0B0', cursor: 'pointer' }}>반품/교환</button>
+        <button onClick={() => {
+          if (!o.order_number) { showAlert('주문번호가 없습니다', 'info'); return }
+          window.open(`/samba/cs?search=${encodeURIComponent(o.order_number)}`, '_blank')
+        }} style={{ fontSize: '0.7rem', padding: '0.125rem 0.375rem', background: 'transparent', border: '1px solid #2D2D2D', borderRadius: '4px', color: '#B0B0B0', cursor: 'pointer' }}>CS</button>
       </div>
 
       {/* 주문자/수령인/연락처/주소 한 줄 */}

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback, useRef, Fragment } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { accountApi, orderApi, type SambaMarketAccount } from '@/lib/samba/api/commerce'
 import { returnApi, type SambaReturn } from '@/lib/samba/api/support'
 import { showAlert, showConfirm } from '@/components/samba/Modal'
@@ -60,6 +61,27 @@ export default function ReturnsPage() {
   const [dateLocked, setDateLocked] = useState(false)
   const [accounts, setAccounts] = useState<SambaMarketAccount[]>([])
 
+  // 주문관리에서 `/samba/returns?order_number=주문번호` 로 새 탭 진입 시
+  // 해당 주문의 반품/교환만 표시 (날짜 범위 무시). 마운트 1회만 시드.
+  const searchParams = useSearchParams()
+  const [orderNumberFilter, setOrderNumberFilter] = useState('')
+  const seededRef = useRef(false)
+  useEffect(() => {
+    if (seededRef.current) return
+    const q = searchParams.get('order_number')?.trim()
+    if (q) {
+      seededRef.current = true
+      setOrderNumberFilter(q)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 전체보기 — 주문번호 필터 해제 + URL 에서 ?order_number 제거 (새로고침 시 재적용 방지)
+  const clearOrderNumberFilter = () => {
+    setOrderNumberFilter('')
+    window.history.replaceState(null, '', window.location.pathname)
+  }
+
   useEffect(() => { accountApi.listActiveCached(setAccounts) }, [])
   useEffect(() => { logRef.current && (logRef.current.scrollTop = logRef.current.scrollHeight) }, [logMessages])
 
@@ -95,12 +117,22 @@ export default function ReturnsPage() {
 
   const load = useCallback(async () => {
     setLoading(true)
-    const data = await returnApi.list(undefined, filterStatus || undefined, filterType || undefined, 500, customStart || undefined, customEnd || undefined).catch(() => [])
+    // 주문번호 필터 진입 시 날짜 범위는 보내지 않음 — 해당 주문 전체 반품/교환을 잡기 위함
+    const onf = orderNumberFilter.trim()
+    const data = await returnApi.list(
+      undefined,
+      filterStatus || undefined,
+      filterType || undefined,
+      500,
+      onf ? undefined : (customStart || undefined),
+      onf ? undefined : (customEnd || undefined),
+      onf || undefined,
+    ).catch(() => [])
     const st = await returnApi.getStats().catch(() => ({}))
     setReturns(data)
     setStats(st)
     setLoading(false)
-  }, [filterStatus, filterType, customStart, customEnd])
+  }, [filterStatus, filterType, customStart, customEnd, orderNumberFilter])
 
   useEffect(() => { load() }, [load])
 
@@ -297,6 +329,19 @@ export default function ReturnsPage() {
           <p style={{ fontSize: '0.875rem', color: '#888' }}>반품교환 요청을 관리</p>
         </div>
       </div>
+
+      {/* 주문번호 필터 배너 — /returns?order_number=XXXX 진입 시 노출 */}
+      {orderNumberFilter && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', background: 'rgba(255,140,0,0.08)', border: '1px solid rgba(255,140,0,0.3)', borderRadius: '8px', padding: '0.6rem 1rem', marginBottom: '1rem' }}>
+          <span style={{ fontSize: '0.85rem', color: '#FFB84D' }}>
+            주문 <strong style={{ color: '#FF8C00' }}>{orderNumberFilter}</strong> 관련 반품/교환만 표시
+          </span>
+          <button
+            onClick={clearOrderNumberFilter}
+            style={{ padding: '0.3rem 0.8rem', fontSize: '0.78rem', background: 'transparent', border: '1px solid #3D3D3D', borderRadius: '5px', color: '#C5C5C5', cursor: 'pointer', whiteSpace: 'nowrap' }}
+          >전체보기</button>
+        </div>
+      )}
 
       {/* 통계 카드 */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>

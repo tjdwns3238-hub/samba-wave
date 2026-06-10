@@ -272,7 +272,7 @@ async def autotune_daemon_latest_version() -> dict[str, Any]:
 # 확장앱 자가 업데이트 버전 fallback.
 # 1차 출처는 deploy.sh 가 주입하는 EXTENSION_LATEST_VERSION env(= manifest.json version).
 # env 가 없을 때(로컬 개발 등)만 이 상수 사용 — 평소엔 신경 안 써도 됨.
-_EXT_VERSION_FALLBACK = "2.13.69"
+_EXT_VERSION_FALLBACK = "2.13.70"
 
 
 def _read_extension_version() -> str:

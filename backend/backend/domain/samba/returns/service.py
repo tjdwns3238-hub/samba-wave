@@ -59,14 +59,16 @@ class SambaReturnService:
         skip: int = 0,
         limit: int = 50,
         order_id: Optional[str] = None,
+        order_number: Optional[str] = None,
         status: Optional[str] = None,
         type: Optional[str] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         tenant_id: Optional[str] = None,
     ) -> List[SambaReturn]:
-        # 날짜 필터 또는 tenant_id가 있으면 list_filtered 사용
-        if (start_date and end_date) or tenant_id:
+        # 날짜 필터·tenant_id·order_number 중 하나라도 있으면 list_filtered 사용
+        # (order_number 필터는 날짜 범위 밖 주문도 잡아야 하므로 list_filtered 경로 강제)
+        if (start_date and end_date) or tenant_id or order_number:
             from backend.utils import kst_date_range_to_utc
 
             start_dt, end_dt = None, None
@@ -76,6 +78,7 @@ class SambaReturnService:
                 skip=skip,
                 limit=limit,
                 order_id=order_id,
+                order_number=order_number,
                 status=status,
                 type=type,
                 start_dt=start_dt,

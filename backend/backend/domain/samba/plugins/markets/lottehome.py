@@ -850,13 +850,16 @@ class LotteHomePlugin(MarketPlugin):
                 _pid = product.get("id")
                 if _images:
                     _imgs1, _ = await _img_svc.mirror_with_persistence(_pid, _images)
-                    product["images"], _ = await _img_svc.mirror_oversized_to_r2(_imgs1)
+                    product["images"], _, _ = await _img_svc.mirror_oversized_to_r2(
+                        _imgs1
+                    )
                 if _detail_images:
                     _dimgs1, _ = await _img_svc.mirror_with_persistence(
                         _pid, _detail_images
                     )
                     (
                         product["detail_images"],
+                        _,
                         _,
                     ) = await _img_svc.mirror_oversized_to_r2(_dimgs1)
                 if _detail_html:

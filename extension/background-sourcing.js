@@ -1158,11 +1158,25 @@ async function handleTrackingJob(job) {
       (!_lastEnsured && !currentAccountId)  // 둘 다 모름 → 안전하게 스왑
     )
     let _preemptiveSwapAttempted = false
+    let _loginFailMsg = '' // "로그인 실패" 표준 문구 — 백엔드 서킷브레이커 매칭용
     if (_knownMismatch) {
       _preemptiveSwapAttempted = true
       const swapOk = await _swapToJobAccount('preemptive')
       if (!swapOk) {
-        // 스왑 실패 — 현재 세션 그대로 1차 시도. wrong_account 보고 후 다른 PC fallback.
+        const _le = globalThis._lastEnsureLoginError
+        if (_le?.fatal) {
+          // [2026-06-10] 계정 잠금/자격증명 오류/쿨다운 차단 = 빈 시도는 로그인 POST만 늘려
+          // SSG 잠금을 갱신한다 → 스크랩 시도 없이 즉시 실패 보고 (브레이커가 재큐잉 차단)
+          console.warn(`⚠ [송장] 로그인 치명적 실패 — 즉시 실패 보고: ${_le.message}`)
+          await postResult('sourcing/tracking-result', {
+            requestId,
+            success: false,
+            error: _le.message,
+          })
+          return
+        }
+        if (_le?.message) _loginFailMsg = _le.message
+        // 그 외 스왑 실패 — 현재 세션 그대로 1차 시도. wrong_account 보고 후 다른 PC fallback.
       }
     } else if (_lastEnsured && _lastEnsured === sourcingAccountId) {
       console.log(`[송장] 메모리 캐시 매칭 — 스왑 스킵 (acc=${sourcingAccountId})`)
@@ -1223,9 +1237,17 @@ async function handleTrackingJob(job) {
       }
       const loginOk = await _swapToJobAccount(`${reason}-retry${retryAttempt}`)
       if (!loginOk) {
+        const _le = globalThis._lastEnsureLoginError
+        if (_le?.message) _loginFailMsg = _le.message
         break  // 무한 retry 방지
       }
       result = await _runOnce()
+    }
+
+    // 로그인 실패로 끝난 잡은 에러를 "로그인 실패" 표준 문구로 교체 — timeout/needsLogin 으로
+    // 보고되면 백엔드 서킷브레이커(`%로그인 실패%`)가 못 잡아 같은 계정 재큐잉이 계속된다.
+    if (!result.success && !result.cancelled && _loginFailMsg && !_isWrong(result)) {
+      result = { ...result, error: _loginFailMsg }
     }
 
     await postResult('sourcing/tracking-result', {

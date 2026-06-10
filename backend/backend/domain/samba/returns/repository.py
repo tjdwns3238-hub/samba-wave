@@ -33,6 +33,7 @@ class SambaReturnRepository(BaseRepository[SambaReturn]):
         skip: int = 0,
         limit: int = 500,
         order_id: Optional[str] = None,
+        order_number: Optional[str] = None,
         status: Optional[str] = None,
         type: Optional[str] = None,
         start_dt: Optional[datetime] = None,
@@ -50,6 +51,10 @@ class SambaReturnRepository(BaseRepository[SambaReturn]):
             )
         if order_id:
             stmt = stmt.where(SambaReturn.order_id == order_id)
+        # 특정 주문번호 필터 — 날짜 범위 밖이라도 해당 주문 반품/교환은 잡힘
+        # (주문관리에서 /returns?order_number=XXXX 새 탭 진입용)
+        if order_number:
+            stmt = stmt.where(SambaReturn.order_number == order_number)
         if status:
             stmt = stmt.where(SambaReturn.status == status)
         if type:

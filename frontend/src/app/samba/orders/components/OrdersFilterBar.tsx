@@ -185,6 +185,7 @@ export default function OrdersFilterBar(props: Props) {
               <option value="returning">반품중</option>
               <option value="exchanging">교환중</option>
               <option value="cancel_requested">취소요청</option>
+              <option value="approve_cancel">취소승인(일괄)</option>
               <option value="return_requested">반품요청</option>
               <option value="cancelled">취소완료</option>
               <option value="returned">반품완료</option>

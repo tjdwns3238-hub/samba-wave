@@ -948,6 +948,20 @@ async def apply_tracking_result(
                     "운영자가 주문관리에서 진짜 무신사 계정 확인 후 sourcing_account_id 재매핑 필요."
                 )
             elif (
+                "로그인 실패" in reason
+                or "needs_login" in reason_lc
+                or "findidpw" in reason_lc
+                or "계정 잠금" in reason
+            ):
+                # 로그인 실패 — 서킷브레이커(enqueue_pending_orders 의 `%로그인 실패%` 매칭)가
+                # 계정 단위 재큐잉을 차단하도록 표준 문구 강제. 확장앱이 needs_login/timeout 으로
+                # 보고하면 브레이커가 못 잡아 같은 계정 로그인 폭주 → SSG 보안잠금이 영구화된다.
+                job.status = STATUS_FAILED
+                _orig = reason[:300]
+                job.last_error = (
+                    _orig if "로그인 실패" in _orig else f"로그인 실패 — {_orig}"
+                )
+            elif (
                 "captcha" in reason_lc
                 or "미발송" in reason
                 or "배송대기" in reason

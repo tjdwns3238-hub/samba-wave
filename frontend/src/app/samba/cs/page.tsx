@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback, useRef } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { orderApi, accountApi } from '@/lib/samba/api/commerce'
 import { returnApi, csInquiryApi, type SambaCSInquiry, type CSReplyTemplate, type CSSyncResultItem } from '@/lib/samba/api/support'
 import type { SambaMarketAccount } from '@/lib/samba/api/commerce'
@@ -65,6 +66,23 @@ export default function CSPage() {
   const [sortDesc, setSortDesc] = useState(true)
   const [pageSize, setPageSize] = useState(30)
   const [page, setPage] = useState(0)
+
+  // 주문관리에서 `/samba/cs?search=주문번호` 로 새 탭 진입 시 해당 주문 CS 자동 검색
+  // (마운트 1회만 시드 — 이후 사용자가 검색창을 비우면 정상 동작)
+  const searchParams = useSearchParams()
+  const seededRef = useRef(false)
+  useEffect(() => {
+    if (seededRef.current) return
+    const q = searchParams.get('search')?.trim()
+    if (q) {
+      seededRef.current = true
+      setSearchInput(q)
+      setSearch(q)
+      // 기본 filterStatus 가 'pending' 이라 답변완료 건이 숨음 — 쿼리 진입 시에만 전체로 풀어 상태 무관 노출
+      setFilterStatus('')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // 로그 + 기간 + 필터 추가 상태
   const [csLogMessages, setCsLogMessages] = useState<string[]>(['[대기] CS 문의 가져오기 결과가 여기에 표시됩니다...'])

@@ -53,7 +53,9 @@ class SambaOrderService:
     async def get_order(self, order_id: str) -> Optional[SambaOrder]:
         return await self.repo.get_async(order_id)
 
-    async def create_order(self, data: Dict[str, Any]) -> SambaOrder:
+    async def create_order(
+        self, data: Dict[str, Any], commit: bool = True
+    ) -> SambaOrder:
         sale_price = float(data.get("sale_price", 0))
         total_payment_amount = (
             float(data["total_payment_amount"])
@@ -75,10 +77,10 @@ class SambaOrderService:
             )
         )
 
-        return await self.repo.create_async(**data)
+        return await self.repo.create_async(commit=commit, **data)
 
     async def update_order(
-        self, order_id: str, data: Dict[str, Any]
+        self, order_id: str, data: Dict[str, Any], commit: bool = True
     ) -> Optional[SambaOrder]:
         order = await self.repo.get_async(order_id)
         if not order:
@@ -125,7 +127,7 @@ class SambaOrderService:
                     revenue=revenue,
                 )
             )
-        return await self.repo.update_async(order_id, **data)
+        return await self.repo.update_async(order_id, commit=commit, **data)
 
     async def update_order_status(
         self, order_id: str, new_status: str

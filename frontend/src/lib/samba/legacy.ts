@@ -1911,9 +1911,11 @@ export interface SambaReturn {
 
 
 export const returnApi = {
-  list: (orderId?: string, status?: string, type?: string, limit = 500, startDate?: string, endDate?: string) => {
+  list: (orderId?: string, status?: string, type?: string, limit = 500, startDate?: string, endDate?: string, orderNumber?: string) => {
     const p = new URLSearchParams();
     if (orderId) p.set("order_id", orderId);
+    // 주문번호 필터 진입 시 날짜 범위는 무시 — 해당 주문 전체 반품/교환을 보여줌
+    if (orderNumber) p.set("order_number", orderNumber);
     if (status) p.set("status", status);
     if (type) p.set("type", type);
     if (startDate) p.set("start_date", startDate);

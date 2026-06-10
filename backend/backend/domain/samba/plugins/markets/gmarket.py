@@ -70,7 +70,7 @@ def _infer_group_names(options: list[dict]) -> list[str] | None:
         u = [v for v in vals if v]
         if not u:
             return False
-        # trailing " 4" 같은 숫자 suffix 제거 후 매칭 ("2XS 4" → "2XS")
+        # trailing 숫자 suffix 제거 후 매칭 — "2XS 4" → "2XS" (#399)
         hit = sum(1 for v in u if _SIZE_RE.match(re.sub(r"\s+\d+$", "", v)))
         return hit >= len(u) * 0.6
 
@@ -79,8 +79,8 @@ def _infer_group_names(options: list[dict]) -> list[str] | None:
         return bool(u) and all(re.match(r"^\d+$", v) for v in u)
 
     a0, a1 = _is_size_axis(axis0), _is_size_axis(axis1)
-    # 양 축 모두 순수 숫자(e.g. "30/32") → 허리/인심 팬츠 사이즈
-    if _is_all_numeric(axis0) and _is_all_numeric(axis1):
+    # 양 축 모두 순수 숫자 → 허리/인심 팬츠 사이즈 조합 (#399)
+    if not a0 and not a1 and _is_all_numeric(axis0) and _is_all_numeric(axis1):
         return ["허리", "인심"]
     if a1 and not a0:
         return ["색상", "사이즈"]
@@ -195,9 +195,20 @@ class GMarketMarketPlugin(MarketPlugin):
             if _imgs:
                 # min_dim=600 — ESM 최소 600x600 미달 이미지 LANCZOS 업스케일 + R2 미러
                 # (msscdn 등 차단 도메인도 strict 모드로 다운로드/재호스팅됨)
-                product_copy["images"], _ = await _img_svc.mirror_oversized_to_r2(
-                    _imgs, min_dim=600
-                )
+                (
+                    product_copy["images"],
+                    _,
+                    _failed_imgs,
+                ) = await _img_svc.mirror_oversized_to_r2(_imgs, min_dim=600)
+                # 다운로드 실패 이미지는 크기 불명(600x600 미달 가능) → ESM 거부 방지
+                if _failed_imgs:
+                    product_copy["images"] = [
+                        u for u in product_copy["images"] if u not in _failed_imgs
+                    ]
+                    logger.warning(
+                        f"[지마켓] 이미지 다운로드 실패 {len(_failed_imgs)}개 → 제외: "
+                        + ", ".join(list(_failed_imgs)[:3])
+                    )
             if _detail_imgs:
                 (
                     product_copy["detail_images"],

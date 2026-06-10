@@ -40,6 +40,24 @@ _ACTIVE_SITES_CACHE_TTL = 30.0
 _active_sites_cache: dict = {"ts": 0.0, "data": None}
 _active_sites_cache_lock = asyncio.Lock()
 
+# 품절 옵션 강제 재확인 주기 — 한 번 0 기록 후 boolean flip 없어도 STALE 이면 재전송 (#400)
+SOLDOUT_REASSERT_SEC = float(
+    os.environ.get("AUTOTUNE_SOLDOUT_REASSERT_SEC", "21600")
+)  # 6h
+
+
+def _is_send_stale(sent_at: str | None, max_age_sec: float) -> bool:
+    """sent_at(ISO) 이 max_age_sec 초보다 오래됐거나 없으면 True(보수적 재확인)."""
+    if not sent_at:
+        return True
+    try:
+        dt = datetime.fromisoformat(sent_at)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - dt).total_seconds() > max_age_sec
+    except (ValueError, TypeError):
+        return True
+
 
 async def _get_active_sites_cached() -> list[str]:
     """모든 PC가 공유하는 활성 소싱처 distinct 결과 (TTL 30s).
@@ -2429,6 +2447,22 @@ async def _site_autotune_loop(device_id: str, site: str):
                                             elif (_ss <= 0) != (_ns <= 0):
                                                 _stock_diff = True
                                                 _stock_changes_acc += 1
+                                    # 품절 안전 재확인: boolean flip 안 걸려도 품절 옵션 + STALE 이면 강제 재전송 (#400)
+                                    # last_sent=0 기록 후 마켓 미반영(504/미반영) 시 영구 블라인드 방지
+                                    if (
+                                        not _stock_diff
+                                        and _api_opts
+                                        and _is_send_stale(
+                                            (acc_last or {}).get("sent_at"),
+                                            SOLDOUT_REASSERT_SEC,
+                                        )
+                                        and any(
+                                            (o.get("stock", 0) or 0) <= 0
+                                            for o in _api_opts
+                                        )
+                                    ):
+                                        _stock_diff = True
+                                        _stock_changes_acc += 1
                                     if _stock_diff:
                                         _all_stock_pids.add(r.product_id)
                                         _stock_action_txt = f"재고전송({_stock_changes_acc}건) → {acc_label}"
@@ -2499,6 +2533,13 @@ async def _site_autotune_loop(device_id: str, site: str):
                                                     product.id,
                                                     _ssg_qa_e,
                                                 )
+
+                                    # 재고잠금 상품 → 가격/재고 전송 스킵
+                                    if _acc_items and getattr(
+                                        product, "lock_stock", False
+                                    ):
+                                        _nontx_actions.append("재고잠금 → 전송 스킵")
+                                        _acc_items.clear()
 
                                     # 가격+재고 합산 단일 전송 (충돌 방지)
                                     if _acc_items:
